@@ -1,0 +1,30 @@
+//! Output formatting utilities.
+
+use colored::Colorize;
+
+/// Print a success message.
+pub fn success(msg: &str) {
+    println!("{} {}", "✓".green().bold(), msg);
+}
+
+/// Print an info message.
+pub fn info(msg: &str) {
+    println!("{} {}", "⏩".blue().bold(), msg);
+}
+
+/// Print a warning message.
+pub fn warn(msg: &str) {
+    println!("{} {}", "⚠️".yellow().bold(), msg);
+}
+
+/// Print an error message.
+#[allow(dead_code)]
+pub fn error(msg: &str) {
+    eprintln!("{} {}", "✗".red().bold(), msg);
+}
+
+/// Print a section header.
+pub fn header(msg: &str) {
+    println!("\n{}", msg.bold().underline());
+}
+

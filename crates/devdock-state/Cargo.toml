@@ -1,0 +1,20 @@
+[package]
+name = "devdock-state"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+devdock-core = { path = "../devdock-core" }
+anyhow.workspace = true
+thiserror.workspace = true
+sqlx.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+

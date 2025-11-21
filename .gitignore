@@ -1,0 +1,27 @@
+# Rust
+/target/
+**/*.rs.bk
+*.pdb
+Cargo.lock
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# DevDock runtime
+.devdock/
+*.db
+*.db-shm
+*.db-wal
+
+# Test artifacts
+/tmp/
+/test-output/
+
+# Logs
+*.log
+

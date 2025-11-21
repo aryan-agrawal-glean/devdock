@@ -1,0 +1,56 @@
+[workspace]
+members = [
+    "crates/devdock-core",
+    "crates/devdock-cli",
+    "crates/devdock-config",
+    "crates/devdock-state",
+    "crates/devdock-codegen",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Glean DevDock Team"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/rahul-roy-glean/devdock"
+
+[workspace.dependencies]
+# Core dependencies
+anyhow = "1.0"
+thiserror = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+tokio = { version = "1.35", features = ["full"] }
+
+# CLI dependencies
+clap = { version = "4.4", features = ["derive", "cargo", "env"] }
+colored = "2.1"
+indicatif = "0.17"
+dialoguer = "0.11"
+
+# File system & process
+walkdir = "2.4"
+tempfile = "3.8"
+which = "5.0"
+
+# Database - pin to older version to avoid home crate issue
+sqlx = { version = "=0.7.3", features = ["sqlite", "runtime-tokio-native-tls", "migrate"] }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Testing
+pretty_assertions = "1.4"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+
+[profile.dev]
+opt-level = 0
+debug = true
