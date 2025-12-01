@@ -21,6 +21,7 @@ regex.workspace = true
 rust-ini = { workspace = true }
 tracing = { workspace = true }
 reqwest = { workspace = true }
+chrono = { workspace = true }
 
 [dev-dependencies]
 tempfile.workspace = true

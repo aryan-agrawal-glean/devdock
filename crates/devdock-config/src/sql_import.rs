@@ -237,6 +237,8 @@ impl GoogleSqlManager {
         cmd.args([
             "--single-transaction",
             "--lock-tables=false",
+            "--no-tablespaces",  // Avoid RELOAD privilege requirement
+            "--skip-add-locks",
             "-h", "host.docker.internal",
             "-P", &port.to_string(),
         ]);
@@ -736,29 +738,22 @@ impl SqlOperationsManager {
             println!("  ⚡ FAST EXPORT: {} (downloading from GCS bucket)", db);
             self.fast_export(&db, target_dir).await?;
             println!("  ✅ Fast export complete for {}", db);
-        } else if query.is_some() {
-            // Query-based export requires proxy connection
-            println!("  ⚠️  Query-based export requested but not supported - attempting fast export fallback");
-            if fast_export_config.projects.contains(&self.project)
-                && fast_export_config.dbs.contains(&db)
-            {
-                println!("  ⚡ FAST EXPORT (fallback): {}", db);
-                self.fast_export(&db, target_dir).await?;
-            } else {
-                anyhow::bail!(
-                    "Cannot export {}: query-based export not supported and fast export not available.\n\
-                     Project '{}' in fast_export list: {}\n\
-                     DB '{}' in fast_export list: {}",
-                    db, self.project, project_ok, db, db_ok
-                );
-            }
+        } else if let Some(ref where_clause) = query {
+            // Query-based export requires proxy connection + mysqldump
+            // This matches Python's behavior: setup proxy, clean local data, mysqldump with --where
+            println!("  🔍 QUERY-BASED EXPORT: {} (via mysqldump with --where)", db);
+            println!("     WHERE clause: {}", where_clause);
+            
+            self.export_via_proxy_mysqldump(&db, &tables, where_clause, target_dir)?;
+            println!("  ✅ Query-based export complete for {}", db);
         } else {
-            // For "latest" mode or non-fast-export DBs - use Cloud SQL Proxy
-            println!("  🐢 SLOW EXPORT: {} (via Cloud SQL Proxy with IAM auth)", db);
+            // For "latest" mode or non-fast-export DBs
+            // Use gcloud sql export (Cloud SQL Admin API) - same as Python's export_databases_from_cloud
+            println!("  🐢 SLOW EXPORT: {} (via gcloud sql export)", db);
             println!("     Reason: mode_is_fast={}, project_in_list={}, db_in_list={}", 
                      mode_ok, project_ok, db_ok);
             
-            self.export_via_proxy(&db, &tables, query.as_deref(), target_dir).await?;
+            self.export_via_gcloud_sql_export(&db, &tables, target_dir).await?;
             println!("  ✅ Slow export complete for {}", db);
         }
 
@@ -768,11 +763,216 @@ impl SqlOperationsManager {
         Ok(())
     }
 
+    /// Export using gcloud sql export (Cloud SQL Admin API)
+    /// This matches Python's export_databases_from_cloud() function:
+    /// 1. Export to temp GCS bucket using gcloud sql export sql
+    /// 2. Copy from GCS to local
+    /// 3. Clean up temp GCS directory
+    async fn export_via_gcloud_sql_export(
+        &self,
+        db: &str,
+        tables: &str,
+        target_dir: &Path,
+    ) -> Result<()> {
+        // Get instance ID for this database
+        let sql_utils = SqlUtils::new(&self.project);
+        let instance_id = sql_utils
+            .get_instance_id_for_db(&self.config, db)
+            .ok_or_else(|| anyhow::anyhow!("Could not find SQL instance for database: {}", db))?;
+        
+        println!("     🔍 Found SQL instance: {}", instance_id);
+        
+        // Create temp GCS directory (matching Python: gs://sql-{project}/tmp-{account}-{timestamp})
+        let timestamp = chrono::Utc::now().format("%H:%M:%S:%f").to_string();
+        let account = self.get_gcloud_account().await?;
+        let tmp_gcs_dir = format!("gs://sql-{}/tmp-{}-{}", self.project, account, timestamp);
+        let gcs_target = format!("{}/{}.sql", tmp_gcs_dir, db);
+        
+        println!("     📤 Exporting to GCS: {}", gcs_target);
+        
+        // Build gcloud sql export command
+        let mut cmd_args = vec![
+            "sql".to_string(),
+            "export".to_string(),
+            "sql".to_string(),
+            instance_id.clone(),
+            gcs_target.clone(),
+            format!("--project={}", self.project),
+            format!("--database={}", db),
+        ];
+        
+        // Add table filter if specified
+        if !tables.is_empty() {
+            cmd_args.push(format!("--table={}", tables));
+        }
+        
+        println!("     ⏳ Running: gcloud {}", cmd_args.join(" "));
+        
+        let output = TokioCommand::new("gcloud")
+            .args(&cmd_args)
+            .output()
+            .await
+            .context("Failed to run gcloud sql export")?;
+        
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            // Clean up temp directory on failure
+            let _ = self.delete_gcs_temp(&tmp_gcs_dir).await;
+            anyhow::bail!(
+                "gcloud sql export failed:\n{}\n\nNote: This requires the Cloud SQL instance to have write access to gs://sql-{}/ bucket",
+                stderr, self.project
+            );
+        }
+        
+        println!("     ✅ Export to GCS complete");
+        
+        // Copy from GCS to local
+        let local_path = target_dir.join(format!("{}.sql", db));
+        println!("     📥 Copying from GCS to {:?}", local_path);
+        
+        let cp_output = TokioCommand::new("gcloud")
+            .args(["storage", "cp", &gcs_target, local_path.to_str().unwrap()])
+            .output()
+            .await
+            .context("Failed to copy from GCS")?;
+        
+        if !cp_output.status.success() {
+            let stderr = String::from_utf8_lossy(&cp_output.stderr);
+            // Clean up temp directory on failure
+            let _ = self.delete_gcs_temp(&tmp_gcs_dir).await;
+            anyhow::bail!("Failed to copy from GCS: {}", stderr);
+        }
+        
+        // Clean up temp GCS directory
+        println!("     🧹 Cleaning up temp GCS directory");
+        let _ = self.delete_gcs_temp(&tmp_gcs_dir).await;
+        
+        // Verify file exists and has content
+        let metadata = std::fs::metadata(&local_path)?;
+        println!("     ✅ Downloaded {} ({} bytes)", db, metadata.len());
+        
+        Ok(())
+    }
+    
+    /// Get current gcloud account
+    async fn get_gcloud_account(&self) -> Result<String> {
+        let output = TokioCommand::new("gcloud")
+            .args(["config", "get-value", "account"])
+            .output()
+            .await
+            .context("Failed to get gcloud account")?;
+        
+        Ok(String::from_utf8(output.stdout)?.trim().to_string())
+    }
+    
+    /// Delete temp GCS directory
+    async fn delete_gcs_temp(&self, gcs_dir: &str) -> Result<()> {
+        let _ = TokioCommand::new("gcloud")
+            .args(["storage", "rm", "-r", gcs_dir])
+            .output()
+            .await;
+        Ok(())
+    }
+
+    /// Export using proxy + mysqldump with WHERE clause
+    /// This matches Python's query-based export flow:
+    /// 1. Setup proxy (Cloud SQL Proxy for public IP, bastion for private)
+    /// 2. Clean local data using WHERE clause
+    /// 3. mysqldump with --where clause
+    /// 4. Cleanup proxy
+    fn export_via_proxy_mysqldump(
+        &self,
+        db: &str,
+        tables: &str,
+        where_clause: &str,
+        target_dir: &Path,
+    ) -> Result<()> {
+        // Port for proxy connection
+        let port: u16 = 3308;
+        
+        // Create platform-specific manager based on platform
+        let manager: Box<dyn SqlPlatformManager> = match self.platform.as_str() {
+            "google" => Box::new(GoogleSqlManager::new(&self.project, "us-central1", self.config.clone())),
+            "aws" => Box::new(AwsSqlManager::new(&self.project, "us-west-2")),
+            "azure" => {
+                // Azure query-based export not yet implemented in Rust
+                anyhow::bail!(
+                    "Query-based export for Azure is not yet implemented.\n\
+                     Use Python devdock for Azure query-based exports."
+                );
+            },
+            _ => anyhow::bail!("Unsupported platform: {}", self.platform),
+        };
+        
+        // Setup proxy connection
+        println!("     🔌 Setting up proxy connection...");
+        let proxy_process = manager.setup_proxy(db, port)?;
+        
+        if proxy_process.is_none() {
+            anyhow::bail!("Failed to setup proxy connection");
+        }
+        let proxy_process = proxy_process.unwrap();
+        
+        // Use a closure to ensure cleanup happens
+        let result = (|| -> Result<()> {
+            // Clean local data using WHERE clause first
+            println!("     🧹 Cleaning local data matching WHERE clause...");
+            self.clean_devdock_sql_using_where_clause(db, tables, where_clause)?;
+            
+            // Run mysqldump with WHERE clause
+            let output_path = target_dir.join(format!("{}.sql", db));
+            manager.import_data(db, tables, where_clause, &output_path, port)?;
+            
+            Ok(())
+        })();
+        
+        // Always cleanup proxy
+        manager.cleanup_proxy(proxy_process);
+        
+        result
+    }
+    
+    /// Clean local SQL data using a WHERE clause
+    /// Matches Python's clean_devdock_sql_using_where_clause
+    fn clean_devdock_sql_using_where_clause(
+        &self,
+        database: &str,
+        table: &str,
+        where_clause: &str,
+    ) -> Result<()> {
+        println!("     Dropping entries from {}.{} WHERE {}", database, table, where_clause);
+        
+        let delete_sql = format!("DELETE FROM {}.{} WHERE {}", database, table, where_clause);
+        
+        let output = Command::new("docker")
+            .args([
+                "exec",
+                &self.sql_container,
+                "mysql",
+                "-u",
+                "root",
+                "-e",
+                &delete_sql,
+            ])
+            .output()
+            .context("Failed to clean local SQL data")?;
+        
+        if !output.status.success() {
+            // Log warning but don't fail - table might not exist yet
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            println!("     ⚠️  Warning cleaning local data: {}", stderr.trim());
+        } else {
+            println!("     ✅ Cleaned local data");
+        }
+        
+        Ok(())
+    }
+
     /// Export using Cloud SQL Admin API (gcloud sql export)
     /// This exports to a GCS bucket and then downloads locally
-    /// NOTE: Currently unused - we require fast export for all DBs
+    /// NOTE: Currently unused - kept for reference
     #[allow(dead_code)]
-    async fn export_via_cloud_sql_api(
+    async fn export_via_cloud_sql_api_old(
         &self,
         db: &str,
         tables: &str,
@@ -840,6 +1040,8 @@ impl SqlOperationsManager {
     }
 
     /// Export via Cloud SQL proxy/bastion with IAM authentication
+    /// NOTE: Currently unused - we use gcloud sql export instead
+    #[allow(dead_code)]
     async fn export_via_proxy(
         &self,
         db: &str,

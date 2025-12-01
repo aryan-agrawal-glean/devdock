@@ -39,6 +39,7 @@ async-trait = "0.1"
 futures = "0.3"
 regex = "1.10"
 rust-ini = "0.21"
+chrono = "0.4"
 
 # Database - pin to older version to avoid home crate issue
 sqlx = { version = "=0.7.3", features = ["sqlite", "runtime-tokio-native-tls", "migrate"] }
@@ -46,6 +47,9 @@ sqlx = { version = "=0.7.3", features = ["sqlite", "runtime-tokio-native-tls", "
 # Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# HTTP client
+reqwest = { version = "0.11", features = ["blocking", "json"] }
 
 # Testing
 pretty_assertions = "1.4"
