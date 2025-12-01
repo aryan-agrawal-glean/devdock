@@ -2,23 +2,23 @@
 
 use crate::output;
 use anyhow::{Context, Result};
-use devdock_codegen::TiltfileGenerator;
 use devdock_config::{DependencyResolver, ProfileLoader, ProfileValidator};
 use devdock_state::{Instance, InstanceStatus, PortAllocator, StateManager};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub async fn execute(profile_name: &str, services: Option<&str>, ci_mode: bool) -> Result<()> {
+pub async fn execute(profile_name: &str, services: Option<&str>, _ci_mode: bool) -> Result<()> {
     output::info("Starting DevDock...");
 
     // Step 1: Load and validate profile
     output::info(&format!("Loading profile: {}", profile_name));
     let loader = ProfileLoader::new();
-    let profile = loader.load(profile_name)?;
+    let (profile, profile_path) = loader.load_with_path(profile_name)?;
 
     let validator = ProfileValidator::new();
     validator.validate(&profile)?;
+    validator.validate_gcloud_project(&profile)?;
     output::success("Profile validated");
 
     // Step 2: Resolve dependencies
@@ -66,9 +66,10 @@ pub async fn execute(profile_name: &str, services: Option<&str>, ci_mode: bool) 
         port_base
     ));
 
-    // Step 6: Generate configuration files
-    let gen_dir = generate_configs(&profile, profile_name, &resolved_components, services)?;
-    output::success(&format!("Generated configs in: {}", gen_dir.display()));
+    // Step 6: Generate configuration files (Rust - parallel)
+    let workspace_root = find_workspace_root()?;
+    let profile_path_str = profile_path.to_string_lossy();
+    generate_configs_rust(&workspace_root, &profile, services, Some(&profile_path_str)).await?;
 
     // Step 7: Clean old logs
     cleanup_old_logs()?;
@@ -79,7 +80,7 @@ pub async fn execute(profile_name: &str, services: Option<&str>, ci_mode: bool) 
         .await?;
 
     output::info("Starting Tilt...");
-    let tilt_process = start_tilt(&gen_dir, services)?;
+    let tilt_process = start_tilt(services)?;
 
     output::success("DevDock started!");
     println!("\n  Tilt UI: http://localhost:10350");
@@ -146,160 +147,21 @@ fn get_git_branch() -> Result<String> {
     }
 }
 
-/// Generate configuration files
-fn generate_configs(
-    profile: &devdock_core::profile::Profile,
-    _profile_name: &str,
-    _resolved_components: &[String],
-    _services: Option<&str>,
-) -> Result<PathBuf> {
-    output::info("Generating configuration files...");
-
-    // Get current directory (should be in monorepo)
-    let current_dir = std::env::current_dir()?;
-    
-    // Try to find workspace root from current location
-    let workspace_root = find_workspace_root_from(&current_dir)?;
-    
-    // Generate in monorepo's runtime_generated directory (where Tilt expects it)
-    let runtime_gen_dir = workspace_root.join("devdock/runtime_generated");
-    std::fs::create_dir_all(&runtime_gen_dir)?;
-
-    // Generate temp_profile.yaml where Tilt expects it
-    let temp_profile_path = runtime_gen_dir.join("temp_profile.yaml");
-    
-    // Create an enriched profile with additional fields Tilt expects
-    let temp_profile = generate_temp_profile(&profile, _services, &workspace_root)?;
-    std::fs::write(&temp_profile_path, temp_profile)?;
-    
-    // Generate placeholder watch files for all services
-    // This avoids Python dependency for cquery.py
-    generate_watch_files(&profile, &runtime_gen_dir, &workspace_root)?;
-
-    // Generate devdock.ini in monorepo devdock directory
-    let devdock_ini_path = workspace_root.join("devdock/devdock.ini");
-    let ini_content = generate_devdock_ini(profile)?;
-    std::fs::write(&devdock_ini_path, &ini_content)?;
-
-    // Also generate in config root (some services expect it here)
-    let config_ini_path = workspace_root.join("config/devdock.ini");
-    std::fs::write(&config_ini_path, &ini_content)?;
-
-    // Also generate run_local.ini in config root
-    let run_local_ini_path = workspace_root.join("config/run_local.ini");
-    std::fs::write(&run_local_ini_path, &ini_content)?;
-
-    output::success(&format!(
-        "Generated configs in: {}",
-        runtime_gen_dir.display()
-    ));
-
-    Ok(runtime_gen_dir)
-}
-
-/// Generate temp_profile.yaml with all fields Tilt expects
-fn generate_temp_profile(
-    profile: &devdock_core::profile::Profile,
-    active_services: Option<&str>,
+/// Generate configurations using Rust (parallel)
+async fn generate_configs_rust(
     workspace_root: &Path,
-) -> Result<String> {
-    let mut profile_map = serde_yaml::to_value(&profile)?;
-    
-    if let serde_yaml::Value::Mapping(ref mut map) = profile_map {
-        // Add devdock_root
-        map.insert(
-            serde_yaml::Value::String("devdock_root".to_string()),
-            serde_yaml::Value::String(workspace_root.display().to_string()),
-        );
-        
-        // Add architecture (system type)
-        let arch = if cfg!(target_os = "macos") {
-            "darwin"
-        } else if cfg!(target_os = "linux") {
-            "linux"
-        } else {
-            "unknown"
-        };
-        map.insert(
-            serde_yaml::Value::String("architecture".to_string()),
-            serde_yaml::Value::String(arch.to_string()),
-        );
-        
-        // Add enable_service_metrics
-        map.insert(
-            serde_yaml::Value::String("enable_service_metrics".to_string()),
-            serde_yaml::Value::String("True".to_string()),
-        );
-        
-        // Add region and zone (empty for now, will be populated by platform)
-        map.insert(
-            serde_yaml::Value::String("region".to_string()),
-            serde_yaml::Value::String("".to_string()),
-        );
-        map.insert(
-            serde_yaml::Value::String("zone".to_string()),
-            serde_yaml::Value::String("".to_string()),
-        );
-        
-        // Add "active" field to each service
-        if let Some(services_value) = map.get_mut(&serde_yaml::Value::String("services".to_string())) {
-            if let serde_yaml::Value::Mapping(ref mut services_map) = services_value {
-                // Parse active services list
-                let active_list: Vec<&str> = active_services
-                    .map(|s| s.split(',').collect())
-                    .unwrap_or_default();
-                
-                for (service_name, service_config) in services_map.iter_mut() {
-                    if let serde_yaml::Value::Mapping(ref mut service_map) = service_config {
-                        // Service is active if:
-                        // 1. No specific services requested (all active)
-                        // 2. Service is in active list
-                        // 3. Service is remote (always active)
-                        let is_remote = service_map
-                            .get(&serde_yaml::Value::String("type".to_string()))
-                            .and_then(|v| v.as_str())
-                            == Some("remote");
-                        
-                        let service_name_str = service_name.as_str().unwrap_or("");
-                        let is_active = active_services.is_none()
-                            || active_list.contains(&service_name_str)
-                            || is_remote;
-                        
-                        service_map.insert(
-                            serde_yaml::Value::String("active".to_string()),
-                            serde_yaml::Value::String(is_active.to_string()),
-                        );
-                    }
-                }
-            }
-        }
-    }
-    
-    serde_yaml::to_string(&profile_map)
-        .context("Failed to serialize temp profile")
+    profile: &devdock_core::profile::Profile,
+    services: Option<&str>,
+    profile_path: Option<&str>,
+) -> Result<()> {
+    use devdock_config::ConfigGenerator;
+
+    let generator = ConfigGenerator::new(workspace_root.to_path_buf());
+    generator.generate(profile, services, profile_path).await?;
+
+    Ok(())
 }
 
-/// Generate devdock.ini file
-fn generate_devdock_ini(profile: &devdock_core::profile::Profile) -> Result<String> {
-    let mut ini = String::new();
-
-    ini.push_str("[DEFAULT]\n");
-    ini.push_str(&format!("project = {}\n", profile.project));
-    ini.push_str(&format!("platform = {:?}\n", profile.platform));
-    ini.push_str("\n");
-
-    // Add service sections
-    for (name, config) in &profile.services {
-        ini.push_str(&format!("[service:{}]\n", name));
-        ini.push_str(&format!("type = {:?}\n", config.deployment_type));
-        for (key, value) in &config.env {
-            ini.push_str(&format!("{} = {}\n", key, value));
-        }
-        ini.push_str("\n");
-    }
-
-    Ok(ini)
-}
 
 /// Clean up old logs
 fn cleanup_old_logs() -> Result<()> {
@@ -340,7 +202,7 @@ fn cleanup_old_logs() -> Result<()> {
 }
 
 /// Start Tilt process
-fn start_tilt(_gen_dir: &Path, services: Option<&str>) -> Result<Child> {
+fn start_tilt(services: Option<&str>) -> Result<Child> {
     // Find monorepo root (where devdock directory is)
     let workspace_root = find_workspace_root()?;
     let devdock_dir = workspace_root.join("devdock");
@@ -383,72 +245,6 @@ fn find_workspace_root() -> Result<PathBuf> {
     find_workspace_root_from(&std::env::current_dir()?)
 }
 
-/// Generate watch files for Bazel hot reload
-fn generate_watch_files(
-    profile: &devdock_core::profile::Profile,
-    runtime_gen_dir: &Path,
-    workspace_root: &Path,
-) -> Result<()> {
-    // For each service, generate a watch file that tells Tilt what files to watch
-    for (service_name, service_config) in &profile.services {
-        if matches!(service_config.deployment_type, devdock_core::types::DeploymentType::Local) {
-            let watch_file_path = runtime_gen_dir.join(format!("watch_file_{}.yaml", service_name));
-            
-            // Generate a comprehensive watch list based on service type
-            // For now, generate a broad watch pattern that catches most changes
-            let service_type = get_service_type(workspace_root, service_name)?;
-            
-            let watch_paths = match service_type.as_str() {
-                "go" => vec![
-                    format!("go/platform/gcp/{}", service_name),
-                    format!("go/core"),
-                    format!("go/platform/common"),
-                ],
-                "python" => vec![
-                    format!("python_scio/{}", service_name),
-                    format!("python_scio/core"),
-                ],
-                "java" => vec![
-                    format!("java/com/askscio/{}", service_name),
-                    format!("java/com/askscio/core"),
-                ],
-                _ => vec![
-                    format!("go/{}", service_name),
-                    format!("python_scio/{}", service_name),
-                    format!("java/com/askscio/{}", service_name),
-                ],
-            };
-            
-            // Create YAML structure: { service_name: [paths...] }
-            let mut watch_map = std::collections::HashMap::new();
-            watch_map.insert(service_name.clone(), watch_paths);
-            
-            let watch_content = serde_yaml::to_string(&watch_map)?;
-            std::fs::write(&watch_file_path, watch_content)?;
-        }
-    }
-    
-    Ok(())
-}
-
-/// Get service type from devdock_config.json
-fn get_service_type(workspace_root: &Path, service_name: &str) -> Result<String> {
-    let config_path = workspace_root
-        .join("devdock/config/services")
-        .join(service_name)
-        .join("devdock_config.json");
-    
-    if config_path.exists() {
-        let content = std::fs::read_to_string(&config_path)?;
-        let json: serde_json::Value = serde_json::from_str(&content)?;
-        
-        if let Some(service_type) = json.get("type").and_then(|v| v.as_str()) {
-            return Ok(service_type.to_string());
-        }
-    }
-    
-    Ok("unknown".to_string())
-}
 
 /// Find workspace root from a specific starting path
 fn find_workspace_root_from(start: &Path) -> Result<PathBuf> {
@@ -474,32 +270,286 @@ async fn wait_for_tilt(
     state_manager: &StateManager,
     instance_id: &str,
 ) -> Result<()> {
-    // Set up signal handler for graceful shutdown
-    let instance_id_clone = instance_id.to_string();
-    let state_manager_clone = StateManager::new().await?;
+    let instance_id = instance_id.to_string();
+    // Get PID before moving the process
+    let tilt_pid = tilt_process.id();
 
-    tokio::spawn(async move {
-        tokio::signal::ctrl_c().await.ok();
-        output::info("Shutting down DevDock...");
-        state_manager_clone
-            .update_status(&instance_id_clone, InstanceStatus::Stopping)
+    // Convert std Child to tokio Command for async waiting
+    let mut tilt_handle = tokio::task::spawn_blocking(move || tilt_process.wait());
+
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {
+            output::info("Received shutdown signal, stopping DevDock...");
+
+            // Update status to stopping
+            state_manager
+                .update_status(&instance_id, InstanceStatus::Stopping)
+                .await
+                .ok();
+
+            // Kill Tilt process
+            #[cfg(unix)]
+            {
+                output::info(&format!("Terminating Tilt process: {}", tilt_pid));
+                // Send SIGTERM
+                unsafe {
+                    libc::kill(tilt_pid as i32, libc::SIGTERM);
+                }
+                // Wait a bit for graceful shutdown
+                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+
+                // Check if still running, send SIGKILL
+                if unsafe { libc::kill(tilt_pid as i32, 0) } == 0 {
+                    unsafe {
+                        libc::kill(tilt_pid as i32, libc::SIGKILL);
+                    }
+                }
+            }
+
+            // Perform cleanup
+            perform_cleanup(&instance_id).await?;
+
+            // Update status
+            state_manager
+                .update_status(&instance_id, InstanceStatus::Stopped)
             .await
             .ok();
-    });
 
-    // Wait for tilt to exit
-    let status = tilt_process.wait()?;
+            output::success("DevDock stopped successfully");
+        }
+        result = &mut tilt_handle => {
+            // Tilt exited on its own
+            match result {
+                Ok(Ok(status)) => {
+                    // Perform cleanup
+                    perform_cleanup(&instance_id).await?;
 
     // Update status
     state_manager
-        .update_status(instance_id, InstanceStatus::Stopped)
+                        .update_status(&instance_id, InstanceStatus::Stopped)
         .await?;
 
     if status.success() {
         output::success("DevDock stopped");
     } else {
         output::warn(&format!("Tilt exited with status: {}", status));
+                    }
+                }
+                Ok(Err(e)) => {
+                    output::warn(&format!("Tilt process error: {}", e));
+                    perform_cleanup(&instance_id).await?;
+                    state_manager
+                        .update_status(&instance_id, InstanceStatus::Stopped)
+                        .await?;
+                }
+                Err(e) => {
+                    output::warn(&format!("Failed to wait for Tilt: {}", e));
+                    perform_cleanup(&instance_id).await?;
+                    state_manager
+                        .update_status(&instance_id, InstanceStatus::Stopped)
+                        .await?;
+                }
+            }
+        }
     }
 
+    Ok(())
+}
+
+/// Perform cleanup operations
+async fn perform_cleanup(_instance_id: &str) -> Result<()> {
+    output::info("Cleaning up DevDock resources...");
+
+    // 1. Stop Docker containers
+    cleanup_docker_containers()?;
+
+    // 2. Kill processes on ports
+    cleanup_port_processes()?;
+
+    // 3. Clean up dangling images
+    cleanup_dangling_images()?;
+
+    // 4. Clean up temporary files
+    cleanup_temp_files()?;
+
+    output::success("Cleanup complete");
+    Ok(())
+}
+
+/// Stop all DevDock Docker containers
+fn cleanup_docker_containers() -> Result<()> {
+    output::info("Stopping Docker containers...");
+
+    // Get all devdock containers
+    let output = Command::new("docker")
+        .args(["ps", "-a", "--filter", "name=devdock-", "--format", "{{.Names}}"])
+        .output()?;
+
+    if output.status.success() {
+        let containers = String::from_utf8_lossy(&output.stdout);
+        let container_list: Vec<&str> = containers.lines().filter(|s| !s.is_empty()).collect();
+
+        if !container_list.is_empty() {
+            // Stop containers
+            for container in &container_list {
+                Command::new("docker")
+                    .args(["stop", container])
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status()
+                    .ok();
+            }
+
+            // Remove containers
+            for container in &container_list {
+                Command::new("docker")
+                    .args(["rm", "-f", container])
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status()
+                    .ok();
+            }
+
+            output::success(&format!("Stopped {} container(s)", container_list.len()));
+        }
+    }
+
+    Ok(())
+}
+
+/// Kill processes on specific ports
+fn cleanup_port_processes() -> Result<()> {
+    output::info("Cleaning up processes on ports...");
+
+    let ports = vec![8888, 8880, 7070, 8090, 7972, 3407, 3408, 10350]; // Added Tilt port
+    let mut killed = 0;
+
+    for port in ports {
+        #[cfg(unix)]
+        {
+            // Use lsof to find processes on port
+            let output = Command::new("lsof")
+                .args(["-i", &format!(":{}", port), "-t"])
+                .output();
+
+            if let Ok(output) = output {
+                if output.status.success() {
+                    let pids = String::from_utf8_lossy(&output.stdout);
+                    for pid_str in pids.lines() {
+                        if let Ok(pid) = pid_str.parse::<i32>() {
+                            unsafe {
+                                // Try SIGTERM first
+                                if libc::kill(pid, libc::SIGTERM) == 0 {
+                                    killed += 1;
+                                    // Wait a bit
+                                    std::thread::sleep(std::time::Duration::from_secs(1));
+                                    // Force kill if still running
+                                    libc::kill(pid, libc::SIGKILL);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if killed > 0 {
+        output::success(&format!("Stopped {} process(es) on ports", killed));
+    }
+
+    Ok(())
+}
+
+/// Remove dangling Docker images
+fn cleanup_dangling_images() -> Result<()> {
+    output::info("Cleaning up dangling images...");
+
+    let output = Command::new("docker")
+        .args(["images", "--filter", "dangling=true", "-q"])
+        .output()?;
+
+    if output.status.success() {
+        let images = String::from_utf8_lossy(&output.stdout);
+        let image_list: Vec<&str> = images.lines().filter(|s| !s.is_empty()).collect();
+
+        if !image_list.is_empty() {
+            for image in &image_list {
+                Command::new("docker")
+                    .args(["rmi", image])
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status()
+                    .ok();
+            }
+            output::success(&format!("Removed {} dangling image(s)", image_list.len()));
+        }
+    }
+
+    Ok(())
+}
+
+/// Clean up temporary files
+fn cleanup_temp_files() -> Result<()> {
+    output::info("Cleaning up temporary files...");
+
+    let home = std::env::var("HOME")?;
+    let paths_to_clean = vec![
+        format!("{}/.devdock/opensearch/full_cleanup.txt", home),
+        format!("{}/.devdock/sql/full_cleanup.txt", home),
+        format!("{}/.devdock/resource_monitor.yaml", home),
+        format!("{}/.devdock/resource_monitor.log", home),
+        format!("{}/.devdock/startup-monitor.pid", home),
+    ];
+
+    let mut cleaned_count = 0;
+    for path in paths_to_clean {
+        if std::fs::remove_file(&path).is_ok() {
+            cleaned_count += 1;
+        }
+    }
+
+    // Clean up runtime_generated directory
+    if let Ok(workspace_root) = find_workspace_root() {
+        output::info(&format!("Workspace root: {}", workspace_root.display()));
+
+        let runtime_gen = workspace_root.join("devdock/runtime_generated");
+        output::info(&format!("Looking for runtime_generated at: {}", runtime_gen.display()));
+
+        if runtime_gen.exists() {
+            output::info("Removing runtime_generated directory...");
+            match std::fs::remove_dir_all(&runtime_gen) {
+                Ok(_) => {
+                    output::success("Removed runtime_generated directory");
+                    cleaned_count += 1;
+                }
+                Err(e) => {
+                    output::warn(&format!("Failed to remove runtime_generated: {}", e));
+                }
+            }
+        } else {
+            output::info("runtime_generated directory not found (may already be clean)");
+        }
+
+        // Also clean up config files
+        let config_files = vec![
+            workspace_root.join("devdock/devdock.ini"),
+            workspace_root.join("config/devdock.ini"),
+            workspace_root.join("config/run_local.ini"),
+            workspace_root.join("devdock/scio_apps.ini"),
+        ];
+
+        for config_file in config_files {
+            if config_file.exists() {
+                if std::fs::remove_file(&config_file).is_ok() {
+                    cleaned_count += 1;
+                }
+            }
+        }
+    } else {
+        output::warn("Could not find workspace root for cleanup");
+    }
+
+    output::success(&format!("Cleaned {} file(s)/directory(s)", cleaned_count));
     Ok(())
 }

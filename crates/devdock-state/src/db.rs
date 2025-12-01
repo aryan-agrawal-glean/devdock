@@ -16,24 +16,24 @@ impl StateManager {
         let home = std::env::var("HOME")?;
         let devdock_dir = PathBuf::from(home).join(".devdock");
         let db_path = devdock_dir.join("devdock.db");
-        
+
         // Ensure directory exists
         std::fs::create_dir_all(&devdock_dir)?;
-        
+
         Self::with_path(&db_path).await
     }
-    
+
     /// Create a state manager with a custom database path.
     pub async fn with_path(db_path: &PathBuf) -> Result<Self> {
         let url = format!("sqlite://{}?mode=rwc", db_path.display());
         let pool = SqlitePool::connect(&url).await?;
-        
+
         let manager = Self { pool };
         manager.initialize().await?;
-        
+
         Ok(manager)
     }
-    
+
     /// Initialize database schema.
     async fn initialize(&self) -> Result<()> {
         sqlx::query(
@@ -53,7 +53,7 @@ impl StateManager {
         )
         .execute(&self.pool)
         .await?;
-        
+
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS services (
@@ -68,10 +68,10 @@ impl StateManager {
         )
         .execute(&self.pool)
         .await?;
-        
+
         Ok(())
     }
-    
+
     /// Register a new DevDock instance.
     pub async fn register_instance(&self, instance: &Instance) -> Result<()> {
         sqlx::query(
@@ -91,10 +91,10 @@ impl StateManager {
         .bind(instance.updated_at)
         .execute(&self.pool)
         .await?;
-        
+
         Ok(())
     }
-    
+
     /// Get an instance by ID.
     pub async fn get_instance(&self, id: &str) -> Result<Option<Instance>> {
         let row = sqlx::query(
@@ -103,7 +103,7 @@ impl StateManager {
         .bind(id)
         .fetch_optional(&self.pool)
         .await?;
-        
+
         Ok(row.map(|r| Instance {
             id: r.get("id"),
             workspace_path: r.get("workspace_path"),
@@ -116,7 +116,7 @@ impl StateManager {
             updated_at: r.get("updated_at"),
         }))
     }
-    
+
     /// Get instance by workspace path.
     pub async fn get_by_workspace(&self, workspace_path: &str) -> Result<Option<Instance>> {
         let row = sqlx::query(
@@ -125,7 +125,7 @@ impl StateManager {
         .bind(workspace_path)
         .fetch_optional(&self.pool)
         .await?;
-        
+
         Ok(row.map(|r| Instance {
             id: r.get("id"),
             workspace_path: r.get("workspace_path"),
@@ -138,7 +138,12 @@ impl StateManager {
             updated_at: r.get("updated_at"),
         }))
     }
-    
+
+    /// Alias for get_by_workspace for compatibility
+    pub async fn get_instance_by_workspace(&self, workspace_path: &str) -> Result<Option<Instance>> {
+        self.get_by_workspace(workspace_path).await
+    }
+
     /// List all instances.
     pub async fn list_instances(&self) -> Result<Vec<Instance>> {
         let rows = sqlx::query(
@@ -146,7 +151,7 @@ impl StateManager {
         )
         .fetch_all(&self.pool)
         .await?;
-        
+
         Ok(rows.iter().map(|r| Instance {
             id: r.get("id"),
             workspace_path: r.get("workspace_path"),
@@ -159,13 +164,13 @@ impl StateManager {
             updated_at: r.get("updated_at"),
         }).collect())
     }
-    
+
     /// Update instance status.
     pub async fn update_status(&self, id: &str, status: InstanceStatus) -> Result<()> {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)?
             .as_secs() as i64;
-        
+
         sqlx::query(
             "UPDATE instances SET status = ?, updated_at = ? WHERE id = ?"
         )
@@ -174,17 +179,17 @@ impl StateManager {
         .bind(id)
         .execute(&self.pool)
         .await?;
-        
+
         Ok(())
     }
-    
+
     /// Delete an instance.
     pub async fn delete_instance(&self, id: &str) -> Result<()> {
         sqlx::query("DELETE FROM instances WHERE id = ?")
             .bind(id)
             .execute(&self.pool)
             .await?;
-        
+
         Ok(())
     }
 }

@@ -1,7 +1,7 @@
 //! Dependency resolution for services and infrastructure.
 
 use devdock_core::{profile::Profile, types::ComponentName, Error, Result};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 
 /// Resolves dependencies between components.

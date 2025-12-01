@@ -35,6 +35,22 @@ impl Default for Platform {
     }
 }
 
+impl Platform {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Google => "google",
+            Self::Aws => "aws",
+            Self::Azure => "azure",
+        }
+    }
+}
+
+impl std::fmt::Display for Platform {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
 /// Service language/runtime type.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

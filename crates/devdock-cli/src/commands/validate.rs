@@ -14,6 +14,7 @@ pub async fn execute(profile_name: &str) -> Result<()> {
     // Validate profile
     let validator = ProfileValidator::new();
     validator.validate(&profile)?;
+    validator.validate_gcloud_project(&profile)?;
 
     // Resolve dependencies
     let resolver = DependencyResolver::new();
@@ -25,11 +26,11 @@ pub async fn execute(profile_name: &str) -> Result<()> {
     println!("  Platform: {:?}", profile.platform);
     println!("  Services: {}", profile.services.len());
     println!("  Infrastructure: {}", profile.infra.len());
-    
+
     if !profile.pipelines.is_empty() {
         println!("  Pipelines: {}", profile.pipelines.len());
     }
-    
+
     println!("\n  Resolved {} components:", resolved.len());
     for (i, component) in resolved.iter().enumerate() {
         println!("    {}. {}", i + 1, component);

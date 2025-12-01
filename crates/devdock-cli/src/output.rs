@@ -25,6 +25,21 @@ pub fn error(msg: &str) {
 
 /// Print a section header.
 pub fn header(msg: &str) {
-    println!("\n{}", msg.bold().underline());
+    let line = "═".repeat(60);
+    println!();
+    println!("{}", line.blue());
+    println!("{}", format!("  {}", msg).bold());
+    println!("{}", line.blue());
+    println!();
+}
+
+/// Print a step in a multi-step process.
+pub fn step(current: usize, total: usize, msg: &str) {
+    println!(
+        "{} {} {}",
+        format!("[{}/{}]", current, total).purple().bold(),
+        "▶".cyan(),
+        msg
+    );
 }
 

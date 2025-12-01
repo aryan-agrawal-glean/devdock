@@ -1,6 +1,7 @@
 //! Profile validation.
 
 use devdock_core::{profile::Profile, Error, Result};
+use std::process::Command;
 
 /// Validates DevDock profiles.
 pub struct ProfileValidator;
@@ -11,7 +12,7 @@ impl ProfileValidator {
         Self
     }
 
-    /// Validate a profile.
+    /// Validate a profile (synchronous checks only).
     pub fn validate(&self, profile: &Profile) -> Result<()> {
         // Check project is not empty
         if profile.project.is_empty() {
@@ -38,6 +39,41 @@ impl ProfileValidator {
                     name
                 )));
             }
+        }
+
+        Ok(())
+    }
+
+    /// Validate that the current gcloud project matches the profile's project.
+    pub fn validate_gcloud_project(&self, profile: &Profile) -> Result<()> {
+        let output = Command::new("gcloud")
+            .args(["config", "get-value", "project"])
+            .output()
+            .map_err(|e| Error::InvalidProfile(format!("Failed to run gcloud: {}", e)))?;
+
+        if !output.status.success() {
+            return Err(Error::InvalidProfile(
+                "Failed to get current gcloud project. Is gcloud configured?".to_string(),
+            ));
+        }
+
+        let current_project = String::from_utf8_lossy(&output.stdout).trim().to_string();
+
+        if current_project.is_empty() {
+            return Err(Error::InvalidProfile(
+                "No gcloud project is currently set. Run: gcloud config set project <project>".to_string(),
+            ));
+        }
+
+        if current_project != profile.project {
+            return Err(Error::InvalidProfile(format!(
+                "GCloud project mismatch!\n\
+                 Current gcloud project: {}\n\
+                 Profile project: {}\n\n\
+                 Please switch to the correct project:\n\
+                 gcloud config set project {}",
+                current_project, profile.project, profile.project
+            )));
         }
 
         Ok(())

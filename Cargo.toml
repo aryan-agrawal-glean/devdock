@@ -34,6 +34,11 @@ dialoguer = "0.11"
 walkdir = "2.4"
 tempfile = "3.8"
 which = "5.0"
+libc = "0.2"
+async-trait = "0.1"
+futures = "0.3"
+regex = "1.10"
+rust-ini = "0.21"
 
 # Database - pin to older version to avoid home crate issue
 sqlx = { version = "=0.7.3", features = ["sqlite", "runtime-tokio-native-tls", "migrate"] }

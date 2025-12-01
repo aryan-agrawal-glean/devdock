@@ -75,6 +75,41 @@ enum Commands {
         output: Option<String>,
     },
 
+    /// Full cleanup of containers, networks, and files
+    #[command(alias = "-c")]
+    Cleanup {
+        /// Only clean service containers (not infra)
+        #[arg(long)]
+        soft: bool,
+
+        /// Also clean old logs
+        #[arg(long)]
+        logs: bool,
+    },
+
+    /// Execute command in a container
+    Exec {
+        /// Container name (e.g., qe, sql, mysql)
+        container: String,
+
+        /// Command to execute (default: sh, mysql for sql container)
+        #[arg(default_value = "")]
+        command: String,
+    },
+
+    /// Docker management (images, networks, etc.)
+    Docker {
+        #[command(subcommand)]
+        command: DockerCommands,
+    },
+
+    /// Initial setup of DevDock
+    Setup {
+        /// Setup for remote DevDock (Coder workspaces)
+        #[arg(long)]
+        remote: bool,
+    },
+
     /// Service management
     Service {
         #[command(subcommand)]
@@ -91,6 +126,18 @@ enum Commands {
     Plugin {
         #[command(subcommand)]
         command: PluginCommands,
+    },
+
+    /// Infrastructure setup (SQL, OpenSearch, etc.)
+    Infra {
+        #[command(subcommand)]
+        command: InfraCommands,
+    },
+
+    /// Rich logging management (Grafana/Loki stack)
+    Logs {
+        #[command(subcommand)]
+        command: LogsCommands,
     },
 }
 
@@ -126,6 +173,141 @@ enum PluginCommands {
     Install { name: String },
     /// Remove a plugin
     Remove { name: String },
+}
+
+#[derive(Subcommand)]
+enum DockerCommands {
+    /// Check if Docker is running
+    Check,
+
+    /// Setup Docker networks
+    Networks,
+
+    /// Pull/update Docker images
+    Pull {
+        /// Only pull Python images
+        #[arg(long)]
+        python_only: bool,
+
+        /// Save images to cache after pulling
+        #[arg(long)]
+        cache: bool,
+    },
+
+    /// Login to Google Container Registry
+    Login,
+
+    /// Remove dangling images
+    Prune,
+}
+
+#[derive(Subcommand)]
+enum LogsCommands {
+    /// Enable rich logging (Grafana/Loki/Alloy stack)
+    Enable,
+
+    /// Disable rich logging and cleanup
+    Disable,
+
+    /// Show rich logging status
+    Status,
+}
+
+#[derive(Subcommand)]
+enum InfraCommands {
+    /// SQL infrastructure management
+    Sql {
+        #[command(subcommand)]
+        command: InfraSqlCommands,
+    },
+
+    /// OpenSearch infrastructure management
+    Opensearch {
+        #[command(subcommand)]
+        command: InfraOpenSearchCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum InfraSqlCommands {
+    /// Full SQL setup (replaces sql_hydrator.sh + util.py)
+    Setup {
+        /// Project name
+        #[arg(long)]
+        project: String,
+
+        /// Platform (google, aws, azure)
+        #[arg(long, default_value = "google")]
+        platform: String,
+
+        /// Region
+        #[arg(long, default_value = "us-central1")]
+        region: String,
+
+        /// Database/tables list (format: db:tables:query;db2:tables2)
+        #[arg(long, default_value = "")]
+        db_tables: String,
+
+        /// Mode: fast (hourly snapshot) or latest
+        #[arg(long, default_value = "fast")]
+        mode: String,
+
+        /// Force copy even if tables match
+        #[arg(long)]
+        force_copy: bool,
+
+        /// Full cleanup before setup
+        #[arg(long)]
+        full_cleanup: bool,
+
+        /// Copy keyval table (default: true)
+        #[arg(long, default_value = "true")]
+        copy_keyval: bool,
+    },
+
+    /// Clean SQL databases/tables
+    Clean {
+        /// Project name
+        #[arg(long)]
+        project: String,
+
+        /// Platform (google, aws, azure)
+        #[arg(long, default_value = "google")]
+        platform: String,
+
+        /// Region
+        #[arg(long, default_value = "us-central1")]
+        region: String,
+
+        /// Database/tables to clean (empty = all non-system DBs)
+        #[arg(long, default_value = "")]
+        db_tables: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum InfraOpenSearchCommands {
+    /// Copy indexes from remote OpenSearch to local
+    Copy {
+        /// Project name
+        #[arg(long)]
+        project: String,
+
+        /// Indexes to copy (comma-separated)
+        #[arg(long)]
+        indexes: String,
+
+        /// Query to filter documents
+        #[arg(long, default_value = "{\"match_all\": {}}")]
+        query: String,
+
+        /// Maximum documents per index (0 = unlimited)
+        #[arg(long, default_value = "0")]
+        max_docs: usize,
+    },
+
+    /// Check local OpenSearch health
+    Health,
 }
 
 #[tokio::main]
@@ -165,6 +347,28 @@ async fn main() {
             commands::generate::execute(&profile, output.as_deref()).await
         }
 
+        Commands::Cleanup { soft, logs } => commands::cleanup::execute(soft, logs).await,
+
+        Commands::Exec { container, command } => commands::exec::execute(&container, &command).await,
+
+        Commands::Docker { command } => match command {
+            DockerCommands::Check => commands::docker::check().await,
+            DockerCommands::Networks => commands::docker::networks().await,
+            DockerCommands::Pull { python_only, cache } => {
+                commands::docker::pull(python_only, cache).await
+            }
+            DockerCommands::Login => commands::docker::login().await,
+            DockerCommands::Prune => commands::docker::prune().await,
+        },
+
+        Commands::Setup { remote } => commands::setup::execute(remote).await,
+
+        Commands::Logs { command } => match command {
+            LogsCommands::Enable => commands::logs::enable().await,
+            LogsCommands::Disable => commands::logs::disable().await,
+            LogsCommands::Status => commands::logs::status().await,
+        },
+
         Commands::Service { command } => match command {
             ServiceCommands::Enable { name } => commands::service::enable(&name).await,
             ServiceCommands::Disable { name } => commands::service::disable(&name).await,
@@ -184,6 +388,49 @@ async fn main() {
             PluginCommands::Install { name } => commands::plugin::install(&name).await,
             PluginCommands::Remove { name } => commands::plugin::remove(&name).await,
         },
+
+        Commands::Infra { command } => match command {
+            InfraCommands::Sql { command } => match command {
+                InfraSqlCommands::Setup {
+                    project,
+                    platform,
+                    region,
+                    db_tables,
+                    mode,
+                    force_copy,
+                    full_cleanup,
+                    copy_keyval,
+                } => {
+                    commands::infra::sql_setup(
+                        &project,
+                        &platform,
+                        &region,
+                        &db_tables,
+                        &mode,
+                        force_copy,
+                        full_cleanup,
+                        copy_keyval,
+                    )
+                    .await
+                }
+                InfraSqlCommands::Clean {
+                    project,
+                    platform,
+                    region,
+                    db_tables,
+                } => commands::infra::sql_clean(&project, &platform, &region, &db_tables).await,
+            },
+
+            InfraCommands::Opensearch { command } => match command {
+                InfraOpenSearchCommands::Copy {
+                    project,
+                    indexes,
+                    query,
+                    max_docs,
+                } => commands::infra::opensearch_copy(&project, &indexes, &query, max_docs).await,
+                InfraOpenSearchCommands::Health => commands::infra::opensearch_health().await,
+            },
+        },
     };
 
     // Handle result
@@ -192,4 +439,3 @@ async fn main() {
         process::exit(1);
     }
 }
-
