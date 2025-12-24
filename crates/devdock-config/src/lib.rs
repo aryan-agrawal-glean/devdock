@@ -21,6 +21,7 @@ pub mod opensearch;
 pub mod sql_import;
 pub mod opensearch_import;
 pub mod docker;
+pub mod watch_patterns;
 
 pub use dependency::DependencyResolver;
 pub use loader::ProfileLoader;
@@ -31,7 +32,7 @@ pub use platform::{Platform, IniConfig, TempProfile, create_platform};
 pub use ini_generator::IniGenerator;
 pub use profile_generator::TempProfileGenerator;
 pub use bazel::BazelQueryEngine;
-pub use generator::ConfigGenerator;
+pub use generator::{ConfigGenerator, WatchStrategy};
 pub use env_expansion::expand_env_vars;
 pub use ini_parser::{ParsedIniConfig, parse_db_tables_query, parse_db_specs};
 pub use gcs_storage::{GcsStorage, DynamicIniLoader, SqlDumpFetcher};
@@ -53,4 +54,5 @@ pub use opensearch::{
 };
 pub use sql_import::{SqlOperationsManager, GoogleSqlManager, AwsSqlManager};
 pub use opensearch_import::OpenSearchCopier;
+pub use watch_patterns::{WatchPatternGenerator, WatchPatternConfig, ServiceType as WatchServiceType, HybridWatchStrategy};
 

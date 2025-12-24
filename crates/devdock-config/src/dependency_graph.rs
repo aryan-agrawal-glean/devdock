@@ -33,15 +33,26 @@ pub struct DependencyGraph {
 impl DependencyGraph {
     /// Build dependency graph from profile, resolving transitive dependencies
     pub async fn build(profile: &Profile, workspace_root: &Path) -> Result<Self> {
+        let total_start = std::time::Instant::now();
         let mut graph = Self {
             nodes: HashMap::new(),
         };
 
         // Create an expanded profile with transitive dependencies resolved
+        let step_start = std::time::Instant::now();
         let expanded = Self::expand_dependencies(profile, workspace_root).await?;
+        println!("      └─ Expanded {} deps in {:.2}s", 
+            expanded.services.len() + expanded.infra.len(),
+            step_start.elapsed().as_secs_f64()
+        );
 
         // Load all service configs in parallel
+        let step_start = std::time::Instant::now();
         let configs = Self::load_all_configs(&expanded, workspace_root).await?;
+        println!("      └─ Loaded {} configs in {:.2}s", 
+            configs.len(),
+            step_start.elapsed().as_secs_f64()
+        );
 
         // Add nodes to graph
         for (name, (config, component_type)) in configs {
@@ -57,6 +68,8 @@ impl DependencyGraph {
 
         // Validate graph (no cycles, all deps exist)
         graph.validate()?;
+        
+        println!("      └─ Graph build total: {:.2}s", total_start.elapsed().as_secs_f64());
 
         Ok(graph)
     }

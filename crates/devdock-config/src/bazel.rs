@@ -26,14 +26,30 @@ impl BazelQueryEngine {
         &self,
         services_with_targets: HashMap<String, String>,
     ) -> Result<()> {
+        if services_with_targets.is_empty() {
+            println!("      └─ No bazel targets to query");
+            return Ok(());
+        }
+        
+        println!("      └─ Querying bazel for {} service(s): {:?}", 
+            services_with_targets.len(),
+            services_with_targets.keys().collect::<Vec<_>>()
+        );
+        
+        let total_start = std::time::Instant::now();
         let mut futures = Vec::new();
 
         // Generate all watch files in parallel
         for (service_name, target) in services_with_targets {
             let engine = self.clone();
+            let name = service_name.clone();
 
             futures.push(tokio::spawn(async move {
-                engine.generate_watch_file(&service_name, &target).await
+                let start = std::time::Instant::now();
+                let result = engine.generate_watch_file(&name, &target).await;
+                println!("         └─ bazel cquery {} completed in {:.2}s", 
+                    name, start.elapsed().as_secs_f64());
+                result
             }));
         }
 
@@ -41,17 +57,24 @@ impl BazelQueryEngine {
         let results = futures::future::join_all(futures).await;
 
         // Check for errors
+        let mut success_count = 0;
+        let mut error_count = 0;
         for result in results {
             match result {
-                Ok(Ok(_)) => {},
+                Ok(Ok(_)) => success_count += 1,
                 Ok(Err(e)) => {
-                    eprintln!("Warning: Failed to generate watch file: {}", e);
+                    error_count += 1;
+                    eprintln!("         └─ Warning: Failed to generate watch file: {}", e);
                 }
                 Err(e) => {
-                    eprintln!("Warning: Task panicked: {}", e);
+                    error_count += 1;
+                    eprintln!("         └─ Warning: Task panicked: {}", e);
                 }
             }
         }
+        
+        println!("      └─ Bazel queries: {} success, {} errors in {:.2}s",
+            success_count, error_count, total_start.elapsed().as_secs_f64());
 
         Ok(())
     }

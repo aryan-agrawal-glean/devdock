@@ -162,11 +162,13 @@ impl GooglePlatform {
 impl Platform for GooglePlatform {
     async fn authenticate(&self) -> Result<()> {
         // Switch project
+        let step_start = std::time::Instant::now();
         Command::new("gcloud")
             .args(["config", "set", "project", &self.project])
             .status()
             .await
             .context("Failed to switch gcloud project")?;
+        println!("      └─ gcloud set project: {:.2}s", step_start.elapsed().as_secs_f64());
 
         // Get cluster credentials
         let cluster = if self.project.contains("apps") || self.project.contains("canary") {
@@ -190,10 +192,12 @@ impl Platform for GooglePlatform {
                 args.push("--dns-endpoint");
             }
 
+            let step_start = std::time::Instant::now();
             let status = Command::new("gcloud")
                 .args(&args)
                 .status()
                 .await?;
+            println!("      └─ gcloud get-credentials ({}): {:.2}s", cluster, step_start.elapsed().as_secs_f64());
 
             if !status.success() {
                 eprintln!(

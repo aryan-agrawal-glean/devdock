@@ -203,9 +203,10 @@ pub async fn sql_setup(
         tables_to_copy.push_str("keyval:KeyVal");
     }
 
-    // Load INI config
+    // Load INI config (default.ini merged with dynamic.ini from GCS)
+    // The dynamic.ini contains project-specific values like SQL instance names
     let ini_loader = DynamicIniLoader::new(project, devdock_root.clone())?;
-    let config = ini_loader.load_default_ini().await?;
+    let config = ini_loader.load_merged_config().await?;
     let manager = SqlOperationsManager::new(project, platform, region, config);
 
     // Handle project change
@@ -353,8 +354,9 @@ pub async fn sql_clean(
         .context("DEVDOCK_ROOT environment variable not set")?;
     let devdock_root = PathBuf::from(devdock_root);
 
+    // Load merged config (default.ini + dynamic.ini from GCS)
     let ini_loader = DynamicIniLoader::new(project, devdock_root)?;
-    let config = ini_loader.load_default_ini().await?;
+    let config = ini_loader.load_merged_config().await?;
 
     let manager = SqlOperationsManager::new(project, platform, region, config);
     manager.clean_sql(db_tables)?;
