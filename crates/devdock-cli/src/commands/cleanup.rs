@@ -3,7 +3,9 @@
 use crate::output;
 use anyhow::Result;
 use devdock_config::docker;
+use devdock_state::{InstanceStatus, StateManager};
 use std::path::PathBuf;
+use std::process::Command;
 
 /// Ports to clean up
 const CLEANUP_PORTS: &[u16] = &[8888, 8880, 7070, 8090, 7972, 3407, 3408];
@@ -21,7 +23,7 @@ pub async fn execute(soft: bool, clean_logs: bool) -> Result<()> {
         .unwrap_or_else(|_| std::env::current_dir().unwrap().display().to_string());
 
     // Step 1: Clean up service containers
-    output::step(1, 5, "Cleaning service containers...");
+    output::step(1, 6, "Cleaning service containers...");
     let containers = docker::get_devdock_containers()?;
     let mut cleaned = 0;
     
@@ -38,17 +40,17 @@ pub async fn execute(soft: bool, clean_logs: bool) -> Result<()> {
     output::success(&format!("Cleaned {} containers", cleaned));
 
     // Step 2: Clean up generated files
-    output::step(2, 5, "Cleaning generated files...");
+    output::step(2, 6, "Cleaning generated files...");
     clean_generated_files(&devdock_root, &devdock_dir)?;
     output::success("Generated files cleaned");
 
     // Step 3: Clean up Grafana/observability stack
-    output::step(3, 5, "Cleaning observability stack...");
+    output::step(3, 6, "Cleaning observability stack...");
     clean_grafana_stack(&devdock_dir)?;
     output::success("Observability stack cleaned");
 
     // Step 4: Clean up dangling images
-    output::step(4, 5, "Cleaning dangling images...");
+    output::step(4, 6, "Cleaning dangling images...");
     let removed = docker::remove_dangling_images()?;
     if removed > 0 {
         output::success(&format!("Removed {} dangling images", removed));
@@ -57,12 +59,27 @@ pub async fn execute(soft: bool, clean_logs: bool) -> Result<()> {
     }
 
     // Step 5: Clean up ports
-    output::step(5, 5, "Cleaning up ports...");
+    output::step(5, 6, "Cleaning up ports...");
     let killed = docker::cleanup_ports(CLEANUP_PORTS)?;
     if killed > 0 {
         output::success(&format!("Killed {} processes on ports", killed));
     } else {
         output::info("No processes to kill");
+    }
+
+    // Step 6: Clean up stale instance records from database
+    output::step(6, 6, "Cleaning stale instance records...");
+    match clean_stale_instances().await {
+        Ok(count) => {
+            if count > 0 {
+                output::success(&format!("Cleaned {} stale instance record(s)", count));
+            } else {
+                output::info("No stale instances found");
+            }
+        }
+        Err(e) => {
+            output::warn(&format!("Failed to clean instance records: {}", e));
+        }
     }
 
     // Optional: Clean logs
@@ -195,6 +212,161 @@ fn clean_old_logs(devdock_dir: &PathBuf) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Clean up stale instance records from the database
+/// 
+/// This reconciles the database state with reality by checking if instances
+/// marked as Running or Starting actually have active Tilt processes.
+async fn clean_stale_instances() -> Result<usize> {
+    let state_manager = StateManager::new().await?;
+    let instances = state_manager.list_instances().await?;
+    
+    let mut cleaned_count = 0;
+    
+    for instance in instances {
+        // Check if instance should be cleaned up
+        let should_clean = match instance.status {
+            InstanceStatus::Running | InstanceStatus::Starting => {
+                // Check if Tilt is actually running in this workspace
+                !is_tilt_running(&instance.workspace_path)
+            }
+            InstanceStatus::Stopping => {
+                // Stopping instances that never completed should be cleaned
+                true
+            }
+            InstanceStatus::Stopped | InstanceStatus::Error => {
+                // Already marked as stopped/error, no need to clean
+                false
+            }
+        };
+        
+        if should_clean {
+            output::info(&format!("  Removing stale instance {} ({})", 
+                &instance.id[..8], 
+                instance.status.as_str()
+            ));
+            
+            if let Err(e) = state_manager.delete_instance(&instance.id).await {
+                output::warn(&format!("  Failed to delete instance {}: {}", &instance.id[..8], e));
+            } else {
+                cleaned_count += 1;
+            }
+        }
+    }
+    
+    Ok(cleaned_count)
+}
+
+/// Check if Tilt is running in a specific workspace
+/// 
+/// This checks for:
+/// 1. A Tilt process with the workspace path as current directory
+/// 2. Any devdock containers for this workspace
+fn is_tilt_running(workspace_path: &str) -> bool {
+    // Check for Tilt process
+    if is_process_running_in_workspace("tilt", workspace_path) {
+        return true;
+    }
+    
+    // Check for DevDock containers (as a backup check)
+    if let Ok(containers) = docker::get_devdock_containers() {
+        if !containers.is_empty() {
+            // If there are DevDock containers running, consider it active
+            // This handles cases where Tilt might have a different process name
+            return true;
+        }
+    }
+    
+    false
+}
+
+/// Check if a process is running in a specific workspace directory
+fn is_process_running_in_workspace(process_name: &str, workspace_path: &str) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        // Use ps to find processes with matching name
+        let output = Command::new("ps")
+            .args(["-ax", "-o", "pid,command"])
+            .output();
+        
+        if let Ok(output) = output {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            
+            for line in stdout.lines() {
+                if line.contains(process_name) {
+                    // Extract PID from the line
+                    if let Some(pid_str) = line.split_whitespace().next() {
+                        if let Ok(pid) = pid_str.parse::<i32>() {
+                            // Check the process's working directory
+                            if let Ok(cwd) = get_process_cwd(pid) {
+                                if cwd.starts_with(workspace_path) {
+                                    return true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    #[cfg(target_os = "linux")]
+    {
+        // Use pgrep to find processes with matching name
+        let output = Command::new("pgrep")
+            .arg("-f")
+            .arg(process_name)
+            .output();
+        
+        if let Ok(output) = output {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            
+            for pid_str in stdout.lines() {
+                if let Ok(pid) = pid_str.parse::<i32>() {
+                    if let Ok(cwd) = get_process_cwd(pid) {
+                        if cwd.starts_with(workspace_path) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    false
+}
+
+/// Get the current working directory of a process
+#[cfg(target_os = "macos")]
+fn get_process_cwd(pid: i32) -> Result<String> {
+    let output = Command::new("lsof")
+        .args(["-p", &pid.to_string(), "-a", "-d", "cwd", "-Fn"])
+        .output()?;
+    
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    
+    for line in stdout.lines() {
+        if line.starts_with('n') {
+            return Ok(line[1..].to_string());
+        }
+    }
+    
+    anyhow::bail!("Could not determine cwd for process {}", pid)
+}
+
+/// Get the current working directory of a process
+#[cfg(target_os = "linux")]
+fn get_process_cwd(pid: i32) -> Result<String> {
+    let cwd_link = format!("/proc/{}/cwd", pid);
+    let cwd = std::fs::read_link(&cwd_link)?;
+    Ok(cwd.to_string_lossy().to_string())
+}
+
+/// Fallback for unsupported platforms
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn get_process_cwd(_pid: i32) -> Result<String> {
+    anyhow::bail!("get_process_cwd not supported on this platform")
 }
 
 

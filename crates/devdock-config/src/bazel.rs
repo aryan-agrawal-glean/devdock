@@ -10,6 +10,7 @@ use tokio::process::Command;
 pub struct BazelQueryEngine {
     workspace_root: PathBuf,
     use_remote_bazelrc: bool,
+    silent: bool,
 }
 
 impl BazelQueryEngine {
@@ -18,6 +19,17 @@ impl BazelQueryEngine {
         Self {
             workspace_root,
             use_remote_bazelrc,
+            silent: false,
+        }
+    }
+
+    /// Create a silent engine (no console output, for background tasks)
+    pub fn new_silent(workspace_root: PathBuf) -> Self {
+        let use_remote_bazelrc = cfg!(target_os = "linux");
+        Self {
+            workspace_root,
+            use_remote_bazelrc,
+            silent: true,
         }
     }
 
@@ -27,14 +39,18 @@ impl BazelQueryEngine {
         services_with_targets: HashMap<String, String>,
     ) -> Result<()> {
         if services_with_targets.is_empty() {
-            println!("      └─ No bazel targets to query");
+            if !self.silent {
+                println!("      └─ No bazel targets to query");
+            }
             return Ok(());
         }
         
-        println!("      └─ Querying bazel for {} service(s): {:?}", 
-            services_with_targets.len(),
-            services_with_targets.keys().collect::<Vec<_>>()
-        );
+        if !self.silent {
+            println!("      └─ Querying bazel for {} service(s): {:?}", 
+                services_with_targets.len(),
+                services_with_targets.keys().collect::<Vec<_>>()
+            );
+        }
         
         let total_start = std::time::Instant::now();
         let mut futures = Vec::new();
@@ -47,8 +63,10 @@ impl BazelQueryEngine {
             futures.push(tokio::spawn(async move {
                 let start = std::time::Instant::now();
                 let result = engine.generate_watch_file(&name, &target).await;
-                println!("         └─ bazel cquery {} completed in {:.2}s", 
-                    name, start.elapsed().as_secs_f64());
+                if !engine.silent {
+                    println!("         └─ bazel cquery {} completed in {:.2}s", 
+                        name, start.elapsed().as_secs_f64());
+                }
                 result
             }));
         }
@@ -64,17 +82,23 @@ impl BazelQueryEngine {
                 Ok(Ok(_)) => success_count += 1,
                 Ok(Err(e)) => {
                     error_count += 1;
-                    eprintln!("         └─ Warning: Failed to generate watch file: {}", e);
+                    if !self.silent {
+                        eprintln!("         └─ Warning: Failed to generate watch file: {}", e);
+                    }
                 }
                 Err(e) => {
                     error_count += 1;
-                    eprintln!("         └─ Warning: Task panicked: {}", e);
+                    if !self.silent {
+                        eprintln!("         └─ Warning: Task panicked: {}", e);
+                    }
                 }
             }
         }
         
-        println!("      └─ Bazel queries: {} success, {} errors in {:.2}s",
-            success_count, error_count, total_start.elapsed().as_secs_f64());
+        if !self.silent {
+            println!("      └─ Bazel queries: {} success, {} errors in {:.2}s",
+                success_count, error_count, total_start.elapsed().as_secs_f64());
+        }
 
         Ok(())
     }

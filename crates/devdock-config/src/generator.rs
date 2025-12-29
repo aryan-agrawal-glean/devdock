@@ -289,8 +289,11 @@ impl ConfigGenerator {
             WatchStrategy::Hybrid => {
                 // Generate static first (fast)
                 self.generate_watch_files_static(graph).await?;
-                // TODO: Spawn background task to refine with cquery
-                println!("      └─ Background cquery refinement not yet implemented");
+                
+                // Spawn background task to refine with cquery (non-blocking)
+                println!("      └─ Spawning background cquery refinement...");
+                self.spawn_background_cquery_refinement(graph).await;
+                
                 return Ok(());
             }
         }
@@ -298,13 +301,20 @@ impl ConfigGenerator {
 
     /// Generate watch files using static glob patterns (instant, no bazel)
     async fn generate_watch_files_static(&self, graph: &DependencyGraph) -> Result<()> {
+        use crate::dependency_graph::ComponentType;
         use crate::service_config::ServiceType as ConfigServiceType;
 
         let generator = WatchPatternGenerator::new(self.workspace_root.clone())?;
 
-        // Collect services with their types and targets
+        // Filter: Only local services (not infra, not remote)
         let services: Vec<(String, WatchServiceType, Option<String>)> = graph
             .nodes()
+            .filter(|n| {
+                // Only include services (not infra/pipeline/test_suite)
+                n.component_type == ComponentType::Service
+                // Only include local deployment (not remote)
+                && n.config.deployment_local
+            })
             .map(|n| {
                 // Convert ServiceConfig::ServiceType to WatchServiceType
                 let svc_type = match n.config.service_type {
@@ -319,11 +329,11 @@ impl ConfigGenerator {
             .collect();
 
         if services.is_empty() {
-            println!("      └─ No services to generate watch files for");
+            println!("      └─ No local services to generate watch files for");
             return Ok(());
         }
 
-        println!("      └─ Generating static watch patterns for {} service(s)", services.len());
+        println!("      └─ Generating static watch patterns for {} local service(s)", services.len());
         let start = std::time::Instant::now();
 
         generator.generate_all_watch_files(&services).await?;
@@ -335,9 +345,19 @@ impl ConfigGenerator {
 
     /// Generate watch files using bazel cquery (accurate but slow)
     async fn generate_watch_files_cquery(&self, graph: &DependencyGraph) -> Result<()> {
-        // Extract services with bazel targets
+        use crate::dependency_graph::ComponentType;
+
+        // Filter: Only local services with bazel targets
         let services_with_targets: HashMap<String, String> = graph
             .nodes()
+            .filter(|n| {
+                // Only include services (not infra/pipeline/test_suite)
+                n.component_type == ComponentType::Service
+                // Only include local deployment (not remote)
+                && n.config.deployment_local
+                // Must have a bazel target
+                && n.config.bazel_target.is_some()
+            })
             .filter_map(|n| {
                 n.config
                     .bazel_target
@@ -347,11 +367,98 @@ impl ConfigGenerator {
             .collect();
 
         if services_with_targets.is_empty() {
+            println!("      └─ No local services with bazel targets for cquery");
             return Ok(());
         }
 
         let engine = BazelQueryEngine::new(self.workspace_root.clone());
         engine.generate_watch_files(services_with_targets).await
+    }
+
+    /// Spawn background task to refine watch files with bazel cquery
+    /// 
+    /// This runs in the background and updates watch files when complete.
+    /// The main process doesn't wait for this - DevDock starts immediately.
+    /// 
+    /// Logs are written to ~/.devdock/background-cquery.log to avoid cluttering Tilt UI.
+    async fn spawn_background_cquery_refinement(&self, graph: &DependencyGraph) {
+        use crate::dependency_graph::ComponentType;
+        use std::io::Write;
+
+        // Filter: Only local services with bazel targets
+        let services_with_targets: HashMap<String, String> = graph
+            .nodes()
+            .filter(|n| {
+                // Only include services (not infra/pipeline/test_suite)
+                n.component_type == ComponentType::Service
+                // Only include local deployment (not remote)
+                && n.config.deployment_local
+                // Must have a bazel target
+                && n.config.bazel_target.is_some()
+            })
+            .filter_map(|n| {
+                n.config
+                    .bazel_target
+                    .as_ref()
+                    .map(|t| (n.name.clone(), t.clone()))
+            })
+            .collect();
+
+        if services_with_targets.is_empty() {
+            println!("      └─ No local services with bazel targets for cquery refinement");
+            return;
+        }
+
+        let workspace_root = self.workspace_root.clone();
+        let service_count = services_with_targets.len();
+        
+        // Setup log file path
+        let log_file = std::env::var("HOME")
+            .ok()
+            .map(|h| std::path::PathBuf::from(h).join(".devdock/background-cquery.log"));
+
+        // Spawn detached background task
+        tokio::spawn(async move {
+            let start = std::time::Instant::now();
+            
+            // Helper to log to file
+            let log = |msg: String| {
+                if let Some(ref path) = log_file {
+                    if let Ok(mut file) = std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(path)
+                    {
+                        let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
+                        let _ = writeln!(file, "[{}] {}", timestamp, msg);
+                    }
+                }
+            };
+
+            log(format!("Starting cquery for {} local service(s)", service_count));
+
+            // Use silent engine to avoid console spam
+            let engine = BazelQueryEngine::new_silent(workspace_root);
+            match engine.generate_watch_files(services_with_targets).await {
+                Ok(_) => {
+                    let msg = format!(
+                        "✅ Refined watch files with cquery in {:.2}s",
+                        start.elapsed().as_secs_f64()
+                    );
+                    log(msg);
+                    // Success is silent - no console output to avoid cluttering Tilt UI
+                }
+                Err(e) => {
+                    let msg = format!("❌ Cquery refinement failed: {}", e);
+                    log(msg.clone());
+                    // Only print errors to console (after Tilt starts, but important to see)
+                    eprintln!("\n⚠️  Background cquery failed (static patterns still active). Check ~/.devdock/background-cquery.log");
+                }
+            }
+        });
+
+        // Don't await - let it run in background
+        println!("      └─ Background cquery starting (logs → ~/.devdock/background-cquery.log)");
     }
 }
 

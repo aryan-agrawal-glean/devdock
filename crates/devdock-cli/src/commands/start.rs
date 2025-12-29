@@ -154,9 +154,11 @@ async fn generate_configs_rust(
     services: Option<&str>,
     profile_path: Option<&str>,
 ) -> Result<()> {
-    use devdock_config::ConfigGenerator;
+    use devdock_config::{ConfigGenerator, WatchStrategy};
 
-    let generator = ConfigGenerator::new(workspace_root.to_path_buf());
+    // Use Hybrid strategy: instant static patterns + background cquery refinement
+    let generator = ConfigGenerator::new(workspace_root.to_path_buf())
+        .with_watch_strategy(WatchStrategy::Hybrid);
     generator.generate(profile, services, profile_path).await?;
 
     Ok(())
