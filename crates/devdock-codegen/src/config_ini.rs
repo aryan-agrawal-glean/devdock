@@ -1,7 +1,6 @@
 //! devdock.ini configuration file generation.
 
 use devdock_core::{profile::Profile, Result};
-use std::collections::HashMap;
 
 /// Generates devdock.ini configuration file.
 pub struct ConfigIniGenerator;

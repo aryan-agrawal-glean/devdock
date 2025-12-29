@@ -12,7 +12,7 @@ impl TiltfileGenerator {
     }
 
     /// Generate a Tiltfile from a profile.
-    pub fn generate(&self, profile: &Profile, output_dir: &Path) -> Result<String> {
+    pub fn generate(&self, profile: &Profile, _output_dir: &Path) -> Result<String> {
         let mut tiltfile = String::new();
 
         // Header
@@ -30,7 +30,7 @@ impl TiltfileGenerator {
         // Infrastructure components
         if !profile.infra.is_empty() {
             tiltfile.push_str("# Infrastructure\n");
-            for (name, config) in &profile.infra {
+            for (name, _config) in &profile.infra {
                 tiltfile.push_str(&format!(
                     "local_resource('{}', serve_cmd='echo Starting {}')\n",
                     name, name
@@ -42,7 +42,7 @@ impl TiltfileGenerator {
         // Services
         if !profile.services.is_empty() {
             tiltfile.push_str("# Services\n");
-            for (name, config) in &profile.services {
+            for (name, _config) in &profile.services {
                 tiltfile.push_str(&format!(
                     "local_resource('{}', serve_cmd='echo Starting {}')\n",
                     name, name
