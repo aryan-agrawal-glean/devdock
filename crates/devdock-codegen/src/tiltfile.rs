@@ -30,19 +30,19 @@ impl TiltfileGenerator {
         // Infrastructure components
         if !profile.infra.is_empty() {
             tiltfile.push_str("# Infrastructure\n");
-            for (name, _config) in &profile.infra {
+            for name in profile.infra.keys() {
                 tiltfile.push_str(&format!(
                     "local_resource('{}', serve_cmd='echo Starting {}')\n",
                     name, name
                 ));
             }
-            tiltfile.push_str("\n");
+            tiltfile.push('\n');
         }
 
         // Services
         if !profile.services.is_empty() {
             tiltfile.push_str("# Services\n");
-            for (name, _config) in &profile.services {
+            for name in profile.services.keys() {
                 tiltfile.push_str(&format!(
                     "local_resource('{}', serve_cmd='echo Starting {}')\n",
                     name, name

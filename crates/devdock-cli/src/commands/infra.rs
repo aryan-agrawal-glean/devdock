@@ -13,6 +13,7 @@ use crate::output;
 use anyhow::{Context, Result};
 use devdock_config::gcs_storage::DynamicIniLoader;
 use devdock_config::opensearch_import::OpenSearchCopier;
+use std::path::Path;
 use devdock_config::sql_import::SqlOperationsManager;
 use std::path::PathBuf;
 use std::process::Command;
@@ -147,7 +148,7 @@ fn docker_mysql_import(container: &str, sql_file: &PathBuf) -> Result<()> {
 }
 
 /// Get SQL scripts path for a project
-fn get_sql_scripts_path(devdock_root: &PathBuf, project: &str) -> PathBuf {
+fn get_sql_scripts_path(devdock_root: &Path, project: &str) -> PathBuf {
     let base = devdock_root.join("java/com/askscio/storage/sql/scripts");
 
     match project {
@@ -158,6 +159,7 @@ fn get_sql_scripts_path(devdock_root: &PathBuf, project: &str) -> PathBuf {
 }
 
 /// Full SQL setup - replaces sql_hydrator.sh
+#[allow(clippy::too_many_arguments)]
 pub async fn sql_setup(
     project: &str,
     platform: &str,

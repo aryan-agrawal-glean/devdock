@@ -14,9 +14,10 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 /// Strategy for generating watch files
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum WatchStrategy {
     /// Use static glob patterns (instant, no bazel) - DEFAULT
+    #[default]
     Static,
     /// Use bazel cquery (accurate but slow)
     Cquery,
@@ -24,12 +25,6 @@ pub enum WatchStrategy {
     Hybrid,
     /// Skip watch file generation entirely
     Skip,
-}
-
-impl Default for WatchStrategy {
-    fn default() -> Self {
-        WatchStrategy::Static
-    }
 }
 
 /// Main configuration generator
@@ -278,13 +273,13 @@ impl ConfigGenerator {
         match self.watch_strategy {
             WatchStrategy::Skip => {
                 println!("      └─ Watch file generation skipped");
-                return Ok(());
+                Ok(())
             }
             WatchStrategy::Static => {
-                return self.generate_watch_files_static(graph).await;
+                self.generate_watch_files_static(graph).await
             }
             WatchStrategy::Cquery => {
-                return self.generate_watch_files_cquery(graph).await;
+                self.generate_watch_files_cquery(graph).await
             }
             WatchStrategy::Hybrid => {
                 // Generate static first (fast)
@@ -294,7 +289,7 @@ impl ConfigGenerator {
                 println!("      └─ Spawning background cquery refinement...");
                 self.spawn_background_cquery_refinement(graph).await;
                 
-                return Ok(());
+                Ok(())
             }
         }
     }

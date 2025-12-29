@@ -221,7 +221,7 @@ impl DynamicIniLoader {
             .await
             .with_context(|| format!("Failed to read {}", path.display()))?;
 
-        ParsedIniConfig::from_str(&content)
+        ParsedIniConfig::parse_str(&content)
             .with_context(|| format!("Failed to parse {}", path.display()))
     }
 
@@ -236,7 +236,7 @@ impl DynamicIniLoader {
 
         info!("Fetching dynamic.ini from {}", gcs_path);
         let content = self.storage.fetch_string(&gcs_path).await?;
-        let config = ParsedIniConfig::from_str(&content)?;
+        let config = ParsedIniConfig::parse_str(&content)?;
 
         Ok(Some(config))
     }
@@ -268,7 +268,7 @@ impl DynamicIniLoader {
         info!("Fetching {} from GCS", gcs_path);
 
         let content = self.storage.fetch_string(&gcs_path).await?;
-        ParsedIniConfig::from_str(&content)
+        ParsedIniConfig::parse_str(&content)
     }
 
     /// Get databases configured for frontend instance (like Python's process_instance)

@@ -3,7 +3,7 @@
 use crate::instance::{Instance, InstanceStatus};
 use anyhow::Result;
 use sqlx::{sqlite::SqlitePool, Row};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Manages DevDock state in SQLite database.
 pub struct StateManager {
@@ -24,7 +24,7 @@ impl StateManager {
     }
 
     /// Create a state manager with a custom database path.
-    pub async fn with_path(db_path: &PathBuf) -> Result<Self> {
+    pub async fn with_path(db_path: &Path) -> Result<Self> {
         let url = format!("sqlite://{}?mode=rwc", db_path.display());
         let pool = SqlitePool::connect(&url).await?;
 
@@ -110,7 +110,7 @@ impl StateManager {
             branch: r.get("branch"),
             profile: r.get("profile"),
             mode: r.get("mode"),
-            status: InstanceStatus::from_str(r.get("status")),
+            status: InstanceStatus::parse(r.get("status")),
             port_base: r.get::<i64, _>("port_base") as u16,
             created_at: r.get("created_at"),
             updated_at: r.get("updated_at"),
@@ -132,7 +132,7 @@ impl StateManager {
             branch: r.get("branch"),
             profile: r.get("profile"),
             mode: r.get("mode"),
-            status: InstanceStatus::from_str(r.get("status")),
+            status: InstanceStatus::parse(r.get("status")),
             port_base: r.get::<i64, _>("port_base") as u16,
             created_at: r.get("created_at"),
             updated_at: r.get("updated_at"),
@@ -158,7 +158,7 @@ impl StateManager {
             branch: r.get("branch"),
             profile: r.get("profile"),
             mode: r.get("mode"),
-            status: InstanceStatus::from_str(r.get("status")),
+            status: InstanceStatus::parse(r.get("status")),
             port_base: r.get::<i64, _>("port_base") as u16,
             created_at: r.get("created_at"),
             updated_at: r.get("updated_at"),

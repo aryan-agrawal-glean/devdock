@@ -542,10 +542,9 @@ fn cleanup_temp_files() -> Result<()> {
         ];
 
         for config_file in config_files {
-            if config_file.exists() {
-                if std::fs::remove_file(&config_file).is_ok() {
-                    cleaned_count += 1;
-                }
+            if config_file.exists()
+                && std::fs::remove_file(&config_file).is_ok() {
+                cleaned_count += 1;
             }
         }
     } else {

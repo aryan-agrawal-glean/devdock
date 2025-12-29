@@ -246,7 +246,7 @@ mod tests {
 index.nodePool = elastic-node-pool-3
 index.serverUrl = http://localhost:9200
 "#;
-        let config = ParsedIniConfig::from_str(ini).unwrap();
+        let config = ParsedIniConfig::parse_str(ini).unwrap();
         let os_config = OpenSearchConfig::from_config(&config, false).unwrap();
 
         assert_eq!(os_config.node_pool, "elastic-node-pool-3");

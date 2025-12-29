@@ -62,7 +62,7 @@ impl SqlUtils {
                     let value = if get_id_only {
                         // Extract instance ID from connection name
                         // Format: project:region:instance-id
-                        full_name.split(':').last().unwrap_or(full_name).to_string()
+                        full_name.split(':').next_back().unwrap_or(full_name).to_string()
                     } else {
                         full_name.clone()
                     };
@@ -75,7 +75,7 @@ impl SqlUtils {
                 let key = format!("{}.googlecloud.instanceName", instance_type);
                 if let Some(full_name) = config.get("sql", &key) {
                     let value = if get_id_only {
-                        full_name.split(':').last().unwrap_or(full_name).to_string()
+                        full_name.split(':').next_back().unwrap_or(full_name).to_string()
                     } else {
                         full_name.clone()
                     };
@@ -102,7 +102,7 @@ impl SqlUtils {
         let connection_key = format!("{}.googlecloud.instanceName", instance_type);
         config.get("sql", &connection_key).map(|full_name| {
             // Extract instance ID from connection name
-            full_name.split(':').last().unwrap_or(full_name).to_string()
+            full_name.split(':').next_back().unwrap_or(full_name).to_string()
         })
     }
 
@@ -321,7 +321,7 @@ user_profile.db.instance = frontendInstance
 
     #[test]
     fn test_get_instance_name_map() {
-        let config = ParsedIniConfig::from_str(TEST_CONFIG).unwrap();
+        let config = ParsedIniConfig::parse_str(TEST_CONFIG).unwrap();
         let utils = SqlUtils::new("myproject");
 
         // Get full connection names
@@ -345,7 +345,7 @@ user_profile.db.instance = frontendInstance
 
     #[test]
     fn test_get_instance_id_for_db() {
-        let config = ParsedIniConfig::from_str(TEST_CONFIG).unwrap();
+        let config = ParsedIniConfig::parse_str(TEST_CONFIG).unwrap();
         let utils = SqlUtils::new("myproject");
 
         assert_eq!(
@@ -360,7 +360,7 @@ user_profile.db.instance = frontendInstance
 
     #[test]
     fn test_get_bastion_port_map() {
-        let config = ParsedIniConfig::from_str(TEST_CONFIG).unwrap();
+        let config = ParsedIniConfig::parse_str(TEST_CONFIG).unwrap();
 
         // With IAM ports
         let iam_map = get_bastion_port_map(&config, true);

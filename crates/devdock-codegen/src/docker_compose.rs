@@ -18,7 +18,7 @@ impl DockerComposeGenerator {
         compose.push_str("services:\n");
 
         // Placeholder - will be implemented with actual service definitions
-        for (name, _config) in &profile.services {
+        for name in profile.services.keys() {
             compose.push_str(&format!("  {}:\n", name));
             compose.push_str("    image: placeholder\n");
         }

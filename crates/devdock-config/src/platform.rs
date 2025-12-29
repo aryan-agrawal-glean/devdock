@@ -42,7 +42,7 @@ impl IniConfig {
     pub fn set(&mut self, section: &str, key: &str, value: impl Into<String>) {
         self.sections
             .entry(section.to_string())
-            .or_insert_with(HashMap::new)
+            .or_default()
             .insert(key.to_string(), value.into());
     }
 
@@ -50,7 +50,7 @@ impl IniConfig {
         self.sections.get(section)?.get(key)
     }
 
-    pub fn to_string(&self) -> String {
+    pub fn as_string(&self) -> String {
         let mut result = String::new();
 
         for (section, keys) in &self.sections {

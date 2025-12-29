@@ -144,7 +144,7 @@ impl TempProfileGenerator {
         };
 
         // Convert nodepool to namespace
-        match get_elastic_namespace(&nodepool) {
+        match get_elastic_namespace(nodepool) {
             Ok(ns) => ns,
             Err(e) => {
                 warn!("Failed to convert nodepool '{}' to namespace: {}", nodepool, e);

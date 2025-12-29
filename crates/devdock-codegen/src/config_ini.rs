@@ -18,7 +18,7 @@ impl ConfigIniGenerator {
         ini.push_str("[general]\n");
         ini.push_str(&format!("project = {}\n", profile.project));
         ini.push_str(&format!("platform = {:?}\n", profile.platform));
-        ini.push_str("\n");
+        ini.push('\n');
 
         // [services] section
         if !profile.services.is_empty() {
@@ -26,7 +26,7 @@ impl ConfigIniGenerator {
             for (name, config) in &profile.services {
                 ini.push_str(&format!("{} = {:?}\n", name, config.deployment_type));
             }
-            ini.push_str("\n");
+            ini.push('\n');
         }
 
         // [infrastructure] section
@@ -35,7 +35,7 @@ impl ConfigIniGenerator {
             for (name, config) in &profile.infra {
                 ini.push_str(&format!("{} = {:?}\n", name, config.deployment_type));
             }
-            ini.push_str("\n");
+            ini.push('\n');
         }
 
         Ok(ini)

@@ -229,7 +229,7 @@ impl OpenSearchCopier {
     ) -> Result<usize> {
         let mut total_docs = 0;
         let max_chunks = if max_docs > 0 {
-            (max_docs + size - 1) / size
+            max_docs.div_ceil(size)
         } else {
             usize::MAX
         };

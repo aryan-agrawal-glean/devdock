@@ -319,7 +319,7 @@ impl IniGenerator {
 
     /// Generate the final INI string
     pub fn generate(self) -> String {
-        self.config.to_string()
+        self.config.as_string()
     }
 
     // ===== Service-Specific Config Methods =====

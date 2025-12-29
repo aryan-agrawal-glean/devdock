@@ -27,8 +27,8 @@ impl DependencyResolver {
 
     /// Resolve all dependencies in a profile and return ordered components.
     pub fn resolve(&self, profile: &Profile) -> Result<Vec<ComponentName>> {
-        let mut graph = self.build_dependency_graph(profile)?;
-        self.topological_sort(&mut graph)
+        let graph = self.build_dependency_graph(profile)?;
+        self.topological_sort(&graph)
     }
 
     /// Build a dependency graph from the profile.
@@ -40,12 +40,12 @@ impl DependencyResolver {
 
         // Add all components to graph
         for name in profile.all_components() {
-            graph.entry(name.clone()).or_insert_with(Vec::new);
+            graph.entry(name.clone()).or_default();
         }
 
         // Load service dependencies from metadata files
         if let Some(ref root) = self.monorepo_root {
-            for (service_name, _config) in &profile.services {
+            for service_name in profile.services.keys() {
                 let deps = self.load_service_dependencies(root, service_name)?;
                 for dep in deps {
                     if profile.has_component(&dep) {
@@ -102,13 +102,11 @@ impl DependencyResolver {
                 if matches!(
                     opensearch_config.deployment_type,
                     devdock_core::types::DeploymentType::Remote
-                ) {
-                    if profile.infra.contains_key("bastion") {
-                        graph
-                            .entry("opensearch".to_string())
-                            .or_default()
-                            .push("bastion".to_string());
-                    }
+                ) && profile.infra.contains_key("bastion") {
+                    graph
+                        .entry("opensearch".to_string())
+                        .or_default()
+                        .push("bastion".to_string());
                 }
             }
         }
@@ -119,13 +117,11 @@ impl DependencyResolver {
                 if matches!(
                     sql_config.deployment_type,
                     devdock_core::types::DeploymentType::Remote
-                ) {
-                    if profile.infra.contains_key("bastion") {
-                        graph
-                            .entry("sql".to_string())
-                            .or_default()
-                            .push("bastion".to_string());
-                    }
+                ) && profile.infra.contains_key("bastion") {
+                    graph
+                        .entry("sql".to_string())
+                        .or_default()
+                        .push("bastion".to_string());
                 }
             }
         }

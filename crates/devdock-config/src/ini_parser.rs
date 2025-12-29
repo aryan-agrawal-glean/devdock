@@ -29,7 +29,7 @@ impl ParsedIniConfig {
     }
 
     /// Parse INI from a string
-    pub fn from_str(content: &str) -> Result<Self> {
+    pub fn parse_str(content: &str) -> Result<Self> {
         let ini = Ini::load_from_str(content).context("Failed to parse INI content")?;
         Ok(Self::from_ini(ini))
     }
@@ -39,7 +39,7 @@ impl ParsedIniConfig {
         let content = String::from_utf8_lossy(bytes);
         // Strip UTF-8 BOM if present
         let content = content.strip_prefix('\u{feff}').unwrap_or(&content);
-        Self::from_str(content)
+        Self::parse_str(content)
     }
 
     fn from_ini(ini: Ini) -> Self {
@@ -162,7 +162,7 @@ impl ParsedIniConfig {
     }
 
     /// Convert back to INI string
-    pub fn to_string(&self) -> String {
+    pub fn as_string(&self) -> String {
         let mut result = String::new();
 
         // Sort sections for deterministic output
@@ -240,7 +240,7 @@ discoveryEndpoints = memcached.devdock.local:11211
 
     #[test]
     fn test_parse_ini_string() {
-        let config = ParsedIniConfig::from_str(SAMPLE_INI).unwrap();
+        let config = ParsedIniConfig::parse_str(SAMPLE_INI).unwrap();
 
         assert!(config.has_section("sql"));
         assert!(config.has_section("google"));
@@ -258,7 +258,7 @@ discoveryEndpoints = memcached.devdock.local:11211
 
     #[test]
     fn test_get_sql_databases_by_instance() {
-        let config = ParsedIniConfig::from_str(SAMPLE_INI).unwrap();
+        let config = ParsedIniConfig::parse_str(SAMPLE_INI).unwrap();
 
         let frontend_dbs = config.get_sql_databases_by_instance("frontendInstance");
         assert!(frontend_dbs.contains(&"frontend_keyval".to_string()));
@@ -272,7 +272,7 @@ discoveryEndpoints = memcached.devdock.local:11211
 
     #[test]
     fn test_get_options_by_suffix() {
-        let config = ParsedIniConfig::from_str(SAMPLE_INI).unwrap();
+        let config = ParsedIniConfig::parse_str(SAMPLE_INI).unwrap();
 
         let db_instances = config.get_options_by_suffix("sql", ".db.instance");
         assert_eq!(db_instances.len(), 3);
@@ -298,7 +298,7 @@ discoveryEndpoints = memcached.devdock.local:11211
 
     #[test]
     fn test_merge_configs() {
-        let mut base = ParsedIniConfig::from_str(
+        let mut base = ParsedIniConfig::parse_str(
             r#"
 [section1]
 key1 = value1
@@ -307,7 +307,7 @@ key2 = value2
         )
         .unwrap();
 
-        let override_config = ParsedIniConfig::from_str(
+        let override_config = ParsedIniConfig::parse_str(
             r#"
 [section1]
 key2 = overridden
@@ -330,7 +330,7 @@ key3 = new_value
         config.set("section1", "key2", "value2");
         config.set("section2", "keyA", "valueA");
 
-        let output = config.to_string();
+        let output = config.as_string();
         assert!(output.contains("[section1]"));
         assert!(output.contains("key1 = value1"));
         assert!(output.contains("[section2]"));

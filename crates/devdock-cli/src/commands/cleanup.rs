@@ -4,7 +4,7 @@ use crate::output;
 use anyhow::Result;
 use devdock_config::docker;
 use devdock_state::{InstanceStatus, StateManager};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// Ports to clean up
@@ -105,7 +105,7 @@ fn is_infra_container(name: &str) -> bool {
     infra_names.iter().any(|n| name.contains(n))
 }
 
-fn clean_generated_files(devdock_root: &str, devdock_dir: &PathBuf) -> Result<()> {
+fn clean_generated_files(devdock_root: &str, devdock_dir: &Path) -> Result<()> {
     // Files/dirs to remove
     let to_remove = [
         devdock_dir.join("opensearch/full_cleanup.txt"),
@@ -149,7 +149,7 @@ fn clean_generated_files(devdock_root: &str, devdock_dir: &PathBuf) -> Result<()
     Ok(())
 }
 
-fn clean_grafana_stack(devdock_dir: &PathBuf) -> Result<()> {
+fn clean_grafana_stack(devdock_dir: &Path) -> Result<()> {
     // Remove Grafana data
     let grafana_dir = devdock_dir.join("grafana");
     if grafana_dir.exists() {
@@ -347,8 +347,8 @@ fn get_process_cwd(pid: i32) -> Result<String> {
     let stdout = String::from_utf8_lossy(&output.stdout);
     
     for line in stdout.lines() {
-        if line.starts_with('n') {
-            return Ok(line[1..].to_string());
+        if let Some(stripped) = line.strip_prefix('n') {
+            return Ok(stripped.to_string());
         }
     }
     

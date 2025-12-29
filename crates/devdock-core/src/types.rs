@@ -21,18 +21,13 @@ pub enum DeploymentType {
 }
 
 /// Cloud platform type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum Platform {
+    #[default]
     Google,
     Aws,
     Azure,
-}
-
-impl Default for Platform {
-    fn default() -> Self {
-        Self::Google
-    }
 }
 
 impl Platform {

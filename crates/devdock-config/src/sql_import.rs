@@ -1160,6 +1160,7 @@ impl SqlOperationsManager {
 
 /// Fast export configuration
 /// Loaded from devdock/config/infra/sql/util/fast_export_dbs.yaml
+#[derive(Default)]
 struct FastExportConfig {
     projects: HashSet<String>,
     dbs: HashSet<String>,
@@ -1181,15 +1182,6 @@ impl FastExportConfig {
             projects: yaml.projects.into_iter().collect(),
             dbs: yaml.dbs.into_iter().collect(),
         })
-    }
-}
-
-impl Default for FastExportConfig {
-    fn default() -> Self {
-        Self {
-            projects: HashSet::new(),
-            dbs: HashSet::new(),
-        }
     }
 }
 
