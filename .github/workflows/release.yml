@@ -76,22 +76,24 @@ jobs:
       - name: Prepare release assets
         run: |
           mkdir -p release
-          mv artifacts/*/*.tar.gz release/
-          cd release
+          cd artifacts
           
-          # Extract binaries and rename
-          for file in *.tar.gz; do
-            tar xzf "$file"
-            platform=$(echo "$file" | sed 's/\.tar\.gz//')
+          # Extract and rename each artifact
+          for dir in */; do
+            cd "$dir"
+            tar xzf *.tar.gz
+            platform=$(basename "$dir")
             version="${GITHUB_REF#refs/tags/}"
-            mv devdock "${platform}-${version}"
-            
-            # Generate checksum
-            shasum -a 256 "${platform}-${version}" >> checksums.txt
+            mv devdock "../../release/${platform}-${version}"
+            cd ..
           done
           
-          # Remove tar.gz files
-          rm -f *.tar.gz
+          # Generate checksums
+          cd ../release
+          shasum -a 256 * > checksums.txt
+          
+          # List files for debugging
+          ls -lh
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
@@ -103,33 +105,38 @@ jobs:
           body: |
             ## DevDock ${{ github.ref_name }}
             
-            ### Installation
+            🎉 First release of DevDock in Rust!
             
-            #### macOS (Homebrew)
-            ```bash
-            brew tap YOUR_ORG/tap
-            brew install devdock
-            ```
+            ### ⚡ Quick Install
             
-            #### macOS (Direct Download)
+            #### macOS (Apple Silicon)
             ```bash
-            # Apple Silicon (M1/M2/M3)
             curl -L https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/devdock-macos-arm64-${{ github.ref_name }} -o devdock
-            
-            # Intel Macs  
-            curl -L https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/devdock-macos-x86_64-${{ github.ref_name }} -o devdock
-            
-            # Make executable and install
             chmod +x devdock && sudo mv devdock /usr/local/bin/
             ```
             
-            #### Linux
+            #### macOS (Intel)
+            ```bash
+            curl -L https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/devdock-macos-x86_64-${{ github.ref_name }} -o devdock
+            chmod +x devdock && sudo mv devdock /usr/local/bin/
+            ```
+            
+            #### Linux (x86_64)
             ```bash
             curl -L https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/devdock-linux-x86_64-${{ github.ref_name }} -o devdock
             chmod +x devdock && sudo mv devdock /usr/local/bin/
             ```
             
-            ### Checksums
+            ### Verify Installation
+            ```bash
+            devdock --version  # Should output: devdock 0.1.0
+            ```
+            
+            ### 📚 Documentation
+            
+            See [README](https://github.com/${{ github.repository }}) for full documentation.
+            
+            ### 🔒 Checksums
             
             See `checksums.txt` for SHA256 verification.
         env:
