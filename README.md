@@ -16,7 +16,7 @@ A fast, extensible, standalone binary for managing local and remote development 
 ### macOS (Homebrew) - Recommended
 
 ```bash
-brew tap YOUR_ORG/tap
+brew tap rahul-roy-glean/tap
 brew install devdock
 ```
 
@@ -24,14 +24,14 @@ brew install devdock
 
 **Apple Silicon (M1/M2/M3):**
 ```bash
-curl -L https://github.com/YOUR_ORG/devdock/releases/latest/download/devdock-macos-arm64-v0.1.0 -o devdock
+curl -L https://github.com/rahul-roy-glean/devdock/releases/download/v0.1.0/devdock-macos-arm64-v0.1.0 -o devdock
 chmod +x devdock
 sudo mv devdock /usr/local/bin/
 ```
 
 **Intel Macs:**
 ```bash
-curl -L https://github.com/YOUR_ORG/devdock/releases/latest/download/devdock-macos-x86_64-v0.1.0 -o devdock
+curl -L https://github.com/rahul-roy-glean/devdock/releases/download/v0.1.0/devdock-macos-x86_64-v0.1.0 -o devdock
 chmod +x devdock
 sudo mv devdock /usr/local/bin/
 ```
@@ -40,7 +40,7 @@ sudo mv devdock /usr/local/bin/
 
 **x86_64:**
 ```bash
-curl -L https://github.com/YOUR_ORG/devdock/releases/latest/download/devdock-linux-x86_64-v0.1.0 -o devdock
+curl -L https://github.com/rahul-roy-glean/devdock/releases/download/v0.1.0/devdock-linux-x86_64-v0.1.0 -o devdock
 chmod +x devdock
 sudo mv devdock /usr/local/bin/
 ```
@@ -48,7 +48,7 @@ sudo mv devdock /usr/local/bin/
 ### From Source
 
 ```bash
-git clone https://github.com/YOUR_ORG/devdock.git
+git clone https://github.com/rahul-roy-glean/devdock.git
 cd devdock
 cargo install --path crates/devdock-cli
 ```
