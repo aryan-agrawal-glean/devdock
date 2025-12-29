@@ -1,0 +1,137 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:  # Allow manual trigger
+
+permissions:
+  contents: write
+
+jobs:
+  build-binaries:
+    name: Build ${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: macos-latest
+            platform: macos-arm64
+            target: aarch64-apple-darwin
+            binary_name: devdock
+            artifact_name: devdock-macos-arm64
+          
+          - os: macos-latest
+            platform: macos-x86_64
+            target: x86_64-apple-darwin
+            binary_name: devdock
+            artifact_name: devdock-macos-x86_64
+          
+          - os: ubuntu-latest
+            platform: linux-x86_64
+            target: x86_64-unknown-linux-gnu
+            binary_name: devdock
+            artifact_name: devdock-linux-x86_64
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          target: ${{ matrix.target }}
+
+      - name: Build binary
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package binary
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar czf ${{ matrix.artifact_name }}.tar.gz ${{ matrix.binary_name }}
+          mv ${{ matrix.artifact_name }}.tar.gz ${{ github.workspace }}/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_name }}.tar.gz
+
+  create-release:
+    name: Create GitHub Release
+    needs: build-binaries
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p release
+          mv artifacts/*/*.tar.gz release/
+          cd release
+          
+          # Extract binaries and rename
+          for file in *.tar.gz; do
+            tar xzf "$file"
+            platform=$(echo "$file" | sed 's/\.tar\.gz//')
+            version="${GITHUB_REF#refs/tags/}"
+            mv devdock "${platform}-${version}"
+            
+            # Generate checksum
+            shasum -a 256 "${platform}-${version}" >> checksums.txt
+          done
+          
+          # Remove tar.gz files
+          rm -f *.tar.gz
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: release/*
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+          body: |
+            ## DevDock ${{ github.ref_name }}
+            
+            ### Installation
+            
+            #### macOS (Homebrew)
+            ```bash
+            brew tap YOUR_ORG/tap
+            brew install devdock
+            ```
+            
+            #### macOS (Direct Download)
+            ```bash
+            # Apple Silicon (M1/M2/M3)
+            curl -L https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/devdock-macos-arm64-${{ github.ref_name }} -o devdock
+            
+            # Intel Macs  
+            curl -L https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/devdock-macos-x86_64-${{ github.ref_name }} -o devdock
+            
+            # Make executable and install
+            chmod +x devdock && sudo mv devdock /usr/local/bin/
+            ```
+            
+            #### Linux
+            ```bash
+            curl -L https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/devdock-linux-x86_64-${{ github.ref_name }} -o devdock
+            chmod +x devdock && sudo mv devdock /usr/local/bin/
+            ```
+            
+            ### Checksums
+            
+            See `checksums.txt` for SHA256 verification.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+

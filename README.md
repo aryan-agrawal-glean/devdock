@@ -13,17 +13,50 @@ A fast, extensible, standalone binary for managing local and remote development 
 
 ## 📦 Installation
 
-```bash
-# macOS (Homebrew)
-brew install rahul-roy-glean/tap/devdock
+### macOS (Homebrew) - Recommended
 
-# Direct download
-curl -L https://github.com/rahul-roy-glean/devdock/releases/latest/download/devdock-macos-arm64 -o devdock
+```bash
+brew tap YOUR_ORG/tap
+brew install devdock
+```
+
+### macOS (Direct Download)
+
+**Apple Silicon (M1/M2/M3):**
+```bash
+curl -L https://github.com/YOUR_ORG/devdock/releases/latest/download/devdock-macos-arm64-v0.1.0 -o devdock
 chmod +x devdock
 sudo mv devdock /usr/local/bin/
+```
 
-# From source (requires Rust)
-cargo install --path .
+**Intel Macs:**
+```bash
+curl -L https://github.com/YOUR_ORG/devdock/releases/latest/download/devdock-macos-x86_64-v0.1.0 -o devdock
+chmod +x devdock
+sudo mv devdock /usr/local/bin/
+```
+
+### Linux
+
+**x86_64:**
+```bash
+curl -L https://github.com/YOUR_ORG/devdock/releases/latest/download/devdock-linux-x86_64-v0.1.0 -o devdock
+chmod +x devdock
+sudo mv devdock /usr/local/bin/
+```
+
+### From Source
+
+```bash
+git clone https://github.com/YOUR_ORG/devdock.git
+cd devdock
+cargo install --path crates/devdock-cli
+```
+
+### Verify Installation
+
+```bash
+devdock --version  # Should output: devdock 0.1.0
 ```
 
 ## 🎯 Quick Start
