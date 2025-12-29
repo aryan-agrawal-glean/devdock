@@ -55,7 +55,7 @@ jobs:
           TZ: Etc/UTC
         run: |
           apt-get update
-          apt-get install -y curl build-essential pkg-config libssl-dev
+          apt-get install -y curl build-essential pkg-config libssl-dev perl make
           
       - name: Install dependencies (Linux native)
         if: runner.os == 'Linux' && !matrix.container
@@ -69,10 +69,15 @@ jobs:
           toolchain: stable
           target: ${{ matrix.target }}
 
-      - name: Build binary
+      - name: Build binary (with vendored OpenSSL for container)
+        if: matrix.container
         env:
-          # Static link OpenSSL for container builds (better portability)
-          OPENSSL_STATIC: ${{ matrix.container && 'true' || '' }}
+          OPENSSL_STATIC: '1'
+          OPENSSL_VENDORED: '1'
+        run: cargo build --release --target ${{ matrix.target }}
+        
+      - name: Build binary (regular)
+        if: '!matrix.container'
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Package binary
