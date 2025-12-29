@@ -38,11 +38,23 @@ sudo mv devdock /usr/local/bin/
 
 ### Linux
 
-**x86_64:**
+**Ubuntu 24.04+ / GLIBC 2.39+ (Modern):**
 ```bash
-curl -L https://github.com/rahul-roy-glean/devdock/releases/download/v0.1.0/devdock-linux-x86_64-v0.1.0 -o devdock
+curl -L https://github.com/rahul-roy-glean/devdock/releases/download/v0.1.0/devdock-linux-x86_64-glibc239-v0.1.0 -o devdock
 chmod +x devdock
 sudo mv devdock /usr/local/bin/
+```
+
+**Ubuntu 20.04-22.04 / GLIBC 2.31-2.35 (Legacy):**
+```bash
+curl -L https://github.com/rahul-roy-glean/devdock/releases/download/v0.1.0/devdock-linux-x86_64-glibc231-v0.1.0 -o devdock
+chmod +x devdock
+sudo mv devdock /usr/local/bin/
+```
+
+**Check your GLIBC version:**
+```bash
+ldd --version  # Shows your GLIBC version
 ```
 
 ### From Source
