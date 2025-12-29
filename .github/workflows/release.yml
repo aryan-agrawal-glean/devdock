@@ -50,6 +50,9 @@ jobs:
 
       - name: Install dependencies (Linux in container)
         if: matrix.container
+        env:
+          DEBIAN_FRONTEND: noninteractive
+          TZ: Etc/UTC
         run: |
           apt-get update
           apt-get install -y curl build-essential pkg-config libssl-dev
