@@ -43,6 +43,7 @@ jobs:
             binary_name: devdock
             artifact_name: devdock-linux-x86_64-glibc231
             container: ubuntu:20.04
+            use_vendored_openssl: true
 
     steps:
       - name: Checkout code
@@ -69,16 +70,13 @@ jobs:
           toolchain: stable
           target: ${{ matrix.target }}
 
-      - name: Build binary (with vendored OpenSSL for container)
-        if: matrix.container
-        env:
-          OPENSSL_STATIC: '1'
-          OPENSSL_VENDORED: '1'
-        run: cargo build --release --target ${{ matrix.target }}
-        
-      - name: Build binary (regular)
-        if: '!matrix.container'
-        run: cargo build --release --target ${{ matrix.target }}
+      - name: Build binary (vendored OpenSSL)
+        if: matrix.use_vendored_openssl == true
+        run: |
+          echo "Building with vendored OpenSSL: ${{ matrix.use_vendored_openssl }}"
+          echo "OPENSSL_STATIC=${OPENSSL_STATIC}"
+          echo "OPENSSL_VENDORED=${OPENSSL_VENDORED}"
+          cargo build --release --target ${{ matrix.target }}
 
       - name: Package binary
         run: |
