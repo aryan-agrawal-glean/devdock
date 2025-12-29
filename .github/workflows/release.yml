@@ -28,15 +28,21 @@ jobs:
             binary_name: devdock
             artifact_name: devdock-macos-x86_64
           
-          - os: ubuntu-20.04
+          - os: ubuntu-latest
             platform: linux-x86_64
-            target: x86_64-unknown-linux-gnu
+            target: x86_64-unknown-linux-musl
             binary_name: devdock
             artifact_name: devdock-linux-x86_64
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Install musl tools (Linux only)
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
 
       - name: Install Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1
