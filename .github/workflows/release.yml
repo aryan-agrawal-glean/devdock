@@ -70,6 +70,9 @@ jobs:
           target: ${{ matrix.target }}
 
       - name: Build binary
+        env:
+          # Static link OpenSSL for container builds (better portability)
+          OPENSSL_STATIC: ${{ matrix.container && 'true' || '' }}
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Package binary
