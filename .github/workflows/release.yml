@@ -74,15 +74,14 @@ jobs:
 
       - name: Package binary
         run: |
-          cd target/${{ matrix.target }}/release
-          tar czf ${{ matrix.artifact_name }}.tar.gz ${{ matrix.binary_name }}
-          mv ${{ matrix.artifact_name }}.tar.gz ${{ github.workspace }}/
+          mkdir -p artifacts
+          tar czf artifacts/${{ matrix.artifact_name }}.tar.gz -C target/${{ matrix.target }}/release ${{ matrix.binary_name }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          path: ${{ matrix.artifact_name }}.tar.gz
+          path: artifacts/${{ matrix.artifact_name }}.tar.gz
 
   create-release:
     name: Create GitHub Release
