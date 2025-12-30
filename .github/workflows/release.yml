@@ -58,17 +58,18 @@ jobs:
           toolchain: stable
           target: ${{ matrix.target }}
 
-      - name: Build binary
+      - name: Build binary (vendored OpenSSL)
+        if: matrix.vendor_openssl == true
         env:
-          OPENSSL_STATIC: ${{ matrix.vendor_openssl && '1' || '' }}
-          OPENSSL_VENDORED: ${{ matrix.vendor_openssl && '1' || '' }}
+          OPENSSL_STATIC: 1
+          OPENSSL_VENDORED: 1
         run: |
-          if [ "${{ matrix.vendor_openssl }}" = "true" ]; then
-            echo "Building with vendored OpenSSL (static linking)..."
-            export OPENSSL_STATIC=1
-            export OPENSSL_VENDORED=1
-          fi
+          echo "Building with vendored OpenSSL (static linking)..."
           cargo build --release --target ${{ matrix.target }}
+          
+      - name: Build binary (regular)
+        if: matrix.vendor_openssl != true
+        run: cargo build --release --target ${{ matrix.target }}
 
       - name: Package binary
         run: |
