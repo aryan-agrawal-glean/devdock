@@ -1,4 +1,4 @@
-# DevDock v2 - Standalone Development Environment Orchestrator
+# DevDock v2 - Rust-native , Blazing fast
 
 A fast, extensible, standalone binary for managing local and remote development environments.
 
