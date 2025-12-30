@@ -204,8 +204,7 @@ impl IniGenerator {
             self.config.set("sql", "useDbIAMAuth", "false");
             self.config.set("sql", "useCloudSqlConnectorInQe", "false");
 
-            // Standard instances - only set local connection overrides
-            // NOTE: googlecloud.instanceName should NOT be set here - it comes from dynamic.ini
+            // Standard instances - set local connection overrides
             let instances = vec!["", "frontendInstance", "backendInstance"];
 
             for instance in instances {
@@ -217,15 +216,17 @@ impl IniGenerator {
 
                 self.config.set("sql", &format!("{}db.password", instance_prefix), "");
                 self.config.set("sql", &format!("{}db.user", instance_prefix), "root");
-                // DO NOT set googlecloud.instanceName - it comes from dynamic.ini
                 self.config.set("sql", &format!("{}db.host", instance_prefix), &sql_host);
             }
+
+            // Set googlecloud.instanceName for frontend and backend
+            self.config.set("sql", "frontendInstance.googlecloud.instanceName", "");
+            self.config.set("sql", "backendInstance.googlecloud.instanceName", "");
 
             // Special handling for glean-apps-canary and scio-apps
             if self.context.project == "glean-apps-canary" || self.context.project == "scio-apps" {
                 self.config.set("sql", "db.user", "root");
                 self.config.set("sql", "db.password", "");
-                // DO NOT set googlecloud.instanceName - it comes from dynamic.ini
                 self.config.set("sql", "db.host", &sql_host);
             }
         } else {
@@ -239,19 +240,20 @@ impl IniGenerator {
             self.config.set("sql", "useDbIAMAuth", "true");
 
             // Set host for remote SQL (goes through cloud-sql-proxy)
-            // NOTE: googlecloud.instanceName should NOT be set here - it comes from dynamic.ini
             let instances = vec![("frontendInstance", curr_port), ("backendInstance", curr_port + 1)];
 
             for (instance, port) in instances {
                 self.config.set("sql", &format!("{}.db.host", instance),
                     format!("host.docker.internal:{}", port));
-                // DO NOT set googlecloud.instanceName - it comes from dynamic.ini
             }
+
+            // Set googlecloud.instanceName for frontend and backend
+            self.config.set("sql", "frontendInstance.googlecloud.instanceName", "");
+            self.config.set("sql", "backendInstance.googlecloud.instanceName", "");
 
             // Special handling for glean-apps-canary and scio-apps
             if self.context.project == "glean-apps-canary" || self.context.project == "scio-apps" {
                 self.config.set("sql", "db.host", format!("host.docker.internal:{}", curr_port + 1));
-                // DO NOT set googlecloud.instanceName - it comes from dynamic.ini
             }
         }
     }
