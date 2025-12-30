@@ -36,7 +36,7 @@ chmod +x devdock
 sudo mv devdock /usr/local/bin/
 ```
 
-### Linux
+### Linux 
 
 **x86_64 (Ubuntu 20.04+, GLIBC 2.31+):**
 ```bash
