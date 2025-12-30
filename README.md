@@ -38,14 +38,14 @@ sudo mv devdock /usr/local/bin/
 
 ### Linux 
 
-**x86_64 (Ubuntu 20.04+, GLIBC 2.31+):**
+x`**x86_64 (Any Linux distribution):**
 ```bash
 curl -L https://github.com/askscio/devdock/releases/download/v0.1.0/devdock-linux-x86_64-v0.1.0 -o devdock
 chmod +x devdock
 sudo mv devdock /usr/local/bin/
 ```
 
-Built on Ubuntu 20.04 with statically-linked OpenSSL for maximum compatibility.
+Statically-linked musl binary - works on any Linux distribution with any GLIBC version.
 
 ### From Source
 
