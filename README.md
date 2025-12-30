@@ -16,7 +16,7 @@ A fast, extensible, standalone binary for managing local and remote development 
 ### macOS (Homebrew) - Recommended
 
 ```bash
-brew tap rahul-roy-glean/tap
+brew tap askscio/tap
 brew install devdock
 ```
 
@@ -24,43 +24,33 @@ brew install devdock
 
 **Apple Silicon (M1/M2/M3):**
 ```bash
-curl -L https://github.com/rahul-roy-glean/devdock/releases/download/v0.1.0/devdock-macos-arm64-v0.1.0 -o devdock
+curl -L https://github.com/askscio/devdock/releases/download/v0.1.0/devdock-macos-arm64-v0.1.0 -o devdock
 chmod +x devdock
 sudo mv devdock /usr/local/bin/
 ```
 
 **Intel Macs:**
 ```bash
-curl -L https://github.com/rahul-roy-glean/devdock/releases/download/v0.1.0/devdock-macos-x86_64-v0.1.0 -o devdock
+curl -L https://github.com/askscio/devdock/releases/download/v0.1.0/devdock-macos-x86_64-v0.1.0 -o devdock
 chmod +x devdock
 sudo mv devdock /usr/local/bin/
 ```
 
 ### Linux
 
-**Ubuntu 24.04+ / GLIBC 2.39+ (Modern):**
+**x86_64 (Ubuntu 20.04+, GLIBC 2.31+):**
 ```bash
-curl -L https://github.com/rahul-roy-glean/devdock/releases/download/v0.1.0/devdock-linux-x86_64-glibc239-v0.1.0 -o devdock
+curl -L https://github.com/askscio/devdock/releases/download/v0.1.0/devdock-linux-x86_64-v0.1.0 -o devdock
 chmod +x devdock
 sudo mv devdock /usr/local/bin/
 ```
 
-**Ubuntu 20.04-22.04 / GLIBC 2.31-2.35 (Legacy):**
-```bash
-curl -L https://github.com/rahul-roy-glean/devdock/releases/download/v0.1.0/devdock-linux-x86_64-glibc231-v0.1.0 -o devdock
-chmod +x devdock
-sudo mv devdock /usr/local/bin/
-```
-
-**Check your GLIBC version:**
-```bash
-ldd --version  # Shows your GLIBC version
-```
+Built on Ubuntu 20.04 with statically-linked OpenSSL for maximum compatibility.
 
 ### From Source
 
 ```bash
-git clone https://github.com/rahul-roy-glean/devdock.git
+git clone https://github.com/askscio/devdock.git
 cd devdock
 cargo install --path crates/devdock-cli
 ```
@@ -111,7 +101,7 @@ DevDock is built as a modular Rust workspace:
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 # Clone the repo
-git clone https://github.com/rahul-roy-glean/devdock.git
+git clone https://github.com/askscio/devdock.git
 cd devdock
 
 # Build
