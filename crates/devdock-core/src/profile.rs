@@ -92,11 +92,15 @@ pub struct PipelineConfig {
 /// Test suite configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TestSuiteConfig {
-    #[serde(rename = "type")]
+    #[serde(rename = "type", default = "default_test_type")]
     pub test_type: String,
 
     #[serde(flatten)]
     pub config: HashMap<String, serde_json::Value>,
+}
+
+fn default_test_type() -> String {
+    "test".to_string()
 }
 
 /// Multi-project configuration (for glean-apps-canary pattern).
@@ -167,6 +171,47 @@ services:
         let qe_config = profile.services.get("qe").unwrap();
         assert_eq!(qe_config.env.get("DEBUG_MODE").unwrap(), "true");
         assert_eq!(qe_config.env.get("PORT").unwrap(), "7960");
+    }
+
+    #[test]
+    fn test_parse_profile_with_test_suite_no_type() {
+        let yaml = r#"
+project: test-project
+services:
+  qe:
+    type: local
+test_suite:
+  test_example:
+    dependencies:
+      - qe
+    stable_wait_seconds: 10
+    params:
+      json_test_filter: test_filter
+"#;
+        let profile: Profile = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(profile.test_suite.len(), 1);
+        let test_config = profile.test_suite.get("test_example").unwrap();
+        assert_eq!(test_config.test_type, "test");
+        assert!(test_config.config.contains_key("dependencies"));
+    }
+
+    #[test]
+    fn test_parse_profile_with_test_suite_with_type() {
+        let yaml = r#"
+project: test-project
+services:
+  qe:
+    type: local
+test_suite:
+  test_example:
+    type: integration_test
+    dependencies:
+      - qe
+"#;
+        let profile: Profile = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(profile.test_suite.len(), 1);
+        let test_config = profile.test_suite.get("test_example").unwrap();
+        assert_eq!(test_config.test_type, "integration_test");
     }
 }
 
