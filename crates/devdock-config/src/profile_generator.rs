@@ -351,6 +351,11 @@ impl TempProfileGenerator {
                         })
                     });
 
+                    // Extract any extra fields from the profile (like tick_type)
+                    let extra = profile_service
+                        .map(|s| s.config.clone())
+                        .unwrap_or_default();
+
                     let mut entry = ServiceProfileEntry {
                         service_type,
                         active: is_active,
@@ -361,7 +366,7 @@ impl TempProfileGenerator {
                         service: None,
                         depends_on_services: None,
                         timeout: None,
-                        extra: HashMap::new(),
+                        extra,
                     };
 
                     // Special case: Docbuilder with local SQL - add ENABLE_WRITES env
