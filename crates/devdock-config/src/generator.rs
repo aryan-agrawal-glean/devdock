@@ -236,6 +236,14 @@ impl ConfigGenerator {
             generator.apply_dependency(node);
         }
 
+        // Apply service-level ini_overrides from the profile
+        // These override the ini_overrides from devdock_config.json
+        for (_service_name, service_config) in &profile.services {
+            if !service_config.ini_overrides.is_empty() {
+                generator.apply_profile_overrides(&service_config.ini_overrides);
+            }
+        }
+
         // Apply profile-level ini_overrides (these take precedence over everything)
         generator.apply_profile_overrides(&profile.ini_overrides);
 
