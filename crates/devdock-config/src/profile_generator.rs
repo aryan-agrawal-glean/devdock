@@ -58,6 +58,20 @@ pub struct ServiceProfileEntry {
     pub env: Option<HashMap<String, String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hot_reload: Option<String>,
+    
+    // Hook-specific fields (for pre_setup and post_setup)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub script: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub depends_on_services: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout: Option<String>,
+    
+    // Allow any additional fields from the profile to pass through
+    #[serde(flatten, skip_serializing_if = "HashMap::is_empty")]
+    pub extra: HashMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -281,6 +295,14 @@ impl TempProfileGenerator {
         // Track if QE is in the graph
         let has_qe = graph.nodes().any(|n| n.name == "qe");
 
+        // Handle pre_setup and post_setup hooks first - pass them through to temp_profile
+        // These are special "services" that Tilt's service_hooks/Tiltfile handles
+        for hook_name in &["pre_setup", "post_setup"] {
+            if let Some(hook_config) = profile.services.get(*hook_name) {
+                self.apply_service_hook(hook_name, hook_config);
+            }
+        }
+
         for node in graph.nodes() {
             // Determine if service is active
             let is_active = match node.component_type {
@@ -300,6 +322,11 @@ impl TempProfileGenerator {
 
             match node.component_type {
                 ComponentType::Service => {
+                    // Skip pre_setup and post_setup - they're handled separately
+                    if node.name == "pre_setup" || node.name == "post_setup" {
+                        continue;
+                    }
+
                     // Get original service config from profile for type, env and hot_reload
                     let profile_service = profile.services.get(&node.name);
 
@@ -330,6 +357,11 @@ impl TempProfileGenerator {
                         port: None, // Don't include port in temp_profile, Python doesn't
                         env,
                         hot_reload,
+                        script: None,
+                        service: None,
+                        depends_on_services: None,
+                        timeout: None,
+                        extra: HashMap::new(),
                     };
 
                     // Special case: Docbuilder with local SQL - add ENABLE_WRITES env
@@ -359,6 +391,11 @@ impl TempProfileGenerator {
                 port: None,
                 env: None,
                 hot_reload: None,
+                script: None,
+                service: None,
+                depends_on_services: None,
+                timeout: None,
+                extra: HashMap::new(),
             });
         }
     }
@@ -462,6 +499,131 @@ impl TempProfileGenerator {
         };
 
         self.profile.infra.insert(name.to_string(), entry);
+    }
+
+    /// Apply service hook configuration (pre_setup or post_setup)
+    /// 
+    /// These hooks are special "services" that Tilt's service_hooks/Tiltfile handles.
+    /// We pass them through to temp_profile.yaml with all their configuration intact.
+    fn apply_service_hook(&mut self, hook_name: &str, hook_config: &devdock_core::ServiceConfig) {
+        use serde_json::json;
+
+        // Create a JSON object with all the hook configuration
+        let mut hook_data = serde_json::Map::new();
+        
+        // Always set type (usually "local")
+        hook_data.insert(
+            "type".to_string(),
+            json!(match hook_config.deployment_type {
+                devdock_core::types::DeploymentType::Local => "local",
+                devdock_core::types::DeploymentType::Remote => "remote",
+            })
+        );
+
+        // Add script if present
+        if let Some(ref script) = hook_config.script {
+            hook_data.insert("script".to_string(), json!(script));
+        }
+
+        // Add target service if present
+        if let Some(ref service) = hook_config.service {
+            hook_data.insert("service".to_string(), json!(service));
+        }
+
+        // Add depends_on_services if present
+        if let Some(ref deps) = hook_config.depends_on_services {
+            hook_data.insert("depends_on_services".to_string(), json!(deps));
+        }
+
+        // Add timeout if present
+        if let Some(ref timeout) = hook_config.timeout {
+            hook_data.insert("timeout".to_string(), json!(timeout));
+        }
+
+        // Add environment variables if present
+        if !hook_config.env.is_empty() {
+            hook_data.insert("env".to_string(), json!(hook_config.env));
+        }
+
+        // Add any other configuration from the flattened config map
+        for (key, value) in &hook_config.config {
+            if !hook_data.contains_key(key) {
+                hook_data.insert(key.clone(), value.clone());
+            }
+        }
+
+        // Convert to ServiceProfileEntry format for serialization
+        // Note: We can't use ServiceProfileEntry directly because it doesn't have all the hook fields
+        // So we'll store it as a JSON value in the services map
+        let entry_json = serde_json::Value::Object(hook_data);
+        
+        // Deserialize into a ServiceProfileEntry with extra fields flattened
+        // This is a bit of a hack but allows us to preserve all hook configuration
+        if let Ok(_hook_value) = serde_json::from_value::<serde_json::Value>(entry_json.clone()) {
+            // Store the hook configuration directly in services as a raw JSON value
+            // We'll need to modify TempProfileData to support this
+            self.store_hook_config(hook_name, entry_json);
+        }
+    }
+
+    /// Store hook configuration as raw JSON (workaround for hook-specific fields)
+    fn store_hook_config(&mut self, hook_name: &str, hook_data: serde_json::Value) {
+        // Extract all fields from the hook configuration
+        let service_type = hook_data
+            .get("type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("local")
+            .to_string();
+        
+        let env = hook_data
+            .get("env")
+            .and_then(|v| serde_json::from_value::<HashMap<String, String>>(v.clone()).ok());
+
+        let script = hook_data
+            .get("script")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        let service = hook_data
+            .get("service")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        let depends_on_services = hook_data
+            .get("depends_on_services")
+            .and_then(|v| serde_json::from_value::<Vec<String>>(v.clone()).ok());
+
+        let timeout = hook_data
+            .get("timeout")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        // Collect any extra fields that aren't in the standard set
+        let standard_keys = ["type", "env", "script", "service", "depends_on_services", "timeout"];
+        let mut extra = HashMap::new();
+        if let Some(obj) = hook_data.as_object() {
+            for (key, value) in obj {
+                if !standard_keys.contains(&key.as_str()) {
+                    extra.insert(key.clone(), value.clone());
+                }
+            }
+        }
+
+        let entry = ServiceProfileEntry {
+            service_type,
+            active: true, // Hooks are always active
+            port: None,
+            env,
+            hot_reload: None,
+            script,
+            service,
+            depends_on_services,
+            timeout,
+            extra,
+        };
+
+        // Store in the services map
+        self.profile.services.insert(hook_name.to_string(), entry);
     }
 
     /// Generate the final YAML string

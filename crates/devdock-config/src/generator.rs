@@ -236,6 +236,9 @@ impl ConfigGenerator {
             generator.apply_dependency(node);
         }
 
+        // Apply profile-level ini_overrides (these take precedence over everything)
+        generator.apply_profile_overrides(&profile.ini_overrides);
+
         Ok(generator.generate())
     }
 

@@ -112,6 +112,11 @@ impl DependencyGraph {
                                 deployment_type: DeploymentType::Remote,
                                 env: HashMap::new(),
                                 hot_reload: None,
+                                ini_overrides: Vec::new(),
+                                script: None,
+                                service: None,
+                                depends_on_services: None,
+                                timeout: None,
                                 config: HashMap::new(),
                             });
                         }
@@ -139,6 +144,11 @@ impl DependencyGraph {
                 deployment_type: DeploymentType::Remote,
                 env: HashMap::new(),
                 hot_reload: None,
+                ini_overrides: Vec::new(),
+                script: None,
+                service: None,
+                depends_on_services: None,
+                timeout: None,
                 config: HashMap::new(),
             });
         }
@@ -210,7 +220,14 @@ impl DependencyGraph {
                     configs.insert(name, config_tuple);
                 }
                 Ok(Err(e)) => {
-                    eprintln!("Warning: Failed to load config: {}", e);
+                    // Skip warnings for known hook services that don't have config files
+                    let error_msg = e.to_string();
+                    let is_hook_service = error_msg.contains("pre_setup") 
+                        || error_msg.contains("post_setup");
+                    
+                    if !is_hook_service {
+                        eprintln!("Warning: Failed to load config: {}", e);
+                    }
                 }
                 Err(e) => {
                     eprintln!("Warning: Task failed: {}", e);
@@ -253,6 +270,16 @@ impl DependencyGraph {
 
                 return Ok(config);
             }
+        }
+
+        // Check if Tiltfile exists - if so, return default config
+        let tiltfile_path = workspace_root.join(format!(
+            "devdock/config/services/{}/Tiltfile",
+            service_name
+        ));
+        
+        if tiltfile_path.exists() {
+            return Ok(ServiceConfig::default());
         }
 
         anyhow::bail!("No config found for service: {}", service_name)

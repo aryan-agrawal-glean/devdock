@@ -9,4 +9,5 @@ pub mod service;
 pub mod types;
 
 pub use error::{Error, Result};
+pub use profile::{Profile, ServiceConfig, InfraConfig, IniOverride};
 

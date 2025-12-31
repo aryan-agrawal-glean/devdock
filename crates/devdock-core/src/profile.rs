@@ -34,6 +34,10 @@ pub struct Profile {
     #[serde(default)]
     pub env: EnvVars,
 
+    /// Profile-level INI overrides (applied after all service-level overrides).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ini_overrides: Vec<IniOverride>,
+
     /// Multi-project config (e.g., glean-apps-canary).
     #[serde(rename = "glean-apps-canary", default, skip_serializing_if = "Option::is_none")]
     pub multi_project: Option<MultiProjectConfig>,
@@ -66,9 +70,37 @@ pub struct ServiceConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hot_reload: Option<HotReloadConfig>,
 
+    /// INI overrides for this service.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ini_overrides: Vec<IniOverride>,
+
+    /// Script path for pre_setup/post_setup hooks.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub script: Option<String>,
+
+    /// Target service for pre_setup/post_setup hooks.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service: Option<String>,
+
+    /// Dependencies for hooks (services that must be ready first).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub depends_on_services: Option<Vec<String>>,
+
+    /// Timeout for hooks.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout: Option<String>,
+
     /// Service-specific configuration.
     #[serde(flatten)]
     pub config: HashMap<String, serde_json::Value>,
+}
+
+/// INI override entry (can be at profile or service level).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IniOverride {
+    pub section: String,
+    pub key: String,
+    pub val: String,
 }
 
 /// Hot reload configuration.
@@ -154,6 +186,7 @@ services:
         assert_eq!(profile.services.len(), 1);
         assert!(profile.has_component("sql"));
         assert!(profile.has_component("qe"));
+        assert_eq!(profile.ini_overrides.len(), 0);
     }
 
     #[test]
@@ -212,6 +245,55 @@ test_suite:
         assert_eq!(profile.test_suite.len(), 1);
         let test_config = profile.test_suite.get("test_example").unwrap();
         assert_eq!(test_config.test_type, "integration_test");
+    }
+
+    #[test]
+    fn test_parse_profile_with_ini_overrides() {
+        let yaml = r#"
+project: test-project
+services:
+  qe:
+    type: local
+    ini_overrides:
+      - section: queryapi
+        key: baseURL
+        val: https://example.com
+ini_overrides:
+  - section: manifest
+    key: llm_key_sku
+    val: LKS_GLEAN_KEY_UNIVERSAL
+"#;
+        let profile: Profile = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(profile.ini_overrides.len(), 1);
+        assert_eq!(profile.ini_overrides[0].section, "manifest");
+        
+        let qe_config = profile.services.get("qe").unwrap();
+        assert_eq!(qe_config.ini_overrides.len(), 1);
+        assert_eq!(qe_config.ini_overrides[0].section, "queryapi");
+    }
+
+    #[test]
+    fn test_parse_profile_with_pre_setup() {
+        let yaml = r#"
+project: test-project
+services:
+  crawler:
+    type: local
+  pre_setup:
+    type: local
+    script: devdock/config/services/service_hooks/pre_scripts/disable_datasources.sh
+    service: crawler
+    depends_on_services:
+      - qe
+    timeout: 10m
+"#;
+        let profile: Profile = serde_yaml::from_str(yaml).unwrap();
+        
+        let pre_setup = profile.services.get("pre_setup").unwrap();
+        assert_eq!(pre_setup.script, Some("devdock/config/services/service_hooks/pre_scripts/disable_datasources.sh".to_string()));
+        assert_eq!(pre_setup.service, Some("crawler".to_string()));
+        assert_eq!(pre_setup.depends_on_services.as_ref().unwrap().len(), 1);
+        assert_eq!(pre_setup.timeout, Some("10m".to_string()));
     }
 }
 

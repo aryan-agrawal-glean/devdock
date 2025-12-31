@@ -158,6 +158,19 @@ impl IniGenerator {
         }
     }
 
+    /// Apply profile-level INI overrides
+    /// 
+    /// These are applied last and take precedence over all other configurations.
+    pub fn apply_profile_overrides(&mut self, overrides: &[devdock_core::IniOverride]) {
+        for override_entry in overrides {
+            self.config.set(
+                &override_entry.section,
+                &override_entry.key,
+                &override_entry.val,
+            );
+        }
+    }
+
     /// Apply dependency-specific configuration
     pub fn apply_dependency(&mut self, node: &ServiceNode) {
         match node.name.as_str() {
