@@ -238,7 +238,7 @@ impl ConfigGenerator {
 
         // Apply service-level ini_overrides from the profile
         // These override the ini_overrides from devdock_config.json
-        for (_service_name, service_config) in &profile.services {
+        for service_config in profile.services.values() {
             if !service_config.ini_overrides.is_empty() {
                 generator.apply_profile_overrides(&service_config.ini_overrides);
             }
