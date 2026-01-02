@@ -88,7 +88,7 @@ pub async fn execute(profile_name: &str, services: Option<&str>, _ci_mode: bool)
     println!("\nPress Ctrl+C to stop DevDock\n");
 
     // Wait for Tilt process
-    wait_for_tilt(tilt_process, &state_manager, &instance.id).await?;
+    wait_for_tilt(tilt_process, &state_manager, &instance.id, workspace_root).await?;
 
     Ok(())
 }
@@ -271,8 +271,11 @@ async fn wait_for_tilt(
     mut tilt_process: Child,
     state_manager: &StateManager,
     instance_id: &str,
+    workspace_root: PathBuf,
 ) -> Result<()> {
     let instance_id = instance_id.to_string();
+    let workspace_root = workspace_root.clone();
+    
     // Get PID before moving the process
     let tilt_pid = tilt_process.id();
 
@@ -309,7 +312,7 @@ async fn wait_for_tilt(
             }
 
             // Perform cleanup
-            perform_cleanup(&instance_id).await?;
+            perform_cleanup(&instance_id, &workspace_root).await?;
 
             // Update status
             state_manager
@@ -324,7 +327,7 @@ async fn wait_for_tilt(
             match result {
                 Ok(Ok(status)) => {
                     // Perform cleanup
-                    perform_cleanup(&instance_id).await?;
+                    perform_cleanup(&instance_id, &workspace_root).await?;
 
     // Update status
     state_manager
@@ -339,14 +342,14 @@ async fn wait_for_tilt(
                 }
                 Ok(Err(e)) => {
                     output::warn(&format!("Tilt process error: {}", e));
-                    perform_cleanup(&instance_id).await?;
+                    perform_cleanup(&instance_id, &workspace_root).await?;
                     state_manager
                         .update_status(&instance_id, InstanceStatus::Stopped)
                         .await?;
                 }
                 Err(e) => {
                     output::warn(&format!("Failed to wait for Tilt: {}", e));
-                    perform_cleanup(&instance_id).await?;
+                    perform_cleanup(&instance_id, &workspace_root).await?;
                     state_manager
                         .update_status(&instance_id, InstanceStatus::Stopped)
                         .await?;
@@ -359,7 +362,7 @@ async fn wait_for_tilt(
 }
 
 /// Perform cleanup operations
-async fn perform_cleanup(_instance_id: &str) -> Result<()> {
+async fn perform_cleanup(_instance_id: &str, workspace_root: &Path) -> Result<()> {
     output::info("Cleaning up DevDock resources...");
 
     // 1. Stop Docker containers
@@ -372,7 +375,7 @@ async fn perform_cleanup(_instance_id: &str) -> Result<()> {
     cleanup_dangling_images()?;
 
     // 4. Clean up temporary files
-    cleanup_temp_files()?;
+    cleanup_temp_files(workspace_root)?;
 
     output::success("Cleanup complete");
     Ok(())
@@ -492,7 +495,7 @@ fn cleanup_dangling_images() -> Result<()> {
 }
 
 /// Clean up temporary files
-fn cleanup_temp_files() -> Result<()> {
+fn cleanup_temp_files(workspace_root: &Path) -> Result<()> {
     output::info("Cleaning up temporary files...");
 
     let home = std::env::var("HOME")?;
@@ -512,43 +515,39 @@ fn cleanup_temp_files() -> Result<()> {
     }
 
     // Clean up runtime_generated directory
-    if let Ok(workspace_root) = find_workspace_root() {
-        output::info(&format!("Workspace root: {}", workspace_root.display()));
+    output::info(&format!("Workspace root: {}", workspace_root.display()));
 
-        let runtime_gen = workspace_root.join("devdock/runtime_generated");
-        output::info(&format!("Looking for runtime_generated at: {}", runtime_gen.display()));
+    let runtime_gen = workspace_root.join("devdock/runtime_generated");
+    output::info(&format!("Looking for runtime_generated at: {}", runtime_gen.display()));
 
-        if runtime_gen.exists() {
-            output::info("Removing runtime_generated directory...");
-            match std::fs::remove_dir_all(&runtime_gen) {
-                Ok(_) => {
-                    output::success("Removed runtime_generated directory");
-                    cleaned_count += 1;
-                }
-                Err(e) => {
-                    output::warn(&format!("Failed to remove runtime_generated: {}", e));
-                }
-            }
-        } else {
-            output::info("runtime_generated directory not found (may already be clean)");
-        }
-
-        // Also clean up config files
-        let config_files = vec![
-            workspace_root.join("devdock/devdock.ini"),
-            workspace_root.join("config/devdock.ini"),
-            workspace_root.join("config/run_local.ini"),
-            workspace_root.join("devdock/scio_apps.ini"),
-        ];
-
-        for config_file in config_files {
-            if config_file.exists()
-                && std::fs::remove_file(&config_file).is_ok() {
+    if runtime_gen.exists() {
+        output::info("Removing runtime_generated directory...");
+        match std::fs::remove_dir_all(&runtime_gen) {
+            Ok(_) => {
+                output::success("Removed runtime_generated directory");
                 cleaned_count += 1;
+            }
+            Err(e) => {
+                output::warn(&format!("Failed to remove runtime_generated: {}", e));
             }
         }
     } else {
-        output::warn("Could not find workspace root for cleanup");
+        output::info("runtime_generated directory not found (may already be clean)");
+    }
+
+    // Also clean up config files
+    let config_files = vec![
+        workspace_root.join("devdock/devdock.ini"),
+        workspace_root.join("config/devdock.ini"),
+        workspace_root.join("config/run_local.ini"),
+        workspace_root.join("devdock/scio_apps.ini"),
+    ];
+
+    for config_file in config_files {
+        if config_file.exists()
+            && std::fs::remove_file(&config_file).is_ok() {
+            cleaned_count += 1;
+        }
     }
 
     output::success(&format!("Cleaned {} file(s)/directory(s)", cleaned_count));
