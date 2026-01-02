@@ -211,6 +211,11 @@ mod tests {
                 deployment_type: DeploymentType::Local,
                 env: HashMap::new(),
                 hot_reload: None,
+                ini_overrides: Vec::new(),
+                script: None,
+                service: None,
+                depends_on_services: None,
+                timeout: None,
                 config: HashMap::new(),
             },
         );
@@ -223,6 +228,7 @@ mod tests {
             pipelines: HashMap::new(),
             test_suite: HashMap::new(),
             env: HashMap::new(),
+            ini_overrides: Vec::new(),
             multi_project: None,
         };
 
