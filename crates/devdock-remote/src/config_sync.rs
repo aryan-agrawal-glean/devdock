@@ -17,6 +17,7 @@ pub fn sync_profile(workspace: &str, profile_path: &Path) -> Result<()> {
     }
     
     // Create target directory on remote first
+    debug!("Creating remote directory...");
     let _ = Command::new("coder")
         .arg("ssh")
         .arg(workspace)
@@ -26,15 +27,32 @@ pub fn sync_profile(workspace: &str, profile_path: &Path) -> Result<()> {
         .arg("/home/workspace/scio/devdock/profiles/")
         .output();
     
-    // Use scp with coder SSH integration (format: workspace.coder:path)
-    let output = Command::new("scp")
-        .arg("-q")
-        .arg("-o").arg("StrictHostKeyChecking=no")
-        .arg("-o").arg("UserKnownHostsFile=/dev/null")
-        .arg(profile_path)
-        .arg(format!("{}.coder:/home/workspace/scio/devdock/profiles/", workspace))
+    // Use coder's built-in file copy instead of raw scp
+    debug!("Copying profile using coder: {:?} -> {}", profile_path, workspace);
+    
+    // Read the file content
+    let content = std::fs::read_to_string(profile_path)
+        .map_err(|e| RemoteError::ConfigSyncError(format!("Failed to read profile: {}", e)))?;
+    
+    // Write it to remote using cat via SSH
+    let filename = profile_path.file_name()
+        .ok_or_else(|| RemoteError::ConfigSyncError("Invalid profile path".to_string()))?
+        .to_string_lossy();
+    
+    let write_cmd = format!(
+        "cat > /home/workspace/scio/devdock/profiles/{} << 'DEVDOCK_EOF'\n{}\nDEVDOCK_EOF",
+        filename, content
+    );
+    
+    let output = Command::new("coder")
+        .arg("ssh")
+        .arg(workspace)
+        .arg("--")
+        .arg("bash")
+        .arg("-c")
+        .arg(&write_cmd)
         .output()
-        .map_err(|e| RemoteError::ConfigSyncError(format!("scp failed: {}", e)))?;
+        .map_err(|e| RemoteError::ConfigSyncError(format!("Failed to copy profile: {}", e)))?;
     
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -61,14 +79,24 @@ pub fn sync_custom_ini(workspace: &str, custom_ini_path: Option<&Path>) -> Resul
                 .arg("/home/workspace/scio/config/")
                 .output();
             
-            let output = Command::new("scp")
-                .arg("-q")
-                .arg("-o").arg("StrictHostKeyChecking=no")
-                .arg("-o").arg("UserKnownHostsFile=/dev/null")
-                .arg(path)
-                .arg(format!("{}.coder:/home/workspace/scio/config/", workspace))
+            // Read and write file via SSH
+            let content = std::fs::read_to_string(path)
+                .map_err(|e| RemoteError::ConfigSyncError(format!("Failed to read custom.ini: {}", e)))?;
+            
+            let write_cmd = format!(
+                "cat > /home/workspace/scio/config/custom.ini << 'DEVDOCK_EOF'\n{}\nDEVDOCK_EOF",
+                content
+            );
+            
+            let output = Command::new("coder")
+                .arg("ssh")
+                .arg(workspace)
+                .arg("--")
+                .arg("bash")
+                .arg("-c")
+                .arg(&write_cmd)
                 .output()
-                .map_err(|e| RemoteError::ConfigSyncError(format!("scp failed: {}", e)))?;
+                .map_err(|e| RemoteError::ConfigSyncError(format!("Failed to copy custom.ini: {}", e)))?;
             
             if !output.status.success() {
                 let stderr = String::from_utf8_lossy(&output.stderr);
@@ -105,16 +133,18 @@ pub fn sync_gcloud_credentials(workspace: &str) -> Result<()> {
         .arg("~/.config/gcloud/")
         .output();
     
-    // Sync gcloud config directory using scp with recursion
-    let output = Command::new("scp")
-        .arg("-r")
-        .arg("-q")
-        .arg("-o").arg("StrictHostKeyChecking=no")
-        .arg("-o").arg("UserKnownHostsFile=/dev/null")
+    // Use rsync over coder ssh for gcloud directory (too large for heredoc)
+    info!("Syncing gcloud credentials (this may take a moment)...");
+    let output = Command::new("rsync")
+        .arg("-az")
+        .arg("--exclude=logs")
+        .arg("--exclude=*.log")
+        .arg("-e")
+        .arg(format!("coder ssh {}", workspace))
         .arg(format!("{}/.config/gcloud/", dirs::home_dir().unwrap().display()))
-        .arg(format!("{}.coder:~/.config/", workspace))
+        .arg("~/.config/")
         .output()
-        .map_err(|e| RemoteError::ConfigSyncError(format!("gcloud scp failed: {}", e)))?;
+        .map_err(|e| RemoteError::ConfigSyncError(format!("gcloud rsync failed: {}", e)))?;
     
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
