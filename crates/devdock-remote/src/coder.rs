@@ -41,7 +41,11 @@ pub fn create_workspace(config: &CoderWorkspaceConfig) -> Result<String> {
         .arg("--template")
         .arg(&config.template)
         .arg("--parameter")
-        .arg(format!("region={}", config.region))
+        .arg(format!("gcp_region={}", config.region))
+        .arg("--parameter")
+        .arg("jetbrains_ide=IU")  // IntelliJ IDEA Ultimate
+        .arg("--parameter")
+        .arg("dotfiles_uri=")  // Empty dotfiles
         .arg("--yes"); // Non-interactive
     
     // Add custom parameters if provided
