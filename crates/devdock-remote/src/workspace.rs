@@ -35,16 +35,15 @@ pub async fn start_remote_devdock(
     info!("Syncing configuration to remote...");
     config_sync::sync_all_config(workspace, profile_path, None)?;
     
-    // 2. Start DevDock on remote
-    // Use ./scio wrapper which handles both Rust and Python implementations
+    // 2. Start DevDock on remote using Rust binary
     let start_cmd = if let Some(svc) = services {
         format!(
-            "cd ~/scio && devdock start -p {} --services {}",
+            "cd ~/scio && devdock start {} -s {}",
             profile, svc
         )
     } else {
         format!(
-            "cd ~/scio && devdock start -p {}",
+            "cd ~/scio && devdock start {}",
             profile
         )
     };
