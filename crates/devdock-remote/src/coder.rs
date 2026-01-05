@@ -46,8 +46,13 @@ pub fn create_workspace(config: &CoderWorkspaceConfig) -> Result<String> {
         .arg("jetbrains_ide=IU")  // IntelliJ IDEA Ultimate
         .arg("--parameter")
         .arg("dotfiles_uri=")  // Empty dotfiles
+        .arg("--parameter")
+        .arg("github_username=")  // Empty default
+        .arg("--parameter")
+        .arg("branch_name=master")  // Always use master for remote (file sync handles actual branch)
+        .arg("--parameter")
+        .arg("force_fresh_data=false")
         .arg("--yes"); // Non-interactive
-    
     
     debug!("Running: {:?}", cmd);
     
@@ -191,4 +196,5 @@ pub fn kill_port_forward(pid: u32) -> Result<()> {
     
     Ok(())
 }
+
 
