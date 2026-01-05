@@ -81,8 +81,8 @@ pub async fn start_remote(
         coder::start_workspace(&existing)?;
         existing
     } else {
-        // Create workspace with progress bar
-        let pb = output::create_progress_bar(90, "Creating workspace");
+        // Create workspace with spinner
+        let spinner = output::create_spinner("Creating Coder workspace (1-2 minutes)...");
         let config = CoderWorkspaceConfig {
             template: "devdock-glean".to_string(),
             workspace_name: workspace_name.clone(),
@@ -92,12 +92,14 @@ pub async fn start_remote(
         };
         
         let ws_name = workspace::provision_workspace(&config).await?;
-        pb.finish_with_message(format!("{} Workspace created", "✓".green()));
+        spinner.finish_and_clear();
+        output::success("Workspace created");
         ws_name
     };
     
-    // Start DevDock on remote with progress indicator
-    let pb = output::create_progress_bar(240, "Starting DevDock");
+    // Start DevDock on remote
+    println!();
+    output::info("Starting DevDock on remote (this may take 3-5 minutes)...");
     let port_mgr = workspace::start_remote_devdock(
         &workspace_name,
         profile,
@@ -108,7 +110,7 @@ pub async fn start_remote(
         offset,
     )
     .await?;
-    pb.finish_with_message(format!("{} DevDock started", "✓".green()));
+    output::success("DevDock started successfully");
     
     // Save port mappings to database if auto-forwarding
     if let Some(mgr) = &port_mgr {
@@ -130,16 +132,19 @@ pub async fn start_remote(
     }
     
     // Auto-start file sync (always enabled)
-    let pb = output::create_spinner("Starting file sync");
+    println!();
+    let spinner = output::create_spinner("Starting file sync...");
     let repo_path = PathBuf::from(&worktree);
     match sync_daemon::start_daemon(&instance_id, &workspace_name, &repo_path, false) {
         Ok(_) => {
             state.save_sync_session(&instance_id, &workspace_name, None, false, "running").await?;
-            pb.finish_with_message(format!("{} File sync started", "✓".green()));
+            spinner.finish_and_clear();
+            output::success("File sync started");
         }
         Err(e) => {
             warn!("Failed to start file sync: {}", e);
-            pb.finish_with_message(format!("{} File sync failed (start manually: devdock sync start)", "⚠".yellow()));
+            spinner.finish_and_clear();
+            output::warn("File sync failed (start manually: devdock sync start)");
         }
     }
     
