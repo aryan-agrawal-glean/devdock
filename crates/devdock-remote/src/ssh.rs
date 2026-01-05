@@ -53,6 +53,44 @@ pub fn ssh_exec_with_log(workspace: &str, command: &str, log_file: Option<&Path>
     Ok(stdout)
 }
 
+/// Execute a command and check if it succeeds (for grep -q style checks).
+pub fn ssh_check(workspace: &str, command: &str, log_file: Option<&Path>) -> Result<bool> {
+    debug!("Checking on {}: {}", workspace, command);
+    
+    let output = Command::new("coder")
+        .arg("ssh")
+        .arg(workspace)
+        .arg("--")
+        .arg("bash")
+        .arg("-c")
+        .arg(command)
+        .output()
+        .map_err(|e| RemoteError::SshError(format!("Failed to execute SSH command: {}", e)))?;
+    
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let exit_code = output.status.code().unwrap_or(-1);
+    let success = output.status.success();
+    
+    // Log to file if provided
+    if let Some(log_path) = log_file {
+        if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(log_path) {
+            let _ = writeln!(file, "\n=== SSH Check on {} ===", workspace);
+            let _ = writeln!(file, "Command: {}", command);
+            let _ = writeln!(file, "Exit code: {}", exit_code);
+            let _ = writeln!(file, "Success: {}", success);
+            if !stdout.is_empty() {
+                let _ = writeln!(file, "STDOUT:\n{}", stdout);
+            }
+            if !stderr.is_empty() {
+                let _ = writeln!(file, "STDERR:\n{}", stderr);
+            }
+        }
+    }
+    
+    Ok(success)
+}
+
 /// Check if SSH connection to workspace is available.
 pub fn check_ssh_connectivity(workspace: &str) -> Result<bool> {
     match ssh_exec(workspace, "echo 'test'") {

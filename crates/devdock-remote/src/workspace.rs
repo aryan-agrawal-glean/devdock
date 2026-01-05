@@ -126,18 +126,21 @@ pub async fn start_remote_devdock(
         attempts += 1;
         let elapsed = start.elapsed().as_secs();
         
-        // Check if tmux session exists
-        match ssh::ssh_exec_with_log(workspace, "tmux list-sessions 2>/dev/null | grep -q devdock && echo 'found'", log_file) {
-            Ok(output) => {
-                if output.trim() == "found" {
-                    println!("  ✓ DevDock tmux session started!");
-                    println!("\n  To view DevDock logs:");
-                    println!("    coder ssh {}", workspace);
-                    println!("    tmux attach -t devdock");
-                    break;
-                }
+        // Check if tmux session exists (using grep -q which sets exit code)
+        match ssh::ssh_check(workspace, "tmux list-sessions 2>/dev/null | grep -q devdock", log_file) {
+            Ok(true) => {
+                println!("  ✓ DevDock tmux session started!");
+                println!("\n  To view DevDock logs:");
+                println!("    coder ssh {}", workspace);
+                println!("    tmux attach -t devdock");
+                break;
             },
-            Err(_) => {}
+            Ok(false) => {
+                // Not found yet, continue waiting
+            },
+            Err(_) => {
+                // Error executing command, continue waiting
+            }
         }
         
         // Print progress every 10 seconds
@@ -147,6 +150,12 @@ pub async fn start_remote_devdock(
         
         if start.elapsed() > timeout {
             eprintln!("  ❌ ERROR: DevDock did not start in time (checked {} times)", attempts);
+            
+            // Try to get tmux session list for debugging
+            if let Ok(sessions) = ssh::ssh_exec_with_log(workspace, "tmux list-sessions 2>&1 || echo 'No tmux sessions'", log_file) {
+                eprintln!("  Tmux sessions: {}", sessions.trim());
+            }
+            
             eprintln!("  Debug steps:");
             eprintln!("    1. SSH into workspace: coder ssh {}", workspace);
             eprintln!("    2. Check tmux sessions: tmux list-sessions");
@@ -217,15 +226,18 @@ pub fn wait_for_tilt_on_remote(workspace: &str, timeout_secs: u64, log_file: Opt
             last_update = elapsed;
         }
         
-        // Check if Tilt UI port is listening on remote
-        match ssh::ssh_exec_with_log(workspace, "curl -s -o /dev/null -w '%{http_code}' http://localhost:10350 2>/dev/null", log_file) {
-            Ok(output) => {
-                if output.trim() == "200" {
-                    println!("  ✓ Tilt UI is ready on remote!");
-                    return Ok(());
-                }
+        // Check if Tilt UI port is listening on remote - curl returns 0 on 200
+        match ssh::ssh_check(workspace, "curl -s -f -o /dev/null http://localhost:10350 2>/dev/null", log_file) {
+            Ok(true) => {
+                println!("  ✓ Tilt UI is ready on remote!");
+                return Ok(());
             },
-            Err(_) => {}
+            Ok(false) => {
+                // Not ready yet, continue waiting
+            },
+            Err(_) => {
+                // Error executing command, continue waiting
+            }
         }
         
         if start.elapsed() > timeout {
