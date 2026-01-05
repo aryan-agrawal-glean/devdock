@@ -36,6 +36,8 @@ libc.workspace = true
 reqwest.workspace = true
 regex.workspace = true
 walkdir.workspace = true
+chrono.workspace = true
+dirs.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

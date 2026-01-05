@@ -2,6 +2,7 @@
 
 mod commands;
 mod output;
+mod logging;
 
 use clap::{Parser, Subcommand};
 use colored::Colorize;
