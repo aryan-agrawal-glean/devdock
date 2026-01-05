@@ -55,24 +55,12 @@ pub async fn start_remote_devdock(
     // 2. Start DevDock in tmux session on remote
     let start_script = if let Some(svc) = services {
         format!(
-            r#"
-            cd /home/workspace/scio
-            export DEVDOCK_ID={}
-            export DEVDOCK_PORT_OFFSET={}
-            
-            tmux new-session -d -s devdock "devdock start {} -s {}"
-            "#,
+            "cd /home/workspace/scio && export DEVDOCK_ID={} && export DEVDOCK_PORT_OFFSET={} && tmux new-session -d -s devdock 'devdock start {} -s {}'",
             devdock_id, offset, profile, svc
         )
     } else {
         format!(
-            r#"
-            cd /home/workspace/scio
-            export DEVDOCK_ID={}
-            export DEVDOCK_PORT_OFFSET={}
-            
-            tmux new-session -d -s devdock "devdock start {}"
-            "#,
+            "cd /home/workspace/scio && export DEVDOCK_ID={} && export DEVDOCK_PORT_OFFSET={} && tmux new-session -d -s devdock 'devdock start {}'",
             devdock_id, offset, profile
         )
     };
