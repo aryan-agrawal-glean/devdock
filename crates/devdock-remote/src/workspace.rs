@@ -49,12 +49,36 @@ pub async fn start_remote_devdock(
     };
     
     info!("Starting DevDock with command: {}", start_cmd);
+    println!("  Starting DevDock on remote workspace...");
     
     // Execute in background (don't wait for completion)
-    let _ = ssh::ssh_exec(workspace, &format!("nohup {} > /dev/null 2>&1 &", start_cmd));
+    match ssh::ssh_exec(workspace, &format!("nohup {} > /tmp/devdock-start.log 2>&1 &", start_cmd)) {
+        Ok(_) => println!("  ✓ DevDock start command executed"),
+        Err(e) => {
+            eprintln!("  ⚠ Warning: DevDock start command may have failed: {}", e);
+            eprintln!("  Continuing anyway - check remote logs if issues persist");
+        }
+    }
     
     // Give DevDock time to start
+    println!("  Waiting for DevDock to initialize (10 seconds)...");
     sleep(Duration::from_secs(10));
+    
+    // Check if DevDock process is running
+    println!("  Verifying DevDock started...");
+    match ssh::ssh_exec(workspace, "pgrep -f 'devdock.sh' || pgrep -f 'tilt'") {
+        Ok(output) => {
+            if !output.trim().is_empty() {
+                println!("  ✓ DevDock process detected (PID: {})", output.trim());
+            } else {
+                eprintln!("  ⚠ Warning: No DevDock process found yet");
+                eprintln!("  Check logs: coder ssh {} -- tail -f /tmp/devdock-start.log", workspace);
+            }
+        },
+        Err(_) => {
+            eprintln!("  ⚠ Warning: Could not verify DevDock process");
+        }
+    }
     
     // 3. Setup port forwarding
     let port_mgr = if auto_forward {
@@ -81,30 +105,48 @@ pub async fn start_remote_devdock(
     Ok(port_mgr)
 }
 
-/// Wait for Tilt UI to become accessible.
+/// Wait for Tilt UI to become accessible with progress updates.
 pub fn wait_for_tilt_ui(port: u16, timeout_secs: u64) -> Result<()> {
     use std::time::Instant;
     
     info!("Waiting for Tilt UI at http://localhost:{}", port);
+    println!("  Waiting for Tilt UI to become ready (this can take 3-5 minutes)...");
+    println!("  Check logs on remote: coder ssh <workspace> and look at tmux or DevDock logs");
     
     let start = Instant::now();
     let timeout = Duration::from_secs(timeout_secs);
+    let mut last_update = 0u64;
     
     loop {
+        let elapsed = start.elapsed().as_secs();
+        
+        // Print progress every 10 seconds
+        if elapsed - last_update >= 10 {
+            println!("  Still waiting... ({}s elapsed, timeout in {}s)", 
+                     elapsed, timeout_secs - elapsed);
+            last_update = elapsed;
+        }
+        
         // Try to connect to Tilt UI
         if let Ok(_) = std::net::TcpStream::connect(format!("127.0.0.1:{}", port)) {
             info!("Tilt UI is ready");
+            println!("  ✓ Tilt UI is ready!");
             return Ok(());
         }
         
         if start.elapsed() > timeout {
+            eprintln!("\n  ❌ Timeout: Tilt UI not ready after {} seconds", timeout_secs);
+            eprintln!("  Debug steps:");
+            eprintln!("    1. SSH into workspace: coder ssh <workspace-name>");
+            eprintln!("    2. Check if DevDock started: ps aux | grep devdock");
+            eprintln!("    3. Check Tilt: ps aux | grep tilt");
+            eprintln!("    4. View logs: journalctl --user -f");
             return Err(RemoteError::CommandFailed(format!(
                 "Tilt UI not ready after {} seconds",
                 timeout_secs
             )));
         }
         
-        debug!("Tilt UI not ready yet, retrying...");
         sleep(Duration::from_secs(5));
     }
 }
