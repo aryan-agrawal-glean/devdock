@@ -141,7 +141,8 @@ impl GooglePlatform {
                 "projects",
                 "describe",
                 project,
-                "--format=value(projectNumber)",
+                "--format",
+                "value(projectNumber)",
             ])
             .output()
             .await

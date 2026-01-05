@@ -128,28 +128,71 @@ pub fn sync_gcloud_credentials(workspace: &str) -> Result<()> {
         .arg("ssh")
         .arg(workspace)
         .arg("--")
-        .arg("mkdir")
-        .arg("-p")
-        .arg("~/.config/gcloud/")
+        .arg("bash")
+        .arg("-c")
+        .arg("mkdir -p ~/.config/gcloud/configurations")
         .output();
     
-    // Use rsync over coder ssh for gcloud directory (too large for heredoc)
-    info!("Syncing gcloud credentials (this may take a moment)...");
-    let output = Command::new("rsync")
-        .arg("-az")
-        .arg("--exclude=logs")
-        .arg("--exclude=*.log")
-        .arg("-e")
-        .arg(format!("coder ssh {}", workspace))
-        .arg(format!("{}/.config/gcloud/", dirs::home_dir().unwrap().display()))
-        .arg("~/.config/")
-        .output()
-        .map_err(|e| RemoteError::ConfigSyncError(format!("gcloud rsync failed: {}", e)))?;
+    // Copy only essential gcloud files (matching Python implementation)
+    let gcloud_files = vec![
+        "application_default_credentials.json",
+        "access_tokens.db",
+        "credentials.db",
+        "active_config",
+        "configurations/config_default",
+        "env.yaml",
+    ];
     
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(RemoteError::ConfigSyncError(stderr.to_string()));
+    // Create tar archive and pipe to remote
+    info!("Creating gcloud credentials archive...");
+    
+    let mut tar_cmd = Command::new("tar");
+    tar_cmd
+        .arg("-czf")
+        .arg("-")
+        .arg("-C")
+        .arg(&gcloud_dir);
+    
+    // Add only files that exist
+    for file in &gcloud_files {
+        if gcloud_dir.join(file).exists() {
+            tar_cmd.arg(file);
+        } else {
+            debug!("Skipping missing gcloud file: {}", file);
+        }
     }
+    
+    let tar_output = tar_cmd
+        .output()
+        .map_err(|e| RemoteError::ConfigSyncError(format!("Failed to create tar: {}", e)))?;
+    
+    if !tar_output.status.success() {
+        return Err(RemoteError::ConfigSyncError(
+            "Failed to create gcloud credentials archive".to_string()
+        ));
+    }
+    
+    // Pipe tar data to remote and extract
+    let extract_cmd = "tar -xzf - -C ~/.config/gcloud/";
+    
+    let mut ssh_cmd = Command::new("coder");
+    ssh_cmd
+        .arg("ssh")
+        .arg(workspace)
+        .arg("--")
+        .arg("bash")
+        .arg("-c")
+        .arg(extract_cmd)
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            use std::io::Write;
+            if let Some(stdin) = child.stdin.as_mut() {
+                stdin.write_all(&tar_output.stdout)?;
+            }
+            child.wait()
+        })
+        .map_err(|e| RemoteError::ConfigSyncError(format!("Failed to extract credentials on remote: {}", e)))?;
     
     debug!("gcloud credentials synced successfully");
     Ok(())
