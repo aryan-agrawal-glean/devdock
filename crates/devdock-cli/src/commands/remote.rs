@@ -6,7 +6,9 @@ use devdock_remote::{coder, workspace, CoderWorkspaceConfig};
 use devdock_state::{instance::{Instance, InstanceStatus}, StateManager};
 use devdock_sync::daemon as sync_daemon;
 use std::path::PathBuf;
+use std::time::Instant;
 use tracing::{info, warn};
+use crate::output;
 
 /// Start remote DevDock workflow.
 pub async fn start_remote(
@@ -52,15 +54,35 @@ pub async fn start_remote(
     
     state.register_instance(&instance).await?;
     
-    println!("{}", "🚀 Starting remote DevDock...".cyan().bold());
+    // Track total time
+    let overall_start = Instant::now();
+    
+    // Display initial info
+    println!();
+    output::header("Starting Remote DevDock");
+    println!("  {}: {}", "Profile".cyan(), profile);
+    println!("  {}: {}", "Branch".cyan(), branch);
+    println!("  {}: {}", "Workspace".cyan(), workspace_name.green());
+    println!("  {}: devdock-glean", "Template".cyan());
+    println!("  {}: {}", "Region".cyan(), region);
+    println!("  {}: {}", "DevDock ID".cyan(), &instance_id[..8]);
+    println!("  {}: {}", "Port Base".cyan(), offset);
+    println!();
+    println!("{}", "⏱️  Expected time: ~8-10 minutes total".yellow());
+    println!("   • Creating workspace: ~1-2 min");
+    println!("   • Initializing (repo, venv): ~2-3 min");
+    println!("   • Starting DevDock + Tilt: ~5 min");
+    println!("   📬 You will receive a notification when ready!");
+    println!();
     
     // Create or start workspace
     let workspace_name = if let Some(existing) = vm {
-        println!("Using existing workspace: {}", existing.green());
+        output::info(&format!("Using existing workspace: {}", existing));
         coder::start_workspace(&existing)?;
         existing
     } else {
-        println!("Creating new workspace: {}", workspace_name.green());
+        // Create workspace with progress bar
+        let pb = output::create_progress_bar(90, "Creating workspace");
         let config = CoderWorkspaceConfig {
             template: "devdock-glean".to_string(),
             workspace_name: workspace_name.clone(),
@@ -69,11 +91,13 @@ pub async fn start_remote(
             profile: profile.to_string(),
         };
         
-        workspace::provision_workspace(&config).await?
+        let ws_name = workspace::provision_workspace(&config).await?;
+        pb.finish_with_message(format!("{} Workspace created", "✓".green()));
+        ws_name
     };
     
-    // Start DevDock on remote with optional port forwarding
-    println!("Starting DevDock on remote workspace...");
+    // Start DevDock on remote with progress indicator
+    let pb = output::create_progress_bar(240, "Starting DevDock");
     let port_mgr = workspace::start_remote_devdock(
         &workspace_name,
         profile,
@@ -84,6 +108,7 @@ pub async fn start_remote(
         offset,
     )
     .await?;
+    pb.finish_with_message(format!("{} DevDock started", "✓".green()));
     
     // Save port mappings to database if auto-forwarding
     if let Some(mgr) = &port_mgr {
@@ -105,32 +130,55 @@ pub async fn start_remote(
     }
     
     // Auto-start file sync (always enabled)
-    println!("Starting file sync...");
+    let pb = output::create_spinner("Starting file sync");
     let repo_path = PathBuf::from(&worktree);
     match sync_daemon::start_daemon(&instance_id, &workspace_name, &repo_path, false) {
         Ok(_) => {
             state.save_sync_session(&instance_id, &workspace_name, None, false, "running").await?;
-            println!("{}", "✅ File sync started".green());
+            pb.finish_with_message(format!("{} File sync started", "✓".green()));
         }
         Err(e) => {
             warn!("Failed to start file sync: {}", e);
-            println!("{}", "⚠️  File sync failed to start (you can start it manually with: devdock sync start)".yellow());
+            pb.finish_with_message(format!("{} File sync failed (start manually: devdock sync start)", "⚠".yellow()));
         }
     }
     
     // Update instance status
     state.update_status(&instance_id, InstanceStatus::Running).await?;
     
+    // Calculate total time
+    let total_seconds = overall_start.elapsed().as_secs();
+    let total_time = output::format_elapsed(total_seconds);
+    
     // Print success message
-    println!("\n{}", "✅ Remote DevDock running!".green().bold());
-    println!("   Tilt UI: {}", format!("http://localhost:{}", offset + 10350).cyan());
+    println!();
+    output::header("🚀 Remote DevDock is Ready!");
+    println!("{}", format!("Total time: {}", total_time).green().bold());
+    println!();
+    println!("Access your remote DevDock:");
+    println!("  {}: {}", "Workspace".cyan(), workspace_name);
+    println!("  {}: coder ssh {}", "SSH".cyan(), workspace_name);
+    println!("  {}: {}", "Tilt UI".cyan(), format!("http://localhost:{}", offset + 10350).cyan());
+    println!();
     
     if auto_forward {
-        println!("   Port forwarding: {}", "enabled".green());
-        println!("   View port mappings: {}", "devdock ports".cyan());
+        println!("  {}: {}", "Port forwarding".cyan(), "enabled".green());
+        println!("  View port mappings: {}", "devdock ports".cyan());
     } else {
-        println!("   Tip: Use {} to auto-forward all service ports", "--auto-forward".yellow());
+        println!("  💡 Tip: Use {} to auto-forward all service ports", "--auto-forward".yellow());
     }
+    
+    println!();
+    println!("Forward additional ports:");
+    println!("  QE: coder port-forward {} --tcp 7960:7960", workspace_name);
+    println!();
+    
+    // Send desktop notification
+    output::notify(
+        "DevDock Remote Ready! 🚀",
+        &format!("Workspace '{}' ready in {}. Tilt UI at localhost:{}", 
+                 workspace_name, total_time, offset + 10350)
+    );
     
     Ok(())
 }
