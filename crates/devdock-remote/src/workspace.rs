@@ -33,7 +33,9 @@ pub async fn start_remote_devdock(
     
     // 1. Sync configuration files
     info!("Syncing configuration to remote...");
+    println!("  Syncing profile: {:?}", profile_path);
     config_sync::sync_all_config(workspace, profile_path, None)?;
+    println!("  ✓ Configuration synced");
     
     // 2. Start DevDock on remote using Rust binary
     let start_cmd = if let Some(svc) = services {
@@ -50,13 +52,23 @@ pub async fn start_remote_devdock(
     
     info!("Starting DevDock with command: {}", start_cmd);
     println!("  Starting DevDock on remote workspace...");
+    println!("  Command: {}", start_cmd);
     
     // Execute in background (don't wait for completion)
-    match ssh::ssh_exec(workspace, &format!("nohup {} > /tmp/devdock-start.log 2>&1 &", start_cmd)) {
-        Ok(_) => println!("  ✓ DevDock start command executed"),
+    let full_cmd = format!("nohup {} > /tmp/devdock-start.log 2>&1 &", start_cmd);
+    println!("  Full command: {}", full_cmd);
+    
+    match ssh::ssh_exec(workspace, &full_cmd) {
+        Ok(output) => {
+            println!("  ✓ DevDock start command executed");
+            if !output.trim().is_empty() {
+                println!("  Output: {}", output.trim());
+            }
+        },
         Err(e) => {
-            eprintln!("  ⚠ Warning: DevDock start command may have failed: {}", e);
-            eprintln!("  Continuing anyway - check remote logs if issues persist");
+            eprintln!("  ❌ ERROR: DevDock start command failed: {}", e);
+            eprintln!("  Check remote logs: coder ssh {} -- cat /tmp/devdock-start.log", workspace);
+            return Err(e);
         }
     }
     

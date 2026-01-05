@@ -122,9 +122,14 @@ pub async fn start_remote(
     
     // Start DevDock on remote
     println!();
+    logger.log_section("Syncing Configuration")?;
+    output::info("Syncing configuration files to remote...");
+    logger.log("Syncing profile, custom.ini, and gcloud credentials...")?;
+    
     logger.log_section("Starting DevDock")?;
     logger.log(&format!("Profile: {}", profile))?;
     logger.log(&format!("Services filter: {:?}", services))?;
+    logger.log(&format!("Command: devdock start {} {}", profile, services.map(|s| format!("-s {}", s)).unwrap_or_default()))?;
     logger.log("This may take 3-5 minutes...")?;
     
     output::info("Starting DevDock on remote (this may take 3-5 minutes)...");
@@ -135,7 +140,7 @@ pub async fn start_remote(
         profile,
         &profile_path,
         &instance_id,
-        services,
+        services.as_deref(),
         auto_forward,
         offset,
     )
