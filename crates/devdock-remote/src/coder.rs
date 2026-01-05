@@ -14,7 +14,7 @@ pub struct CoderWorkspaceConfig {
     pub workspace_name: String,
     /// GCP region (default: us-east4-a)
     pub region: String,
-    /// Custom port base (optional)
+    /// Local port offset (not passed to Coder, used for port forwarding calculation)
     pub port_base: Option<u16>,
     /// DevDock profile name
     pub profile: String,
@@ -48,11 +48,6 @@ pub fn create_workspace(config: &CoderWorkspaceConfig) -> Result<String> {
         .arg("dotfiles_uri=")  // Empty dotfiles
         .arg("--yes"); // Non-interactive
     
-    // Add custom parameters if provided
-    if let Some(port_base) = config.port_base {
-        cmd.arg("--parameter")
-            .arg(format!("port_base={}", port_base));
-    }
     
     debug!("Running: {:?}", cmd);
     
