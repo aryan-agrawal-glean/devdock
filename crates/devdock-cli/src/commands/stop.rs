@@ -47,10 +47,10 @@ pub async fn execute(target: Option<&str>, force: bool) -> Result<()> {
     if instance.mode == "remote" {
         perform_remote_cleanup(&state_manager, &instance_id, force).await?;
     } else {
-        if force {
-            output::info("Force stopping (skipping graceful shutdown)...");
-        }
-        perform_cleanup(&instance.workspace_path, force)?;
+    if force {
+        output::info("Force stopping (skipping graceful shutdown)...");
+    }
+    perform_cleanup(&instance.workspace_path, force)?;
     }
 
     // Update status to stopped

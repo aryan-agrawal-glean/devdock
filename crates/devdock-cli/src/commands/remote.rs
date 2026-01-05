@@ -24,8 +24,11 @@ pub async fn start_remote(
     let worktree = get_current_worktree()?;
     let branch = get_current_branch()?;
     
-    // Determine workspace name
-    let workspace_name = workspace_name.or_else(|| vm.clone()).unwrap_or_else(|| branch.clone());
+    // Determine workspace name and sanitize it (replace slashes and special chars)
+    let workspace_name = workspace_name
+        .or_else(|| vm.clone())
+        .unwrap_or_else(|| branch.clone());
+    let workspace_name = sanitize_workspace_name(&workspace_name);
     
     // Find profile path
     let profile_path = find_profile(profile)?;
@@ -160,6 +163,19 @@ fn get_current_branch() -> Result<String> {
     }
     
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// Sanitize workspace name for use with Coder.
+/// Replaces non-alphanumeric characters with hyphens and truncates to 32 chars.
+fn sanitize_workspace_name(name: &str) -> String {
+    // Replace non-alphanumeric (except hyphens) with hyphens
+    let sanitized: String = name
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == '-' { c } else { '-' })
+        .collect();
+    
+    // Truncate to 32 characters (Coder workspace name limit)
+    sanitized.chars().take(32).collect()
 }
 
 /// Find profile file path.
