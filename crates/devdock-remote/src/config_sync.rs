@@ -119,21 +119,22 @@ pub fn sync_gcloud_credentials(workspace: &str) -> Result<()> {
         .join(".config/gcloud");
     
     if !gcloud_dir.exists() {
-        debug!("No gcloud credentials found locally, skipping sync");
+        debug!("No ~/.config/gcloud found; skipping gcloud sync");
         return Ok(());
     }
     
-    // Create gcloud config directory on remote
-    let _ = Command::new("coder")
-        .arg("ssh")
-        .arg(workspace)
-        .arg("--")
-        .arg("bash")
-        .arg("-c")
-        .arg("mkdir -p ~/.config/gcloud/configurations")
-        .output();
+    // Create temp directory for staging
+    let temp_dir = tempfile::tempdir()
+        .map_err(|e| RemoteError::ConfigSyncError(format!("Failed to create temp directory: {}", e)))?;
+    let temp_path = temp_dir.path();
+    let gcloud_temp = temp_path.join("gcloud");
     
-    // Copy only essential gcloud files (matching Python implementation)
+    std::fs::create_dir_all(&gcloud_temp)
+        .map_err(|e| RemoteError::ConfigSyncError(format!("Failed to create gcloud temp dir: {}", e)))?;
+    std::fs::create_dir_all(gcloud_temp.join("configurations"))
+        .map_err(|e| RemoteError::ConfigSyncError(format!("Failed to create configurations dir: {}", e)))?;
+    
+    // Core files needed for gcloud auth
     let gcloud_files = vec![
         "application_default_credentials.json",
         "access_tokens.db",
@@ -143,129 +144,129 @@ pub fn sync_gcloud_credentials(workspace: &str) -> Result<()> {
         "env.yaml",
     ];
     
-    // Copy files by piping through coder ssh stdin (simple and reliable)
-    info!("Copying gcloud credential files...");
-    
+    // Copy files to temp directory
+    info!("Staging gcloud credential files...");
     for file in &gcloud_files {
-        let local_file = gcloud_dir.join(file);
-        if !local_file.exists() {
-            debug!("Skipping missing gcloud file: {}", file);
-            continue;
-        }
-        
-        // Read file content
-        let content = match std::fs::read(&local_file) {
-            Ok(c) => c,
-            Err(e) => {
-                debug!("Failed to read {}: {}", file, e);
-                continue;
+        let src = gcloud_dir.join(file);
+        if src.exists() {
+            let dest = gcloud_temp.join(file);
+            if let Some(parent) = dest.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| RemoteError::ConfigSyncError(format!("Failed to create parent dir: {}", e)))?;
             }
-        };
-        
-        // Pipe content directly to remote via coder ssh stdin
-        // NOTE: No "--" separator! It breaks stdin piping
-        let remote_path = format!("~/.config/gcloud/{}", file);
-        let mut child = Command::new("coder")
-            .arg("ssh")
-            .arg(workspace)
-            .arg(format!("bash -c 'cat > {}'", remote_path))
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-            .map_err(|e| RemoteError::ConfigSyncError(format!("Failed to start transfer for {}: {}", file, e)))?;
-        
-        // Write content to stdin
-        if let Some(stdin) = child.stdin.as_mut() {
-            use std::io::Write;
-            stdin.write_all(&content)
-                .map_err(|e| RemoteError::ConfigSyncError(format!("Failed to write {}: {}", file, e)))?;
-        }
-        
-        let output = child.wait_with_output()
-            .map_err(|e| RemoteError::ConfigSyncError(format!("Failed to transfer {}: {}", file, e)))?;
-        
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            debug!("Failed to copy gcloud file {}: {}", file, stderr);
-        } else {
-            debug!("Copied gcloud file: {}", file);
+            std::fs::copy(&src, &dest)
+                .map_err(|e| RemoteError::ConfigSyncError(format!("Failed to copy {}: {}", file, e)))?;
+            
+            // Set permissions to 0600
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mut perms = std::fs::metadata(&dest)
+                    .map_err(|e| RemoteError::ConfigSyncError(format!("Failed to get metadata: {}", e)))?
+                    .permissions();
+                perms.set_mode(0o600);
+                std::fs::set_permissions(&dest, perms)
+                    .map_err(|e| RemoteError::ConfigSyncError(format!("Failed to set permissions: {}", e)))?;
+            }
+            
+            debug!("Staged file: {}", file);
         }
     }
     
-    // Set the correct gcloud account and project
-    info!("Configuring gcloud account...");
+    // Create remote directory
+    debug!("Creating remote staging directory...");
+    let output = Command::new("coder")
+        .arg("ssh")
+        .arg(workspace)
+        .arg("--")
+        .arg("mkdir")
+        .arg("-p")
+        .arg("~/.secrets-sync")
+        .output()
+        .map_err(|e| RemoteError::ConfigSyncError(format!("Failed to create remote directory: {}", e)))?;
     
-    // Get account from application_default_credentials.json if it exists
-    let creds_file = gcloud_dir.join("application_default_credentials.json");
-    if creds_file.exists() {
-        if let Ok(content) = std::fs::read_to_string(&creds_file) {
-            // Try to extract account from JSON (simple string search, not full JSON parsing)
-            if let Some(account_start) = content.find("\"account\"") {
-                if let Some(value_start) = content[account_start..].find(":") {
-                    let after_colon = &content[account_start + value_start + 1..];
-                    if let Some(email) = extract_json_string_value(after_colon) {
-                        if !email.is_empty() && email.contains("@") {
-                            // Set the account
-                            let _ = Command::new("coder")
-                                .arg("ssh")
-                                .arg(workspace)
-                                .arg("--")
-                                .arg("gcloud")
-                                .arg("config")
-                                .arg("set")
-                                .arg("account")
-                                .arg(&email)
-                                .output();
-                            debug!("Set gcloud account to: {}", email);
-                        }
-                    }
-                }
-            }
-        }
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(RemoteError::ConfigSyncError(format!("Failed to create remote directory: {}", stderr)));
     }
     
-    // Get project from active_config if it exists
-    let config_file = gcloud_dir.join("configurations/config_default");
-    if config_file.exists() {
-        if let Ok(content) = std::fs::read_to_string(&config_file) {
-            // Parse INI-style config for project
-            for line in content.lines() {
-                if line.starts_with("project = ") {
-                    let project = line.trim_start_matches("project = ").trim();
-                    let _ = Command::new("coder")
-                        .arg("ssh")
-                        .arg(workspace)
-                        .arg("--")
-                        .arg("gcloud")
-                        .arg("config")
-                        .arg("set")
-                        .arg("project")
-                        .arg(project)
-                        .output();
-                    debug!("Set gcloud project to: {}", project);
-                    break;
-                }
-            }
-        }
+    // Copy to workspace using scp
+    info!("Copying gcloud credentials to remote...");
+    let gcloud_temp_str = gcloud_temp.to_string_lossy();
+    let scp_target = format!("{}.coder:~/.secrets-sync/", workspace);
+    
+    let output = Command::new("scp")
+        .arg("-q")
+        .arg("-o")
+        .arg("StrictHostKeyChecking=no")
+        .arg("-o")
+        .arg("UserKnownHostsFile=/dev/null")
+        .arg("-r")
+        .arg(gcloud_temp_str.as_ref())
+        .arg(&scp_target)
+        .output()
+        .map_err(|e| RemoteError::ConfigSyncError(format!("Failed to run scp: {}", e)))?;
+    
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(RemoteError::ConfigSyncError(format!("Failed to copy gcloud credentials: {}", stderr)));
     }
     
-    debug!("gcloud credentials synced successfully");
-    Ok(())
-}
+    // Move to final location on remote
+    debug!("Moving credentials to final locations...");
+    let move_script = r#"
+        # Copy to home directory for gcloud CLI
+        mkdir -p ~/.config/gcloud
+        rsync -a ~/.secrets-sync/gcloud/ ~/.config/gcloud/ 2>/dev/null
 
-/// Extract a JSON string value (simple parser, no dependencies)
-fn extract_json_string_value(s: &str) -> Option<String> {
-    let s = s.trim_start();
-    if !s.starts_with('"') {
-        return None;
+        # Also copy to /tmp/.config for services
+        mkdir -p /tmp/.config/gcloud/configurations
+        rsync -a ~/.secrets-sync/gcloud/ /tmp/.config/gcloud/ 2>/dev/null
+
+        # Clean up staging directory
+        rm -rf ~/.secrets-sync
+
+        # Set proper permissions
+        chmod -R 600 ~/.config/gcloud/* /tmp/.config/gcloud/* 2>/dev/null || true
+        chmod 700 ~/.config/gcloud ~/.config/gcloud/configurations 2>/dev/null || true
+        chmod 700 /tmp/.config/gcloud /tmp/.config/gcloud/configurations 2>/dev/null || true
+    "#;
+    
+    let output = Command::new("coder")
+        .arg("ssh")
+        .arg(workspace)
+        .arg("--")
+        .arg("bash")
+        .arg("-c")
+        .arg(move_script)
+        .output()
+        .map_err(|e| RemoteError::ConfigSyncError(format!("Failed to move credentials: {}", e)))?;
+    
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        debug!("Warning during credential move: {}", stderr);
     }
-    let s = &s[1..]; // Skip opening quote
-    if let Some(end_idx) = s.find('"') {
-        Some(s[..end_idx].to_string())
+    
+    // Verify gcloud auth
+    debug!("Verifying gcloud configuration...");
+    let output = Command::new("coder")
+        .arg("ssh")
+        .arg(workspace)
+        .arg("--")
+        .arg("gcloud")
+        .arg("config")
+        .arg("configurations")
+        .arg("list")
+        .output()
+        .map_err(|e| RemoteError::ConfigSyncError(format!("Failed to verify gcloud: {}", e)))?;
+    
+    if output.status.success() {
+        info!("gcloud credentials synced and verified");
     } else {
-        None
+        debug!("gcloud credentials copied but configuration not verified");
     }
+    
+    Ok(())
 }
 
 /// Sync all configuration files to remote workspace.
