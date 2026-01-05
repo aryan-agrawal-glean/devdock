@@ -28,77 +28,145 @@ pub async fn start_remote_devdock(
     services: Option<&str>,
     auto_forward: bool,
     offset: u16,
+    log_file: Option<&Path>,
 ) -> Result<Option<PortForwardManager>> {
     info!("Starting DevDock on remote workspace: {}", workspace);
+    
+    // Log start
+    if let Some(log_path) = log_file {
+        use std::fs::OpenOptions;
+        use std::io::Write;
+        if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(log_path) {
+            let _ = writeln!(file, "\n=== Starting DevDock on Remote Workspace ===");
+            let _ = writeln!(file, "Workspace: {}", workspace);
+            let _ = writeln!(file, "Profile: {}", profile);
+            let _ = writeln!(file, "DevDock ID: {}", devdock_id);
+            let _ = writeln!(file, "Port Offset: {}", offset);
+            let _ = writeln!(file, "Services: {:?}", services);
+        }
+    }
     
     // 1. Sync configuration files
     info!("Syncing configuration to remote...");
     println!("  Syncing profile: {:?}", profile_path);
-    config_sync::sync_all_config(workspace, profile_path, None)?;
+    config_sync::sync_all_config(workspace, profile_path, None, log_file)?;
     println!("  ✓ Configuration synced");
     
-    // 2. Start DevDock on remote using Rust binary
-    let start_cmd = if let Some(svc) = services {
+    // 2. Start DevDock in tmux session on remote
+    let start_script = if let Some(svc) = services {
         format!(
-            "cd ~/scio && devdock start {} -s {}",
-            profile, svc
+            r#"
+            cd /home/workspace/scio
+            export DEVDOCK_ID={}
+            export DEVDOCK_PORT_OFFSET={}
+            
+            tmux new-session -d -s devdock "devdock start {} -s {}"
+            "#,
+            devdock_id, offset, profile, svc
         )
     } else {
         format!(
-            "cd ~/scio && devdock start {}",
-            profile
+            r#"
+            cd /home/workspace/scio
+            export DEVDOCK_ID={}
+            export DEVDOCK_PORT_OFFSET={}
+            
+            tmux new-session -d -s devdock "devdock start {}"
+            "#,
+            devdock_id, offset, profile
         )
     };
     
-    info!("Starting DevDock with command: {}", start_cmd);
+    info!("Starting DevDock in tmux session");
     println!("  Starting DevDock on remote workspace...");
-    println!("  Command: {}", start_cmd);
+    println!("  Profile: {}", profile);
+    println!("  DevDock ID: {}", &devdock_id[..8.min(devdock_id.len())]);
+    println!("  Port Offset: {}", offset);
     
-    // Execute in background - wrap entire command in bash -c with nohup
-    let full_cmd = format!("bash -c 'nohup {} > /tmp/devdock-start.log 2>&1 &'", start_cmd.replace("'", "'\\''"));
-    println!("  Executing in background...");
-    
-    match ssh::ssh_exec(workspace, &full_cmd) {
+    match ssh::ssh_exec_with_log(workspace, &start_script, log_file) {
         Ok(output) => {
             println!("  ✓ DevDock start command executed");
-            if !output.trim().is_empty() {
+            if !output.trim().is_empty() && !output.trim().contains("tmux") {
                 println!("  Output: {}", output.trim());
             }
         },
         Err(e) => {
-            eprintln!("  ❌ ERROR: DevDock start command failed: {}", e);
-            eprintln!("  Check remote logs: coder ssh {} -- cat /tmp/devdock-start.log", workspace);
-            return Err(e);
-        }
-    }
-    
-    // Wait longer for DevDock to initialize
-    println!("  Waiting for DevDock to initialize (30 seconds)...");
-    sleep(Duration::from_secs(30));
-    
-    // Check if DevDock process is running
-    println!("  Verifying DevDock started...");
-    match ssh::ssh_exec(workspace, "pgrep -f 'devdock start' || pgrep -f 'tilt up'") {
-        Ok(output) => {
-            if !output.trim().is_empty() {
-                println!("  ✓ DevDock process detected (PID: {})", output.trim());
+            let err_msg = format!("{}", e);
+            // Check for duplicate session error
+            if err_msg.contains("duplicate session") {
+                println!("  ⚠ Duplicate tmux session detected, cleaning up...");
+                
+                // Kill existing session
+                let _ = ssh::ssh_exec_with_log(workspace, "tmux kill-session -t devdock 2>/dev/null || true", log_file);
+                sleep(Duration::from_secs(2));
+                
+                // Retry
+                println!("  Retrying DevDock start...");
+                match ssh::ssh_exec_with_log(workspace, &start_script, log_file) {
+                    Ok(_) => println!("  ✓ Retry succeeded"),
+                    Err(e2) => {
+                        eprintln!("  ❌ ERROR: Retry failed: {}", e2);
+                        return Err(e2);
+                    }
+                }
             } else {
-                eprintln!("  ⚠ Warning: No DevDock process found yet");
-                eprintln!("  Check logs: coder ssh {} -- tail -f /tmp/devdock-start.log", workspace);
-                eprintln!("  Or check manually: coder ssh {} -- 'ps aux | grep devdock'", workspace);
+                eprintln!("  ❌ ERROR: DevDock start command failed: {}", e);
+                return Err(e);
             }
-        },
-        Err(_) => {
-            eprintln!("  ⚠ Warning: Could not verify DevDock process");
         }
     }
     
-    // 3. Wait for Tilt UI to be ready ON THE REMOTE first
-    println!("  Waiting for Tilt UI to start on remote (checking port 10350)...");
-    wait_for_tilt_on_remote(workspace, 300)?;
+    // 3. Wait for DevDock tmux session to be running
+    println!("  Waiting for DevDock tmux session to start...");
+    let timeout = Duration::from_secs(120);
+    let start = std::time::Instant::now();
+    let mut attempts = 0;
     
-    // 4. Setup port forwarding AFTER Tilt is ready
-    println!("  Setting up port forwarding...");
+    loop {
+        attempts += 1;
+        let elapsed = start.elapsed().as_secs();
+        
+        // Check if tmux session exists
+        match ssh::ssh_exec_with_log(workspace, "tmux list-sessions 2>/dev/null | grep -q devdock && echo 'found'", log_file) {
+            Ok(output) => {
+                if output.trim() == "found" {
+                    println!("  ✓ DevDock tmux session started!");
+                    println!("\n  To view DevDock logs:");
+                    println!("    coder ssh {}", workspace);
+                    println!("    tmux attach -t devdock");
+                    break;
+                }
+            },
+            Err(_) => {}
+        }
+        
+        // Print progress every 10 seconds
+        if elapsed > 0 && elapsed % 10 == 0 {
+            println!("  Still waiting... ({}s elapsed, {} attempts)", elapsed, attempts);
+        }
+        
+        if start.elapsed() > timeout {
+            eprintln!("  ❌ ERROR: DevDock did not start in time (checked {} times)", attempts);
+            eprintln!("  Debug steps:");
+            eprintln!("    1. SSH into workspace: coder ssh {}", workspace);
+            eprintln!("    2. Check tmux sessions: tmux list-sessions");
+            eprintln!("    3. Try starting manually: cd /home/workspace/scio && ./scio devdock -p {}", profile);
+            return Err(RemoteError::CommandFailed(format!(
+                "DevDock did not start in time after {} attempts",
+                attempts
+            )));
+        }
+        
+        sleep(Duration::from_secs(5));
+    }
+    
+    // 4. Wait for Tilt UI to be ready on remote
+    println!("\n  Waiting for Tilt UI to start on remote (checking port 10350)...");
+    println!("  (This may take 3-5 minutes as services start up)");
+    wait_for_tilt_on_remote(workspace, 300, log_file)?;
+    
+    // 5. Setup port forwarding AFTER Tilt is ready
+    println!("\n  Setting up port forwarding...");
     let port_mgr = if auto_forward {
         info!("Setting up auto port forwarding...");
         let mut mgr = PortForwardManager::from_profile(
@@ -122,22 +190,16 @@ pub async fn start_remote_devdock(
         None
     };
     
-    // 5. Verify local port forward is working
-    println!("  Verifying local port forward...");
-    sleep(Duration::from_secs(3));
-    match std::net::TcpStream::connect(format!("127.0.0.1:{}", offset + 10350)) {
-        Ok(_) => println!("  ✓ Tilt UI accessible at http://localhost:{}", offset + 10350),
-        Err(e) => {
-            eprintln!("  ⚠ Warning: Cannot connect to local port: {}", e);
-            eprintln!("  Port forward may take a moment to establish");
-        }
-    }
+    // 6. Final success message
+    println!("\n  ✅ DevDock is running!");
+    println!("  Tilt UI: http://localhost:{}", offset + 10350);
+    println!("  Logs: coder ssh {} && tmux attach -t devdock", workspace);
     
     Ok(port_mgr)
 }
 
 /// Wait for Tilt UI to start on the remote workspace.
-pub fn wait_for_tilt_on_remote(workspace: &str, timeout_secs: u64) -> Result<()> {
+pub fn wait_for_tilt_on_remote(workspace: &str, timeout_secs: u64, log_file: Option<&Path>) -> Result<()> {
     use std::time::Instant;
     
     info!("Waiting for Tilt UI on remote workspace");
@@ -156,7 +218,7 @@ pub fn wait_for_tilt_on_remote(workspace: &str, timeout_secs: u64) -> Result<()>
         }
         
         // Check if Tilt UI port is listening on remote
-        match ssh::ssh_exec(workspace, "curl -s -o /dev/null -w '%{http_code}' http://localhost:10350 2>/dev/null") {
+        match ssh::ssh_exec_with_log(workspace, "curl -s -o /dev/null -w '%{http_code}' http://localhost:10350 2>/dev/null", log_file) {
             Ok(output) => {
                 if output.trim() == "200" {
                     println!("  ✓ Tilt UI is ready on remote!");

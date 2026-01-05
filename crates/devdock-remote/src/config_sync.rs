@@ -313,7 +313,20 @@ pub fn sync_all_config(
     workspace: &str,
     profile_path: &Path,
     custom_ini_path: Option<&Path>,
+    log_file: Option<&Path>,
 ) -> Result<()> {
+    use std::fs::OpenOptions;
+    use std::io::Write;
+    
+    // Log start of config sync
+    if let Some(log_path) = log_file {
+        if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(log_path) {
+            let _ = writeln!(file, "\n=== Configuration Sync ===");
+            let _ = writeln!(file, "Workspace: {}", workspace);
+            let _ = writeln!(file, "Profile: {}", profile_path.display());
+        }
+    }
+    
     sync_profile(workspace, profile_path)?;
     sync_custom_ini(workspace, custom_ini_path)?;
     sync_gcloud_credentials(workspace)?;
@@ -321,14 +334,41 @@ pub fn sync_all_config(
     // Set gcloud project from profile
     match get_profile_project(profile_path) {
         Ok(project) => {
+            if let Some(log_path) = log_file {
+                if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(log_path) {
+                    let _ = writeln!(file, "Setting gcloud project: {}", project);
+                }
+            }
             if let Err(e) = set_gcloud_project(workspace, &project) {
                 debug!("Failed to set gcloud project: {}", e);
+                if let Some(log_path) = log_file {
+                    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(log_path) {
+                        let _ = writeln!(file, "WARNING: Failed to set gcloud project: {}", e);
+                    }
+                }
                 // Continue even if setting project fails
+            } else {
+                if let Some(log_path) = log_file {
+                    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(log_path) {
+                        let _ = writeln!(file, "✓ gcloud project set successfully");
+                    }
+                }
             }
         }
         Err(e) => {
             debug!("Failed to get project from profile: {}", e);
+            if let Some(log_path) = log_file {
+                if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(log_path) {
+                    let _ = writeln!(file, "WARNING: Failed to get project from profile: {}", e);
+                }
+            }
             // Continue even if we can't get the project
+        }
+    }
+    
+    if let Some(log_path) = log_file {
+        if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(log_path) {
+            let _ = writeln!(file, "✓ Configuration sync completed");
         }
     }
     

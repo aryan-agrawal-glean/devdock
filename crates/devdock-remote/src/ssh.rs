@@ -1,11 +1,19 @@
 //! SSH utilities for remote workspace communication.
 
 use crate::{RemoteError, Result};
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::path::Path;
 use std::process::Command;
 use tracing::{debug, info};
 
 /// Execute a command on a remote workspace via SSH.
 pub fn ssh_exec(workspace: &str, command: &str) -> Result<String> {
+    ssh_exec_with_log(workspace, command, None)
+}
+
+/// Execute a command on a remote workspace via SSH with optional logging.
+pub fn ssh_exec_with_log(workspace: &str, command: &str, log_file: Option<&Path>) -> Result<String> {
     info!("Executing on {}: {}", workspace, command);
     
     let output = Command::new("coder")
@@ -18,12 +26,29 @@ pub fn ssh_exec(workspace: &str, command: &str) -> Result<String> {
         .output()
         .map_err(|e| RemoteError::SshError(format!("Failed to execute SSH command: {}", e)))?;
     
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(RemoteError::SshError(format!("Command failed: {}", stderr)));
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let exit_code = output.status.code().unwrap_or(-1);
+    
+    // Log to file if provided
+    if let Some(log_path) = log_file {
+        if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(log_path) {
+            let _ = writeln!(file, "\n=== SSH Command on {} ===", workspace);
+            let _ = writeln!(file, "Command: {}", command);
+            let _ = writeln!(file, "Exit code: {}", exit_code);
+            if !stdout.is_empty() {
+                let _ = writeln!(file, "STDOUT:\n{}", stdout);
+            }
+            if !stderr.is_empty() {
+                let _ = writeln!(file, "STDERR:\n{}", stderr);
+            }
+        }
     }
     
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    if !output.status.success() {
+        return Err(RemoteError::SshError(format!("Command failed (exit {}): {}", exit_code, stderr)));
+    }
+    
     debug!("SSH output: {}", stdout);
     Ok(stdout)
 }

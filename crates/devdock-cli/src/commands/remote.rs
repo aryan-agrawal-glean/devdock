@@ -143,6 +143,7 @@ pub async fn start_remote(
         services.as_deref(),
         auto_forward,
         offset,
+        Some(logger.path()),
     )
     .await?;
     
