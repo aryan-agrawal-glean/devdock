@@ -3,6 +3,7 @@
 use crate::output;
 use anyhow::{Context, Result};
 use devdock_state::{InstanceStatus, StateManager};
+use devdock_sync::daemon as sync_daemon;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
@@ -42,12 +43,15 @@ pub async fn execute(target: Option<&str>, force: bool) -> Result<()> {
         .update_status(&instance_id, InstanceStatus::Stopping)
         .await?;
 
-    // Perform cleanup
-    if force {
-        output::info("Force stopping (skipping graceful shutdown)...");
+    // Perform cleanup based on instance mode
+    if instance.mode == "remote" {
+        perform_remote_cleanup(&state_manager, &instance_id, force).await?;
+    } else {
+        if force {
+            output::info("Force stopping (skipping graceful shutdown)...");
+        }
+        perform_cleanup(&instance.workspace_path, force)?;
     }
-
-    perform_cleanup(&instance.workspace_path, force)?;
 
     // Update status to stopped
     state_manager
@@ -332,6 +336,66 @@ fn cleanup_temp_files(workspace_path: &str) -> Result<()> {
     }
 
     output::success(&format!("Cleaned {} file(s)/directory(s)", cleaned_count));
+    Ok(())
+}
+
+/// Perform cleanup for remote DevDock instances
+async fn perform_remote_cleanup(state_manager: &StateManager, instance_id: &str, _force: bool) -> Result<()> {
+    output::info("Cleaning up remote DevDock resources...");
+    
+    // 1. Stop file sync
+    output::info("Stopping file sync...");
+    if let Err(e) = sync_daemon::stop_daemon(instance_id) {
+        output::warn(&format!("Failed to stop sync daemon: {}", e));
+    } else {
+        output::success("File sync stopped");
+    }
+    
+    // Clean up sync session from database
+    if let Err(e) = state_manager.delete_sync_session(instance_id).await {
+        output::warn(&format!("Failed to clean sync session: {}", e));
+    }
+    
+    // 2. Stop port forwards
+    output::info("Stopping port forwards...");
+    let mappings = state_manager.get_port_mappings(instance_id).await?;
+    
+    let mut stopped_count = 0;
+    for (_service_name, _port_type, _local_port, _remote_port, pid) in mappings {
+        if let Some(pid) = pid {
+            #[cfg(unix)]
+            {
+                unsafe {
+                    if libc::kill(pid as i32, libc::SIGTERM) == 0 {
+                        stopped_count += 1;
+                    }
+                }
+            }
+            
+            #[cfg(windows)]
+            {
+                let _ = Command::new("taskkill")
+                    .args(["/PID", &pid.to_string(), "/F"])
+                    .output();
+                stopped_count += 1;
+            }
+        }
+    }
+    
+    if stopped_count > 0 {
+        output::success(&format!("Stopped {} port forward(s)", stopped_count));
+    }
+    
+    // Clean up port mappings from database
+    if let Err(e) = state_manager.delete_port_mappings(instance_id).await {
+        output::warn(&format!("Failed to clean port mappings: {}", e));
+    }
+    
+    // 3. Stop Coder workspace (optional - user may want to keep it running)
+    output::info("Note: Remote workspace is still running. Stop it manually if needed:");
+    output::info("  coder stop <workspace-name>");
+    
+    output::success("Remote cleanup complete");
     Ok(())
 }
 

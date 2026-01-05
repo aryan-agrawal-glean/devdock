@@ -4,6 +4,7 @@ use crate::output;
 use anyhow::Result;
 use colored::Colorize;
 use devdock_state::{Instance, InstanceStatus, StateManager};
+use prettytable::{format, row, Table};
 use std::process::Command;
 
 pub async fn execute(detailed: bool) -> Result<()> {
@@ -17,7 +18,7 @@ pub async fn execute(detailed: bool) -> Result<()> {
 
     match instance {
         Some(instance) => {
-            print_instance_status(&instance, detailed)?;
+            print_instance_status(&state_manager, &instance, detailed).await?;
         }
         None => {
             // Check if there are any running instances
@@ -52,7 +53,7 @@ pub async fn execute(detailed: bool) -> Result<()> {
     Ok(())
 }
 
-fn print_instance_status(instance: &Instance, detailed: bool) -> Result<()> {
+async fn print_instance_status(state_manager: &StateManager, instance: &Instance, detailed: bool) -> Result<()> {
     let status_str = match instance.status {
         InstanceStatus::Running => "● Running".green(),
         InstanceStatus::Starting => "◐ Starting".yellow(),
@@ -100,12 +101,48 @@ fn print_instance_status(instance: &Instance, detailed: bool) -> Result<()> {
     println!("{}", "─".repeat(50));
     println!(
         "  Tilt UI:    {}",
-        "http://localhost:10350".cyan()
+        format!("http://localhost:{}", instance.port_base + 10350).cyan()
     );
     println!(
         "  Services:   {}",
         format!("https://local.glean.com:{}", instance.port_base).cyan()
     );
+
+    // Show port mappings for remote instances
+    if instance.mode == "remote" {
+        let mappings = state_manager.get_port_mappings(&instance.id).await?;
+        
+        if !mappings.is_empty() {
+            println!("\n{}", "Port Mappings".bold());
+            println!("{}", "─".repeat(50));
+            
+            let mut table = Table::new();
+            table.set_format(*format::consts::FORMAT_CLEAN);
+            
+            // Add header row
+            table.add_row(row!["Service", "Type", "Local", "Remote", "Status"]);
+            
+            for (service_name, port_type, local_port, remote_port, pid) in &mappings {
+                let status = if pid.is_some() {
+                    "Active".green().to_string()
+                } else {
+                    "Inactive".red().to_string()
+                };
+                
+                table.add_row(row![
+                    service_name,
+                    port_type,
+                    local_port.to_string(),
+                    remote_port.to_string(),
+                    status
+                ]);
+            }
+            
+            table.printstd();
+            
+            println!("\n  Run {} to see all port mappings", "devdock ports".cyan());
+        }
+    }
 
     Ok(())
 }

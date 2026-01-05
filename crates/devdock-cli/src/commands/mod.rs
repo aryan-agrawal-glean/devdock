@@ -7,12 +7,15 @@ pub mod generate;
 pub mod infra;
 pub mod list;
 pub mod logs;
+pub mod ports;
 pub mod profile;
 pub mod plugin;
+pub mod remote;
 pub mod service;
 pub mod setup;
 pub mod start;
 pub mod status;
 pub mod stop;
+pub mod sync;
 pub mod validate;
 

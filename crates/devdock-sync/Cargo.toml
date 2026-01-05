@@ -1,0 +1,26 @@
+[package]
+name = "devdock-sync"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+dirs = { workspace = true }
+
+# File watching
+notify = "6.1"
+ignore = "0.4"
+
+# Git operations
+git2 = "0.18"
+
+# Internal dependencies
+devdock-core = { path = "../devdock-core" }
+

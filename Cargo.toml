@@ -5,6 +5,8 @@ members = [
     "crates/devdock-config",
     "crates/devdock-state",
     "crates/devdock-codegen",
+    "crates/devdock-remote",
+    "crates/devdock-sync",
 ]
 resolver = "2"
 
@@ -29,6 +31,7 @@ clap = { version = "4.4", features = ["derive", "cargo", "env"] }
 colored = "2.1"
 indicatif = "0.17"
 dialoguer = "0.11"
+prettytable-rs = "0.10"
 
 # File system & process
 walkdir = "2.4"
@@ -36,6 +39,8 @@ tempfile = "3.8"
 which = "5.0"
 libc = "0.2"
 async-trait = "0.1"
+uuid = { version = "1.6", features = ["v4"] }
+dirs = "5.0"
 futures = "0.3"
 regex = "1.10"
 rust-ini = "0.21"

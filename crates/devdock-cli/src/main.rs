@@ -33,6 +33,30 @@ enum Commands {
         /// CI mode (non-interactive)
         #[arg(long)]
         ci_mode: bool,
+
+        /// Start mode: local or remote
+        #[arg(short = 'm', long, default_value = "local")]
+        mode: String,
+
+        /// Use existing Coder workspace
+        #[arg(long)]
+        vm: Option<String>,
+
+        /// Custom workspace name (default: branch name)
+        #[arg(long)]
+        workspace_name: Option<String>,
+
+        /// GCP region for Coder workspace
+        #[arg(long, default_value = "us-east4-a")]
+        region: String,
+
+        /// Custom port base (remote only)
+        #[arg(long)]
+        port_base: Option<u16>,
+
+        /// Auto-forward all service ports (opt-in for remote)
+        #[arg(long)]
+        auto_forward: bool,
     },
 
     /// Stop DevDock instance
@@ -139,6 +163,19 @@ enum Commands {
         #[command(subcommand)]
         command: LogsCommands,
     },
+
+    /// Show port mappings for remote DevDock
+    Ports {
+        /// Show ports for specific instance ID
+        #[arg(long)]
+        instance: Option<String>,
+    },
+
+    /// File sync management (for remote DevDock)
+    Sync {
+        #[command(subcommand)]
+        command: SyncCommands,
+    },
 }
 
 #[derive(Subcommand)]
@@ -210,6 +247,22 @@ enum LogsCommands {
     Disable,
 
     /// Show rich logging status
+    Status,
+}
+
+#[derive(Subcommand)]
+enum SyncCommands {
+    /// Start file sync (auto-started with remote mode)
+    Start {
+        /// Sync all files instead of git-tracked only
+        #[arg(long)]
+        full: bool,
+    },
+
+    /// Stop file sync
+    Stop,
+
+    /// Show sync status
     Status,
 }
 
@@ -333,7 +386,27 @@ async fn main() {
             profile,
             services,
             ci_mode,
-        } => commands::start::execute(&profile, services.as_deref(), ci_mode).await,
+            mode,
+            vm,
+            workspace_name,
+            region,
+            port_base,
+            auto_forward,
+        } => {
+            if mode == "remote" {
+                commands::remote::start_remote(
+                    &profile,
+                    workspace_name,
+                    &region,
+                    port_base,
+                    vm,
+                    auto_forward,
+                    services.as_deref(),
+                ).await
+            } else {
+                commands::start::execute(&profile, services.as_deref(), ci_mode).await
+            }
+        },
 
         Commands::Stop { target, force } => commands::stop::execute(target.as_deref(), force).await,
 
@@ -367,6 +440,14 @@ async fn main() {
             LogsCommands::Enable => commands::logs::enable().await,
             LogsCommands::Disable => commands::logs::disable().await,
             LogsCommands::Status => commands::logs::status().await,
+        },
+
+        Commands::Ports { instance } => commands::ports::execute(instance).await,
+
+        Commands::Sync { command } => match command {
+            SyncCommands::Start { full } => commands::sync::start(full).await,
+            SyncCommands::Stop => commands::sync::stop().await,
+            SyncCommands::Status => commands::sync::status().await,
         },
 
         Commands::Service { command } => match command {

@@ -15,6 +15,8 @@ devdock-core = { path = "../devdock-core" }
 devdock-config = { path = "../devdock-config" }
 devdock-state = { path = "../devdock-state" }
 devdock-codegen = { path = "../devdock-codegen" }
+devdock-remote = { path = "../devdock-remote" }
+devdock-sync = { path = "../devdock-sync" }
 
 anyhow.workspace = true
 clap.workspace = true
@@ -24,6 +26,8 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 indicatif.workspace = true
 dialoguer.workspace = true
+prettytable-rs.workspace = true
+uuid.workspace = true
 serde.workspace = true
 serde_yaml.workspace = true
 serde_json.workspace = true

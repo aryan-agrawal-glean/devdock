@@ -69,6 +69,40 @@ impl StateManager {
         .execute(&self.pool)
         .await?;
 
+        // Port mappings table for remote DevDock
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS port_mappings (
+                devdock_id TEXT NOT NULL,
+                service_name TEXT NOT NULL,
+                port_type TEXT NOT NULL,
+                local_port INTEGER NOT NULL,
+                remote_port INTEGER NOT NULL,
+                process_pid INTEGER,
+                PRIMARY KEY (devdock_id, service_name, port_type)
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        // Sync sessions table for file sync
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS sync_sessions (
+                devdock_id TEXT PRIMARY KEY,
+                workspace_name TEXT NOT NULL,
+                pid INTEGER,
+                full_mode BOOLEAN DEFAULT 0,
+                last_sync_time INTEGER,
+                files_synced INTEGER DEFAULT 0,
+                status TEXT NOT NULL CHECK(status IN ('running', 'stopped', 'error'))
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
         Ok(())
     }
 
@@ -187,6 +221,128 @@ impl StateManager {
     pub async fn delete_instance(&self, id: &str) -> Result<()> {
         sqlx::query("DELETE FROM instances WHERE id = ?")
             .bind(id)
+            .execute(&self.pool)
+            .await?;
+
+        Ok(())
+    }
+
+    /// Save port mappings for a DevDock instance.
+    pub async fn save_port_mappings(
+        &self,
+        devdock_id: &str,
+        mappings: &[(String, String, u16, u16, Option<u32>)], // (service_name, port_type, local_port, remote_port, pid)
+    ) -> Result<()> {
+        // Delete existing mappings
+        sqlx::query("DELETE FROM port_mappings WHERE devdock_id = ?")
+            .bind(devdock_id)
+            .execute(&self.pool)
+            .await?;
+
+        // Insert new mappings
+        for (service_name, port_type, local_port, remote_port, pid) in mappings {
+            sqlx::query(
+                r#"
+                INSERT INTO port_mappings (devdock_id, service_name, port_type, local_port, remote_port, process_pid)
+                VALUES (?, ?, ?, ?, ?, ?)
+                "#,
+            )
+            .bind(devdock_id)
+            .bind(service_name)
+            .bind(port_type)
+            .bind(*local_port as i64)
+            .bind(*remote_port as i64)
+            .bind(pid.map(|p| p as i64))
+            .execute(&self.pool)
+            .await?;
+        }
+
+        Ok(())
+    }
+
+    /// Get port mappings for a DevDock instance.
+    pub async fn get_port_mappings(
+        &self,
+        devdock_id: &str,
+    ) -> Result<Vec<(String, String, u16, u16, Option<u32>)>> {
+        let rows = sqlx::query(
+            "SELECT service_name, port_type, local_port, remote_port, process_pid FROM port_mappings WHERE devdock_id = ?"
+        )
+        .bind(devdock_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows.into_iter().map(|r| (
+            r.get("service_name"),
+            r.get("port_type"),
+            r.get::<i64, _>("local_port") as u16,
+            r.get::<i64, _>("remote_port") as u16,
+            r.get::<Option<i64>, _>("process_pid").map(|p| p as u32),
+        )).collect())
+    }
+
+    /// Delete port mappings for a DevDock instance.
+    pub async fn delete_port_mappings(&self, devdock_id: &str) -> Result<()> {
+        sqlx::query("DELETE FROM port_mappings WHERE devdock_id = ?")
+            .bind(devdock_id)
+            .execute(&self.pool)
+            .await?;
+
+        Ok(())
+    }
+
+    /// Save sync session state.
+    pub async fn save_sync_session(
+        &self,
+        devdock_id: &str,
+        workspace_name: &str,
+        pid: Option<u32>,
+        full_mode: bool,
+        status: &str,
+    ) -> Result<()> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs() as i64;
+
+        sqlx::query(
+            r#"
+            INSERT OR REPLACE INTO sync_sessions (devdock_id, workspace_name, pid, full_mode, last_sync_time, status)
+            VALUES (?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(devdock_id)
+        .bind(workspace_name)
+        .bind(pid.map(|p| p as i64))
+        .bind(full_mode as i64)
+        .bind(now)
+        .bind(status)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    /// Get sync session state.
+    pub async fn get_sync_session(&self, devdock_id: &str) -> Result<Option<(String, Option<u32>, bool, String)>> {
+        let row = sqlx::query(
+            "SELECT workspace_name, pid, full_mode, status FROM sync_sessions WHERE devdock_id = ?"
+        )
+        .bind(devdock_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.map(|r| (
+            r.get("workspace_name"),
+            r.get::<Option<i64>, _>("pid").map(|p| p as u32),
+            r.get::<i64, _>("full_mode") != 0,
+            r.get("status"),
+        )))
+    }
+
+    /// Delete sync session.
+    pub async fn delete_sync_session(&self, devdock_id: &str) -> Result<()> {
+        sqlx::query("DELETE FROM sync_sessions WHERE devdock_id = ?")
+            .bind(devdock_id)
             .execute(&self.pool)
             .await?;
 

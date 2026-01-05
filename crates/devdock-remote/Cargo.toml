@@ -1,0 +1,24 @@
+[package]
+name = "devdock-remote"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = "0.9"
+tokio = { workspace = true }
+tracing = { workspace = true }
+which = { workspace = true }
+async-trait = { workspace = true }
+regex = { workspace = true }
+dirs = { workspace = true }
+
+# Internal dependencies
+devdock-core = { path = "../devdock-core" }
+devdock-state = { path = "../devdock-state" }
+
