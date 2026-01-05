@@ -1,6 +1,7 @@
 //! Configuration file synchronization to remote workspaces.
 
 use crate::{RemoteError, Result};
+use devdock_core::profile::Profile;
 use std::path::Path;
 use std::process::Command;
 use tracing::{debug, info};
@@ -269,6 +270,44 @@ pub fn sync_gcloud_credentials(workspace: &str) -> Result<()> {
     Ok(())
 }
 
+/// Get GCP project from profile YAML.
+pub fn get_profile_project(profile_path: &Path) -> Result<String> {
+    let content = std::fs::read_to_string(profile_path)
+        .map_err(|e| RemoteError::ConfigSyncError(format!("Failed to read profile: {}", e)))?;
+    
+    let profile: Profile = serde_yaml::from_str(&content)
+        .map_err(|e| RemoteError::ConfigSyncError(format!("Failed to parse profile: {}", e)))?;
+    
+    Ok(profile.project)
+}
+
+/// Set gcloud project on remote workspace.
+pub fn set_gcloud_project(workspace: &str, project: &str) -> Result<()> {
+    info!("Setting gcloud project to: {}", project);
+    
+    let output = Command::new("coder")
+        .arg("ssh")
+        .arg(workspace)
+        .arg("--")
+        .arg("gcloud")
+        .arg("config")
+        .arg("set")
+        .arg("project")
+        .arg(project)
+        .output()
+        .map_err(|e| RemoteError::ConfigSyncError(format!("Failed to set gcloud project: {}", e)))?;
+    
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        debug!("Warning: Failed to set gcloud project: {}", stderr);
+        // Don't fail if gcloud config set fails - it may not be critical
+    } else {
+        debug!("gcloud project set successfully");
+    }
+    
+    Ok(())
+}
+
 /// Sync all configuration files to remote workspace.
 pub fn sync_all_config(
     workspace: &str,
@@ -278,6 +317,21 @@ pub fn sync_all_config(
     sync_profile(workspace, profile_path)?;
     sync_custom_ini(workspace, custom_ini_path)?;
     sync_gcloud_credentials(workspace)?;
+    
+    // Set gcloud project from profile
+    match get_profile_project(profile_path) {
+        Ok(project) => {
+            if let Err(e) = set_gcloud_project(workspace, &project) {
+                debug!("Failed to set gcloud project: {}", e);
+                // Continue even if setting project fails
+            }
+        }
+        Err(e) => {
+            debug!("Failed to get project from profile: {}", e);
+            // Continue even if we can't get the project
+        }
+    }
+    
     Ok(())
 }
 

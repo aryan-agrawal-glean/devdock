@@ -4,7 +4,7 @@ use crate::{coder, config_sync, port_forward::PortForwardManager, ssh, RemoteErr
 use std::path::Path;
 use std::thread::sleep;
 use std::time::Duration;
-use tracing::{debug, info};
+use tracing::info;
 
 /// Provision a new Coder workspace.
 pub async fn provision_workspace(config: &coder::CoderWorkspaceConfig) -> Result<String> {
