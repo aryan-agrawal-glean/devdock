@@ -143,59 +143,129 @@ pub fn sync_gcloud_credentials(workspace: &str) -> Result<()> {
         "env.yaml",
     ];
     
-    // Create tar archive and pipe to remote
-    info!("Creating gcloud credentials archive...");
+    // Copy files by piping through coder ssh stdin (simple and reliable)
+    info!("Copying gcloud credential files...");
     
-    let mut tar_cmd = Command::new("tar");
-    tar_cmd
-        .arg("-czf")
-        .arg("-")
-        .arg("-C")
-        .arg(&gcloud_dir);
-    
-    // Add only files that exist
     for file in &gcloud_files {
-        if gcloud_dir.join(file).exists() {
-            tar_cmd.arg(file);
-        } else {
+        let local_file = gcloud_dir.join(file);
+        if !local_file.exists() {
             debug!("Skipping missing gcloud file: {}", file);
+            continue;
+        }
+        
+        // Read file content
+        let content = match std::fs::read(&local_file) {
+            Ok(c) => c,
+            Err(e) => {
+                debug!("Failed to read {}: {}", file, e);
+                continue;
+            }
+        };
+        
+        // Pipe content directly to remote via coder ssh stdin
+        // NOTE: No "--" separator! It breaks stdin piping
+        let remote_path = format!("~/.config/gcloud/{}", file);
+        let mut child = Command::new("coder")
+            .arg("ssh")
+            .arg(workspace)
+            .arg(format!("bash -c 'cat > {}'", remote_path))
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| RemoteError::ConfigSyncError(format!("Failed to start transfer for {}: {}", file, e)))?;
+        
+        // Write content to stdin
+        if let Some(stdin) = child.stdin.as_mut() {
+            use std::io::Write;
+            stdin.write_all(&content)
+                .map_err(|e| RemoteError::ConfigSyncError(format!("Failed to write {}: {}", file, e)))?;
+        }
+        
+        let output = child.wait_with_output()
+            .map_err(|e| RemoteError::ConfigSyncError(format!("Failed to transfer {}: {}", file, e)))?;
+        
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            debug!("Failed to copy gcloud file {}: {}", file, stderr);
+        } else {
+            debug!("Copied gcloud file: {}", file);
         }
     }
     
-    let tar_output = tar_cmd
-        .output()
-        .map_err(|e| RemoteError::ConfigSyncError(format!("Failed to create tar: {}", e)))?;
+    // Set the correct gcloud account and project
+    info!("Configuring gcloud account...");
     
-    if !tar_output.status.success() {
-        return Err(RemoteError::ConfigSyncError(
-            "Failed to create gcloud credentials archive".to_string()
-        ));
+    // Get account from application_default_credentials.json if it exists
+    let creds_file = gcloud_dir.join("application_default_credentials.json");
+    if creds_file.exists() {
+        if let Ok(content) = std::fs::read_to_string(&creds_file) {
+            // Try to extract account from JSON (simple string search, not full JSON parsing)
+            if let Some(account_start) = content.find("\"account\"") {
+                if let Some(value_start) = content[account_start..].find(":") {
+                    let after_colon = &content[account_start + value_start + 1..];
+                    if let Some(email) = extract_json_string_value(after_colon) {
+                        if !email.is_empty() && email.contains("@") {
+                            // Set the account
+                            let _ = Command::new("coder")
+                                .arg("ssh")
+                                .arg(workspace)
+                                .arg("--")
+                                .arg("gcloud")
+                                .arg("config")
+                                .arg("set")
+                                .arg("account")
+                                .arg(&email)
+                                .output();
+                            debug!("Set gcloud account to: {}", email);
+                        }
+                    }
+                }
+            }
+        }
     }
     
-    // Pipe tar data to remote and extract
-    let extract_cmd = "tar -xzf - -C ~/.config/gcloud/";
-    
-    let mut ssh_cmd = Command::new("coder");
-    ssh_cmd
-        .arg("ssh")
-        .arg(workspace)
-        .arg("--")
-        .arg("bash")
-        .arg("-c")
-        .arg(extract_cmd)
-        .stdin(std::process::Stdio::piped())
-        .spawn()
-        .and_then(|mut child| {
-            use std::io::Write;
-            if let Some(stdin) = child.stdin.as_mut() {
-                stdin.write_all(&tar_output.stdout)?;
+    // Get project from active_config if it exists
+    let config_file = gcloud_dir.join("configurations/config_default");
+    if config_file.exists() {
+        if let Ok(content) = std::fs::read_to_string(&config_file) {
+            // Parse INI-style config for project
+            for line in content.lines() {
+                if line.starts_with("project = ") {
+                    let project = line.trim_start_matches("project = ").trim();
+                    let _ = Command::new("coder")
+                        .arg("ssh")
+                        .arg(workspace)
+                        .arg("--")
+                        .arg("gcloud")
+                        .arg("config")
+                        .arg("set")
+                        .arg("project")
+                        .arg(project)
+                        .output();
+                    debug!("Set gcloud project to: {}", project);
+                    break;
+                }
             }
-            child.wait()
-        })
-        .map_err(|e| RemoteError::ConfigSyncError(format!("Failed to extract credentials on remote: {}", e)))?;
+        }
+    }
     
     debug!("gcloud credentials synced successfully");
     Ok(())
+}
+
+/// Extract a JSON string value (simple parser, no dependencies)
+fn extract_json_string_value(s: &str) -> Option<String> {
+    let s = s.trim_start();
+    if !s.starts_with('"') {
+        return None;
+    }
+    let s = &s[1..]; // Skip opening quote
+    if let Some(end_idx) = s.find('"') {
+        Some(s[..end_idx].to_string())
+    } else {
+        None
+    }
 }
 
 /// Sync all configuration files to remote workspace.
