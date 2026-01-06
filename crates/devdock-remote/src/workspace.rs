@@ -6,6 +6,29 @@ use std::thread::sleep;
 use std::time::Duration;
 use tracing::info;
 
+/// Cleanup existing DevDock session on remote workspace.
+pub fn cleanup_existing_devdock(workspace: &str, log_file: Option<&Path>) -> Result<()> {
+    info!("Cleaning up existing DevDock processes on {}", workspace);
+    
+    // Kill existing tmux session
+    let _ = ssh::ssh_exec_with_log(workspace, "tmux kill-session -t devdock 2>/dev/null || true", log_file);
+    
+    // Kill any running Tilt processes
+    let _ = ssh::ssh_exec_with_log(workspace, "pkill -f 'tilt up' 2>/dev/null || true", log_file);
+    
+    // Clean up DevDock containers
+    let _ = ssh::ssh_exec_with_log(workspace, "docker ps -a --filter 'name=devdock-' --format '{{.Names}}' | xargs -r docker rm -f 2>/dev/null || true", log_file);
+    
+    // Clean up DevDock database registration
+    let _ = ssh::ssh_exec_with_log(workspace, "rm -f ~/.devdock/devdock.db ~/.devdock/*.pid 2>/dev/null || true", log_file);
+    
+    // Run devdock cleanup
+    let _ = ssh::ssh_exec_with_log(workspace, "cd /home/workspace/scio && devdock cleanup 2>/dev/null || true", log_file);
+    
+    info!("Cleanup completed");
+    Ok(())
+}
+
 /// Provision a new Coder workspace.
 pub async fn provision_workspace(config: &coder::CoderWorkspaceConfig) -> Result<String> {
     info!("Provisioning workspace: {}", config.workspace_name);
@@ -75,7 +98,8 @@ pub async fn start_remote_devdock(
     match ssh::ssh_exec_with_log(workspace, &start_script, log_file) {
         Ok(output) => {
             println!("  ✓ DevDock start command executed");
-            if !output.trim().is_empty() && !output.trim().contains("tmux") {
+            // Don't print environment variable dumps
+            if !output.trim().is_empty() && !output.trim().contains("tmux") && !output.trim().contains("declare -x") {
                 println!("  Output: {}", output.trim());
             }
         },
@@ -106,27 +130,22 @@ pub async fn start_remote_devdock(
     }
     
     // Wait for tmux session to initialize and DevDock to start
+    println!("  Waiting for tmux session to initialize (5 seconds)...");
     sleep(Duration::from_secs(5));
     
     // Verify tmux session exists
+    println!("  Verifying tmux session...");
     match ssh::ssh_check(workspace, "tmux list-sessions 2>/dev/null | grep -q devdock", log_file) {
         Ok(true) => {
             println!("  ✓ tmux session 'devdock' is running");
         },
         Ok(false) => {
             eprintln!("  ⚠ Warning: tmux session 'devdock' not found");
-            eprintln!("  Checking startup logs...");
-            
-            // Try to get the startup logs
-            if let Ok(logs) = ssh::ssh_exec_with_log(workspace, "cat /tmp/devdock-start.log 2>/dev/null || echo 'No logs found'", log_file) {
-                eprintln!("  Startup logs:\n{}", logs);
-            }
-            
-            eprintln!("  The session may have exited due to an error.");
-            eprintln!("  Try running manually: coder ssh {} -- 'cd /home/workspace/scio && /usr/local/bin/devdock start {}'", workspace, profile);
+            eprintln!("  Continuing anyway, DevDock may still be starting...");
         },
-        Err(_) => {
-            eprintln!("  ⚠ Warning: Could not verify tmux session");
+        Err(e) => {
+            eprintln!("  ⚠ Warning: Could not verify tmux session: {}", e);
+            eprintln!("  Continuing anyway...");
         }
     }
     

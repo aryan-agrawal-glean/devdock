@@ -10,9 +10,9 @@ pub mod port_forward;
 pub mod ssh;
 pub mod workspace;
 
-pub use coder::{CoderWorkspaceConfig, check_coder_installed};
+pub use coder::{CoderWorkspaceConfig, check_coder_installed, workspace_exists};
 pub use port_forward::{PortForwardManager, PortMapping, PortType};
-pub use workspace::{provision_workspace, start_remote_devdock};
+pub use workspace::{cleanup_existing_devdock, provision_workspace, start_remote_devdock};
 
 use thiserror::Error;
 

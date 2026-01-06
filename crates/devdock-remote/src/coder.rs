@@ -132,6 +132,25 @@ pub fn delete_workspace(name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Check if a workspace exists.
+pub fn workspace_exists(name: &str) -> Result<bool> {
+    check_coder_installed()?;
+    
+    let output = Command::new("coder")
+        .arg("list")
+        .arg("--output")
+        .arg("json")
+        .output()
+        .map_err(|e| RemoteError::CommandFailed(format!("Failed to list workspaces: {}", e)))?;
+    
+    if !output.status.success() {
+        return Ok(false);
+    }
+    
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(stdout.contains(&format!("\"name\":\"{}", name)))
+}
+
 /// Get workspace status.
 pub fn get_workspace_status(name: &str) -> Result<String> {
     check_coder_installed()?;

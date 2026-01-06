@@ -97,27 +97,110 @@ pub async fn start_remote(
         logger.log("Workspace started successfully")?;
         existing
     } else {
-        logger.log_section("Creating Workspace")?;
-        logger.log(&format!("Template: devdock-glean"))?;
-        logger.log(&format!("Workspace name: {}", workspace_name))?;
-        logger.log(&format!("Region: {}", region))?;
-        
-        // Create workspace with spinner
-        let spinner = output::create_spinner("Creating Coder workspace (1-2 minutes)...");
-        let config = CoderWorkspaceConfig {
-            template: "devdock-glean".to_string(),
-            workspace_name: workspace_name.clone(),
-            region: region.to_string(),
-            port_base: Some(offset),
-            profile: profile.to_string(),
-        };
-        
-        let ws_name = workspace::provision_workspace(&config).await?;
-        spinner.finish_and_clear();
-        output::success("Workspace created");
-        logger.log("Workspace created successfully")?;
-        logger.log(&format!("Workspace SSH ready: coder ssh {}", ws_name))?;
-        ws_name
+        // Check if workspace already exists
+        if coder::workspace_exists(&workspace_name)? {
+            println!();
+            output::warn(&format!("Workspace '{}' already exists!", workspace_name));
+            println!();
+            println!("  What would you like to do?");
+            println!("  1) Continue with existing workspace (clean and restart DevDock)");
+            println!("  2) Delete workspace and create fresh");
+            println!("  3) Cancel");
+            println!();
+            print!("  Enter choice (1-3): ");
+            use std::io::{self, Write};
+            io::stdout().flush()?;
+            
+            let mut choice = String::new();
+            io::stdin().read_line(&mut choice)?;
+            let choice = choice.trim();
+            
+            match choice {
+                "1" => {
+                    logger.log_section("Using Existing Workspace")?;
+                    logger.log(&format!("Workspace: {}", workspace_name))?;
+                    logger.log("User chose to continue with existing workspace")?;
+                    
+                    output::info(&format!("Using existing workspace: {}", workspace_name));
+                    
+                    // Start workspace if stopped
+                    coder::start_workspace(&workspace_name)?;
+                    logger.log("Workspace started")?;
+                    
+                    // Cleanup existing DevDock session
+                    output::info("Cleaning up existing DevDock session...");
+                    workspace::cleanup_existing_devdock(&workspace_name, Some(logger.path()))?;
+                    logger.log("Existing DevDock session cleaned up")?;
+                    
+                    workspace_name.clone()
+                },
+                "2" => {
+                    logger.log_section("Deleting and Recreating Workspace")?;
+                    logger.log(&format!("Workspace: {}", workspace_name))?;
+                    logger.log("User chose to delete and recreate workspace")?;
+                    
+                    output::info(&format!("Deleting existing workspace: {}", workspace_name));
+                    coder::delete_workspace(&workspace_name)?;
+                    logger.log("Workspace deleted")?;
+                    
+                    // Wait a moment for deletion to complete
+                    std::thread::sleep(std::time::Duration::from_secs(2));
+                    
+                    // Create new workspace
+                    logger.log_section("Creating Workspace")?;
+                    logger.log(&format!("Template: devdock-glean"))?;
+                    logger.log(&format!("Workspace name: {}", workspace_name))?;
+                    logger.log(&format!("Region: {}", region))?;
+                    
+                    let spinner = output::create_spinner("Creating Coder workspace (1-2 minutes)...");
+                    let config = CoderWorkspaceConfig {
+                        template: "devdock-glean".to_string(),
+                        workspace_name: workspace_name.clone(),
+                        region: region.to_string(),
+                        port_base: Some(offset),
+                        profile: profile.to_string(),
+                    };
+                    
+                    let ws_name = workspace::provision_workspace(&config).await?;
+                    spinner.finish_and_clear();
+                    output::success("Workspace created");
+                    logger.log("Workspace created successfully")?;
+                    logger.log(&format!("Workspace SSH ready: coder ssh {}", ws_name))?;
+                    ws_name
+                },
+                "3" | "" => {
+                    output::info("Cancelled");
+                    return Ok(());
+                },
+                _ => {
+                    output::error("Invalid choice. Cancelled.");
+                    return Ok(());
+                }
+            }
+        } else {
+            // Workspace doesn't exist, create it
+            logger.log_section("Creating Workspace")?;
+            logger.log(&format!("Template: devdock-glean"))?;
+            logger.log(&format!("Workspace name: {}", workspace_name))?;
+            logger.log(&format!("Region: {}", region))?;
+            
+            // Create workspace with spinner
+            let spinner = output::create_spinner("Creating Coder workspace (1-2 minutes)...");
+            let config = CoderWorkspaceConfig {
+                template: "devdock-glean".to_string(),
+                workspace_name: workspace_name.clone(),
+                region: region.to_string(),
+                port_base: Some(offset),
+                profile: profile.to_string(),
+            };
+            
+            let ws_name = workspace::provision_workspace(&config).await?;
+            spinner.finish_and_clear();
+            output::success("Workspace created");
+            logger.log("Workspace created successfully")?;
+            logger.log(&format!("Workspace SSH ready: coder ssh {}", ws_name))?;
+            ws_name
+        }
     };
     
     // Start DevDock on remote
