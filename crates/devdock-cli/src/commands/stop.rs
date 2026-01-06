@@ -340,7 +340,7 @@ fn cleanup_temp_files(workspace_path: &str) -> Result<()> {
 }
 
 /// Perform cleanup for remote DevDock instances
-async fn perform_remote_cleanup(state_manager: &StateManager, instance_id: &str, _force: bool) -> Result<()> {
+async fn perform_remote_cleanup(state_manager: &StateManager, instance_id: &str, force: bool) -> Result<()> {
     output::info("Cleaning up remote DevDock resources...");
     
     // 1. Stop file sync
@@ -358,15 +358,24 @@ async fn perform_remote_cleanup(state_manager: &StateManager, instance_id: &str,
     
     // 2. Stop port forwards
     output::info("Stopping port forwards...");
-    let mappings = state_manager.get_port_mappings(instance_id).await?;
+    
+    // Get workspace name to find all port-forward processes
+    let workspace_name = if let Ok(Some((ws_name, _, _, _))) = state_manager.get_sync_session(instance_id).await {
+        Some(ws_name)
+    } else {
+        None
+    };
     
     let mut stopped_count = 0;
-    for (_service_name, _port_type, _local_port, _remote_port, pid) in mappings {
+    
+    // First try to kill PIDs from database
+    let mappings = state_manager.get_port_mappings(instance_id).await?;
+    for (_service_name, _port_type, _local_port, _remote_port, pid) in &mappings {
         if let Some(pid) = pid {
             #[cfg(unix)]
             {
                 unsafe {
-                    if libc::kill(pid as i32, libc::SIGTERM) == 0 {
+                    if libc::kill(*pid as i32, libc::SIGTERM) == 0 {
                         stopped_count += 1;
                     }
                 }
@@ -382,6 +391,31 @@ async fn perform_remote_cleanup(state_manager: &StateManager, instance_id: &str,
         }
     }
     
+    // Also search for and kill any port-forward processes for this workspace
+    if let Some(ws_name) = workspace_name {
+        #[cfg(unix)]
+        {
+            let output = Command::new("pgrep")
+                .args(["-f", &format!("coder port-forward {}", ws_name)])
+                .output();
+            
+            if let Ok(output) = output {
+                if output.status.success() {
+                    let pids = String::from_utf8_lossy(&output.stdout);
+                    for pid_str in pids.lines() {
+                        if let Ok(pid) = pid_str.parse::<i32>() {
+                            unsafe {
+                                if libc::kill(pid, libc::SIGTERM) == 0 {
+                                    stopped_count += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
     if stopped_count > 0 {
         output::success(&format!("Stopped {} port forward(s)", stopped_count));
     }
@@ -391,9 +425,85 @@ async fn perform_remote_cleanup(state_manager: &StateManager, instance_id: &str,
         output::warn(&format!("Failed to clean port mappings: {}", e));
     }
     
-    // 3. Stop Coder workspace (optional - user may want to keep it running)
-    output::info("Note: Remote workspace is still running. Stop it manually if needed:");
-    output::info("  coder stop <workspace-name>");
+    // 3. Prompt for workspace cleanup (skip prompt if force flag)
+    if let Ok(Some((workspace_name, _, _, _))) = state_manager.get_sync_session(instance_id).await {
+        if force {
+            // With --force, just leave workspace running
+            output::info(&format!("Workspace '{}' left running (use --force to skip prompts)", workspace_name));
+            output::info(&format!("  Stop: coder stop {}", workspace_name));
+            output::info(&format!("  Delete: coder delete {}", workspace_name));
+        } else {
+            // Interactive prompt
+            println!();
+            println!("  What would you like to do with workspace '{}'?", workspace_name);
+            println!("  1) Leave running (default)");
+            println!("  2) Stop workspace");
+            println!("  3) Delete workspace");
+            println!();
+            print!("  Enter choice (1-3): ");
+            use std::io::{self, Write};
+            io::stdout().flush()?;
+            
+            let mut choice = String::new();
+            io::stdin().read_line(&mut choice)?;
+            let choice = choice.trim();
+            
+            match choice {
+                "2" => {
+                    output::info(&format!("Stopping workspace: {}", workspace_name));
+                    
+                    match Command::new("coder")
+                        .arg("stop")
+                        .arg(&workspace_name)
+                        .arg("--yes")
+                        .output()
+                    {
+                        Ok(output) => {
+                            if output.status.success() {
+                                output::success(&format!("Workspace '{}' stopped", workspace_name));
+                            } else {
+                                let stderr = String::from_utf8_lossy(&output.stderr);
+                                output::warn(&format!("Failed to stop workspace: {}", stderr));
+                            }
+                        }
+                        Err(e) => {
+                            output::warn(&format!("Failed to stop workspace: {}", e));
+                        }
+                    }
+                },
+                "3" => {
+                    output::info(&format!("Deleting workspace: {}", workspace_name));
+                    
+                    match Command::new("coder")
+                        .arg("delete")
+                        .arg(&workspace_name)
+                        .arg("--yes")
+                        .output()
+                    {
+                        Ok(output) => {
+                            if output.status.success() {
+                                output::success(&format!("Workspace '{}' deleted", workspace_name));
+                            } else {
+                                let stderr = String::from_utf8_lossy(&output.stderr);
+                                output::warn(&format!("Failed to delete workspace: {}", stderr));
+                            }
+                        }
+                        Err(e) => {
+                            output::warn(&format!("Failed to delete workspace: {}", e));
+                        }
+                    }
+                },
+                "1" | "" => {
+                    output::info(&format!("Workspace '{}' left running", workspace_name));
+                    output::info(&format!("  Stop: coder stop {}", workspace_name));
+                    output::info(&format!("  Delete: coder delete {}", workspace_name));
+                },
+                _ => {
+                    output::info("Invalid choice. Workspace left running.");
+                }
+            }
+        }
+    }
     
     output::success("Remote cleanup complete");
     Ok(())
