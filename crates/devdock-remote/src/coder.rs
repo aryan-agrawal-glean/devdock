@@ -138,8 +138,6 @@ pub fn workspace_exists(name: &str) -> Result<bool> {
     
     let output = Command::new("coder")
         .arg("list")
-        .arg("--output")
-        .arg("json")
         .output()
         .map_err(|e| RemoteError::CommandFailed(format!("Failed to list workspaces: {}", e)))?;
     
@@ -148,7 +146,9 @@ pub fn workspace_exists(name: &str) -> Result<bool> {
     }
     
     let stdout = String::from_utf8_lossy(&output.stdout);
-    Ok(stdout.contains(&format!("\"name\":\"{}", name)))
+    // Check if workspace name appears in the list output
+    // Format is like: "workspace-name    template-name    ..."
+    Ok(stdout.lines().any(|line| line.split_whitespace().next() == Some(name)))
 }
 
 /// Get workspace status.

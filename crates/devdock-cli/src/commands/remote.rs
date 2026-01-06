@@ -98,7 +98,11 @@ pub async fn start_remote(
         existing
     } else {
         // Check if workspace already exists
-        if coder::workspace_exists(&workspace_name)? {
+        logger.log(&format!("Checking if workspace '{}' exists...", workspace_name))?;
+        let exists = coder::workspace_exists(&workspace_name)?;
+        logger.log(&format!("Workspace exists: {}", exists))?;
+        
+        if exists {
             println!();
             output::warn(&format!("Workspace '{}' already exists!", workspace_name));
             println!();
