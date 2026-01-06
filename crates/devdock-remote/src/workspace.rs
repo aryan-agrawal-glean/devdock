@@ -53,15 +53,15 @@ pub async fn start_remote_devdock(
     println!("  ✓ Configuration synced");
     
     // 2. Start DevDock in tmux session on remote
-    // Use full path to devdock and pass environment variables into tmux session
+    // Export environment variables before tmux, they will be inherited by the session
     let start_script = if let Some(svc) = services {
         format!(
-            "cd /home/workspace/scio && tmux new-session -d -s devdock 'export DEVDOCK_ID={} && export DEVDOCK_PORT_OFFSET={} && /usr/local/bin/devdock start {} -s {} 2>&1 | tee /tmp/devdock-start.log'",
+            "export DEVDOCK_ID={} && export DEVDOCK_PORT_OFFSET={} && cd /home/workspace/scio && tmux new-session -d -s devdock 'devdock start {} -s {}'",
             devdock_id, offset, profile, svc
         )
     } else {
         format!(
-            "cd /home/workspace/scio && tmux new-session -d -s devdock 'export DEVDOCK_ID={} && export DEVDOCK_PORT_OFFSET={} && /usr/local/bin/devdock start {} 2>&1 | tee /tmp/devdock-start.log'",
+            "export DEVDOCK_ID={} && export DEVDOCK_PORT_OFFSET={} && cd /home/workspace/scio && tmux new-session -d -s devdock 'devdock start {}'",
             devdock_id, offset, profile
         )
     };
@@ -105,8 +105,8 @@ pub async fn start_remote_devdock(
         }
     }
     
-    // Wait a moment for tmux session to initialize
-    sleep(Duration::from_secs(2));
+    // Wait for tmux session to initialize and DevDock to start
+    sleep(Duration::from_secs(5));
     
     // Verify tmux session exists
     match ssh::ssh_check(workspace, "tmux list-sessions 2>/dev/null | grep -q devdock", log_file) {
