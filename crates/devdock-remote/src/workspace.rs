@@ -61,7 +61,7 @@ pub async fn start_remote_devdock(
     } else {
         format!(
             "cd /home/workspace/scio && export DEVDOCK_ID={} && export DEVDOCK_PORT_OFFSET={} && tmux new-session -d -s devdock 'devdock start {}'",
-            devdock_id, offset
+            devdock_id, offset, profile
         )
     };
     
@@ -108,10 +108,8 @@ pub async fn start_remote_devdock(
     println!("  Waiting for Tilt to start (checking port 10350)...");
     let timeout = Duration::from_secs(30);
     let start = std::time::Instant::now();
-    let mut attempts = 0;
     
     loop {
-        attempts += 1;
         let elapsed = start.elapsed().as_secs();
         
         // Check if Tilt is listening on port 10350 using lsof
