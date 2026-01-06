@@ -78,10 +78,9 @@ pub async fn start_remote(
     println!("  {}: {}", "DevDock ID".cyan(), &instance_id[..8]);
     println!("  {}: {}", "Port Base".cyan(), offset);
     println!();
-    println!("{}", "⏱️  Expected time: ~8-10 minutes total".yellow());
+    println!("{}", "⏱️  Expected time: ~2-3 minutes total".yellow());
     println!("   • Creating workspace: ~1-2 min");
-    println!("   • Initializing (repo, venv): ~2-3 min");
-    println!("   • Starting DevDock + Tilt: ~5 min");
+    println!("   • Starting DevDock: ~1 min");
     println!("   📬 You will receive a notification when ready!");
     println!();
     println!("📋 Session logs: {}", logger.path().display().to_string().cyan());

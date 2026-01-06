@@ -71,8 +71,9 @@ pub async fn execute(profile_name: &str, services: Option<&str>, _ci_mode: bool)
     let profile_path_str = profile_path.to_string_lossy();
     generate_configs_rust(&workspace_root, &profile, services, Some(&profile_path_str)).await?;
 
-    // Step 7: Clean old logs
+    // Step 7: Clean old logs and startup state files
     cleanup_old_logs()?;
+    cleanup_startup_state_files()?;
 
     // Step 8: Update status and start Tilt
     state_manager
@@ -200,6 +201,29 @@ fn cleanup_old_logs() -> Result<()> {
     }
 
     output::success("Old logs cleaned");
+    Ok(())
+}
+
+/// Clean up startup state files to prevent stale state from blocking new startup
+fn cleanup_startup_state_files() -> Result<()> {
+    output::info("Cleaning up startup state files...");
+
+    let home = std::env::var("HOME")?;
+    let state_files = vec![
+        format!("{}/.devdock/startup-monitor.pid", home),
+        format!("{}/.devdock/session_timing.txt", home),
+    ];
+
+    let mut cleaned_count = 0;
+    for path in state_files {
+        if std::fs::remove_file(&path).is_ok() {
+            cleaned_count += 1;
+        }
+    }
+
+    if cleaned_count > 0 {
+        output::success(&format!("Cleaned {} startup state file(s)", cleaned_count));
+    }
     Ok(())
 }
 
