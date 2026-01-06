@@ -147,6 +147,9 @@ impl PortForwardManager {
                         "Port forward started: {} {:?} -> {} (PID: {})",
                         mapping.service_name, mapping.port_type, mapping.local_port, pid
                     );
+                    
+                    // Keep the child process alive - don't let it be dropped
+                    std::mem::forget(child);
                 }
                 Err(e) => {
                     warn!("Failed to start port forward for {}: {}", mapping.service_name, e);
@@ -186,10 +189,7 @@ impl PortForwardManager {
     }
 }
 
-impl Drop for PortForwardManager {
-    fn drop(&mut self) {
-        // Clean up on drop
-        let _ = self.stop_all_forwards();
-    }
-}
+// Note: We don't implement Drop to stop port forwards automatically
+// because we use std::mem::forget on the Child processes to keep them alive.
+// Port forwards should be stopped explicitly via `devdock stop` or by killing the PIDs.
 

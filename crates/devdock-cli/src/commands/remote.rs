@@ -88,8 +88,10 @@ pub async fn start_remote(
     println!("   Monitor progress: tail -f {}", logger.path().display());
     println!();
     
-    // Create or start workspace
-    let workspace_name = if let Some(existing) = vm {
+    // Execute main setup logic with error handling to update status on failure
+    let setup_result = async {
+        // Create or start workspace
+        let workspace_name = if let Some(existing) = vm {
         logger.log_section("Using Existing Workspace")?;
         logger.log(&format!("Workspace: {}", existing))?;
         output::info(&format!("Using existing workspace: {}", existing));
@@ -174,11 +176,11 @@ pub async fn start_remote(
                 },
                 "3" | "" => {
                     output::info("Cancelled");
-                    return Ok(());
+                    return Err(anyhow!("User cancelled workspace setup"));
                 },
                 _ => {
                     output::error("Invalid choice. Cancelled.");
-                    return Ok(());
+                    return Err(anyhow!("Invalid choice - setup cancelled"));
                 }
             }
         } else {
@@ -316,7 +318,32 @@ pub async fn start_remote(
                  workspace_name, total_time, offset + 10350)
     );
     
-    Ok(())
+        Ok::<(), anyhow::Error>(())
+    }.await;
+    
+    // Handle result and update status accordingly
+    match setup_result {
+        Ok(_) => {
+            // Success - status already updated to Running above
+            Ok(())
+        }
+        Err(e) => {
+            // Failed - update status to Stopped
+            info!("Setup failed, updating instance status to Stopped");
+            if let Err(status_err) = state.update_status(&instance_id, InstanceStatus::Stopped).await {
+                warn!("Failed to update instance status: {}", status_err);
+            }
+            
+            logger.log_section("Setup Failed")?;
+            logger.log(&format!("Error: {}", e))?;
+            logger.log(&format!("Instance {} marked as Stopped", &instance_id[..8]))?;
+            
+            output::error(&format!("DevDock setup failed: {}", e));
+            println!();
+            println!("To clean up: devdock stop -i {}", &instance_id[..8]);
+            Err(e)
+        }
+    }
 }
 
 /// Get current git worktree path.
