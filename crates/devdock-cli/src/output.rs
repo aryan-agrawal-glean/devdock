@@ -46,6 +46,7 @@ pub fn step(current: usize, total: usize, msg: &str) {
 }
 
 /// Create a progress bar with time estimate.
+#[allow(dead_code)]
 pub fn create_progress_bar(total_seconds: u64, message: &str) -> ProgressBar {
     let pb = ProgressBar::new(total_seconds);
     pb.set_style(

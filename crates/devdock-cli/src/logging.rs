@@ -74,6 +74,7 @@ impl OperationLogger {
     }
     
     /// Log an error.
+    #[allow(dead_code)]
     pub fn log_error(&self, error: &str) -> Result<()> {
         self.log_section("ERROR")?;
         self.log(error)?;
@@ -81,6 +82,7 @@ impl OperationLogger {
     }
     
     /// Log command execution.
+    #[allow(dead_code)]
     pub fn log_command(&self, command: &str) -> Result<()> {
         self.log(&format!("Executing: {}", command))?;
         Ok(())
