@@ -85,10 +85,12 @@ async fn print_instance_status(state_manager: &StateManager, instance: &Instance
             format_timestamp(instance.updated_at)
         );
 
-        // Check Docker containers
-        println!("\n{}", "Docker Containers".bold());
-        println!("{}", "─".repeat(50));
-        print_docker_status()?;
+        // Check Docker containers (only for local mode)
+        if instance.mode == "local" {
+            println!("\n{}", "Docker Containers".bold());
+            println!("{}", "─".repeat(50));
+            print_docker_status()?;
+        }
 
         // Check Tilt status
         println!("\n{}", "Tilt Status".bold());

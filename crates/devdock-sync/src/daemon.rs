@@ -201,39 +201,55 @@ pub fn start_daemon(
     Ok(std::process::id())
 }
 
-/// Stop sync daemon.
+/// Stop sync daemon and clean up all related files.
 pub fn stop_daemon(devdock_id: &str) -> Result<()> {
+    cleanup_sync_files(devdock_id)
+}
+
+/// Clean up all sync files for a specific devdock instance.
+pub fn cleanup_sync_files(devdock_id: &str) -> Result<()> {
     let pid_dir = SyncDaemon::get_pid_dir();
     let pid_file = pid_dir.join(format!("{}.pid", devdock_id));
     
-    if !pid_file.exists() {
-        return Ok(());
+    if pid_file.exists() {
+        let pid_str = fs::read_to_string(&pid_file)?;
+        if let Ok(pid) = pid_str.trim().parse::<u32>() {
+            // Kill process
+            #[cfg(unix)]
+            {
+                use std::process::Command;
+                let _ = Command::new("kill").arg(pid.to_string()).output();
+            }
+            
+            #[cfg(windows)]
+            {
+                use std::process::Command;
+                let _ = Command::new("taskkill")
+                    .arg("/PID")
+                    .arg(pid.to_string())
+                    .arg("/F")
+                    .output();
+            }
+        }
     }
     
-    let pid_str = fs::read_to_string(&pid_file)?;
-    let pid: u32 = pid_str.trim().parse()
-        .map_err(|_| SyncError::DaemonError("Invalid PID".to_string()))?;
+    // Clean up all sync files for this devdock_id
+    let sync_files = vec![
+        format!("{}.pid", devdock_id),
+        format!("{}.excludes", devdock_id),
+        format!("{}.hb", devdock_id),
+        format!("{}.stats", devdock_id),
+        format!("{}_portforward.pid", devdock_id),
+    ];
     
-    // Kill process
-    #[cfg(unix)]
-    {
-        use std::process::Command;
-        let _ = Command::new("kill").arg(pid.to_string()).output();
+    for file_name in sync_files {
+        let file_path = pid_dir.join(&file_name);
+        if file_path.exists() {
+            let _ = fs::remove_file(&file_path);
+        }
     }
     
-    #[cfg(windows)]
-    {
-        use std::process::Command;
-        let _ = Command::new("taskkill")
-            .arg("/PID")
-            .arg(pid.to_string())
-            .arg("/F")
-            .output();
-    }
-    
-    // Remove PID file
-    let _ = fs::remove_file(&pid_file);
-    
+    info!("Cleaned up sync files for {}", devdock_id);
     Ok(())
 }
 

@@ -258,6 +258,9 @@ pub async fn start_remote(
         state.save_port_mappings(&instance_id, &mappings).await?;
     }
     
+    // Clean up stale sync files from old instances first
+    cleanup_stale_sync_files(&state).await?;
+    
     // Auto-start file sync (always enabled)
     println!();
     let spinner = output::create_spinner("Starting file sync...");
@@ -444,5 +447,65 @@ fn now() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_secs() as i64
+}
+
+/// Clean up sync files for instances that no longer exist in the database.
+async fn cleanup_stale_sync_files(state_manager: &StateManager) -> Result<()> {
+    use std::collections::HashSet;
+    use std::fs;
+    
+    // Get all active instance IDs
+    let instances = state_manager.list_instances().await?;
+    let active_ids: HashSet<String> = instances.iter().map(|i| i.id.clone()).collect();
+    
+    // Get sync directory
+    let sync_dir = dirs::home_dir()
+        .ok_or_else(|| anyhow!("Cannot determine home directory"))?
+        .join(".devdock/sync");
+    
+    if !sync_dir.exists() {
+        return Ok(());
+    }
+    
+    let entries = fs::read_dir(&sync_dir)?;
+    let mut cleaned_count = 0;
+    
+    for entry in entries.flatten() {
+        let file_name = entry.file_name().to_string_lossy().to_string();
+        
+        // Extract devdock_id from filename
+        if let Some(devdock_id) = extract_devdock_id_from_filename(&file_name) {
+            if !active_ids.contains(&devdock_id) {
+                // This is a stale file from a stopped/removed instance
+                if fs::remove_file(entry.path()).is_ok() {
+                    cleaned_count += 1;
+                }
+            }
+        }
+    }
+    
+    if cleaned_count > 0 {
+        info!("Cleaned up {} stale sync file(s)", cleaned_count);
+    }
+    
+    Ok(())
+}
+
+/// Extract devdock ID from sync filename.
+fn extract_devdock_id_from_filename(filename: &str) -> Option<String> {
+    // Remove extensions and suffixes
+    let base = filename
+        .trim_end_matches(".pid")
+        .trim_end_matches(".excludes")
+        .trim_end_matches(".hb")
+        .trim_end_matches(".stats")
+        .trim_end_matches("_portforward");
+    
+    // UUID format: 8-4-4-4-12 (36 chars with 4 dashes)
+    if base.len() == 36 && base.matches('-').count() == 4 {
+        Some(base.to_string())
+    } else {
+        None
+    }
 }
 
