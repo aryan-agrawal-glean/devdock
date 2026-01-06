@@ -147,8 +147,13 @@ pub fn workspace_exists(name: &str) -> Result<bool> {
     
     let stdout = String::from_utf8_lossy(&output.stdout);
     // Check if workspace name appears in the list output
-    // Format is like: "workspace-name    template-name    ..."
-    Ok(stdout.lines().any(|line| line.split_whitespace().next() == Some(name)))
+    // Format is like: "username/workspace-name    template-name    ..."
+    // Check if any line contains the workspace name (either with or without username prefix)
+    Ok(stdout.lines().any(|line| {
+        let first_col = line.split_whitespace().next().unwrap_or("");
+        // Match either "username/workspace-name" or just "workspace-name"
+        first_col == name || first_col.ends_with(&format!("/{}", name))
+    }))
 }
 
 /// Get workspace status.
