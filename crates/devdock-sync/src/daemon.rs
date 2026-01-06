@@ -1,6 +1,6 @@
 //! Sync daemon for background file synchronization.
 
-use crate::{git, health::HealthMonitor, rsync::RsyncClient, watcher::FileWatcher, Result, SyncError};
+use crate::{git, health::HealthMonitor, rsync::RsyncClient, watcher::FileWatcher, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -140,6 +140,12 @@ impl SyncDaemon {
         let pid_file = pid_dir.join(format!("{}.pid", self.devdock_id));
         fs::write(&pid_file, std::process::id().to_string())?;
         
+        // Also create a log file for this sync daemon
+        let log_file = pid_dir.join(format!("{}.log", self.devdock_id));
+        let _ = fs::write(&log_file, format!("Sync daemon started for {}\nWorkspace: {}\nRepo: {}\n", 
+            self.devdock_id, self.workspace_name, self.repo_path.display()));
+        info!("Log file created: {}", log_file.display());
+        
         Ok(())
     }
     
@@ -177,6 +183,10 @@ pub fn start_daemon(
     full_mode: bool,
 ) -> Result<u32> {
     info!("Starting sync daemon in background");
+    info!("DevDock ID: {}", devdock_id);
+    info!("Workspace: {}", workspace_name);
+    info!("Repo path: {}", repo_path.display());
+    info!("Full mode: {}", full_mode);
     
     // For now, we'll start it in a separate thread
     // In production, this should be a proper daemon process
@@ -185,18 +195,28 @@ pub fn start_daemon(
     let repo_path = repo_path.to_path_buf();
     
     std::thread::spawn(move || {
-        let mut daemon = match SyncDaemon::new(devdock_id, workspace_name, repo_path, full_mode) {
-            Ok(d) => d,
+        info!("Sync daemon thread started for {}", devdock_id);
+        
+        let mut daemon = match SyncDaemon::new(devdock_id.clone(), workspace_name.clone(), repo_path.clone(), full_mode) {
+            Ok(d) => {
+                info!("Sync daemon created successfully for {}", devdock_id);
+                d
+            },
             Err(e) => {
-                error!("Failed to create sync daemon: {}", e);
+                error!("Failed to create sync daemon for {}: {}", devdock_id, e);
                 return;
             }
         };
         
         if let Err(e) = daemon.start() {
-            error!("Sync daemon error: {}", e);
+            error!("Sync daemon error for {}: {}", devdock_id, e);
+        } else {
+            info!("Sync daemon stopped normally for {}", devdock_id);
         }
     });
+    
+    // Give the thread a moment to start
+    std::thread::sleep(std::time::Duration::from_millis(500));
     
     Ok(std::process::id())
 }
@@ -239,6 +259,7 @@ pub fn cleanup_sync_files(devdock_id: &str) -> Result<()> {
         format!("{}.excludes", devdock_id),
         format!("{}.hb", devdock_id),
         format!("{}.stats", devdock_id),
+        format!("{}.log", devdock_id),
         format!("{}_portforward.pid", devdock_id),
     ];
     

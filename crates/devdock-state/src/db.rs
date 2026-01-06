@@ -153,8 +153,22 @@ impl StateManager {
 
     /// Get instance by workspace path.
     pub async fn get_by_workspace(&self, workspace_path: &str) -> Result<Option<Instance>> {
+        // Prefer Running > Starting > Stopping > Stopped > Error
+        // Order by status priority, then most recently updated
         let row = sqlx::query(
-            "SELECT id, workspace_path, branch, profile, mode, status, port_base, created_at, updated_at FROM instances WHERE workspace_path = ?"
+            "SELECT id, workspace_path, branch, profile, mode, status, port_base, created_at, updated_at 
+             FROM instances 
+             WHERE workspace_path = ? 
+             ORDER BY 
+                CASE status 
+                    WHEN 'running' THEN 1
+                    WHEN 'starting' THEN 2
+                    WHEN 'stopping' THEN 3
+                    WHEN 'stopped' THEN 4
+                    ELSE 5
+                END,
+                updated_at DESC
+             LIMIT 1"
         )
         .bind(workspace_path)
         .fetch_optional(&self.pool)

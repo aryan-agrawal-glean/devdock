@@ -227,10 +227,14 @@ pub fn sync_gcloud_credentials(workspace: &str) -> Result<()> {
         # Clean up staging directory
         rm -rf ~/.secrets-sync
 
-        # Set proper permissions
-        chmod -R 600 ~/.config/gcloud/* /tmp/.config/gcloud/* 2>/dev/null || true
+        # Set proper permissions (directories: 700, files: 600)
+        # Main directories writable so gcloud can create logs/
         chmod 700 ~/.config/gcloud ~/.config/gcloud/configurations 2>/dev/null || true
         chmod 700 /tmp/.config/gcloud /tmp/.config/gcloud/configurations 2>/dev/null || true
+        
+        # Credential files should be 600
+        find ~/.config/gcloud -type f -exec chmod 600 {} \; 2>/dev/null || true
+        find /tmp/.config/gcloud -type f -exec chmod 600 {} \; 2>/dev/null || true
     "#;
     
     let output = Command::new("coder")

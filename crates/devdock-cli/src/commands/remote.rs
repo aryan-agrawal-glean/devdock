@@ -427,9 +427,13 @@ async fn calculate_port_offset(state: &StateManager, port_base: Option<u16>) -> 
         return Ok(base);
     }
     
-    // Auto-allocate port offset
+    // Auto-allocate port offset - only consider active instances
     let instances = state.list_instances().await?;
-    let used_ports: Vec<u16> = instances.iter().map(|i| i.port_base).collect();
+    let used_ports: Vec<u16> = instances
+        .iter()
+        .filter(|i| matches!(i.status, InstanceStatus::Running | InstanceStatus::Starting))
+        .map(|i| i.port_base)
+        .collect();
     
     // Find first available offset in increments of 1000
     for offset in (2000..65000).step_by(1000) {
@@ -499,6 +503,7 @@ fn extract_devdock_id_from_filename(filename: &str) -> Option<String> {
         .trim_end_matches(".excludes")
         .trim_end_matches(".hb")
         .trim_end_matches(".stats")
+        .trim_end_matches(".log")
         .trim_end_matches("_portforward");
     
     // UUID format: 8-4-4-4-12 (36 chars with 4 dashes)

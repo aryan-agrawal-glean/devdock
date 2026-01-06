@@ -4,7 +4,7 @@ use crate::{Result, SyncError};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::io::Write;
-use tracing::{debug, info};
+use tracing::{debug, error, info};
 
 /// Rsync client for syncing files to remote workspace.
 pub struct RsyncClient {
@@ -49,10 +49,12 @@ impl RsyncClient {
                 self.remote_path.display()
             ))
             .stdin(Stdio::piped())
-            .stdout(Stdio::null())
+            .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         
-        debug!("Running rsync: {:?}", cmd);
+        info!("Running rsync from {} to {}.coder:{}", 
+              self.local_path.display(), self.workspace_name, self.remote_path.display());
+        debug!("Full command: {:?}", cmd);
         
         let mut child = cmd.spawn()
             .map_err(|e| SyncError::RsyncFailed(format!("Failed to spawn rsync: {}", e)))?;
@@ -69,11 +71,18 @@ impl RsyncClient {
             .map_err(|e| SyncError::RsyncFailed(format!("Failed to wait for rsync: {}", e)))?;
         
         if !output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(SyncError::RsyncFailed(stderr.to_string()));
+            error!("Rsync failed!");
+            error!("Exit code: {:?}", output.status.code());
+            error!("STDOUT: {}", stdout);
+            error!("STDERR: {}", stderr);
+            return Err(SyncError::RsyncFailed(format!("rsync failed: {}", stderr)));
         }
         
-        debug!("Rsync completed successfully");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        debug!("Rsync output: {}", stdout);
+        info!("Rsync completed successfully");
         Ok(())
     }
     
