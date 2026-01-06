@@ -13,39 +13,38 @@ A fast, extensible, standalone binary for managing local and remote development 
 
 ## 📦 Installation
 
-### macOS (Homebrew) - Recommended
+### Quick Install (Recommended)
+
+**One-line installer** - automatically detects your OS and architecture:
 
 ```bash
-brew tap askscio/tap
-brew install devdock
+curl -fsSL https://raw.githubusercontent.com/askscio/devdock/main/install.sh | bash
 ```
 
-### macOS (Direct Download)
+### Manual Installation
 
-**Apple Silicon (M1/M2/M3):**
+Download the binary for your platform from [GitHub Releases](https://github.com/askscio/devdock/releases/latest):
+
+**macOS (Apple Silicon):**
 ```bash
 curl -L https://github.com/askscio/devdock/releases/download/v0.1.0/devdock-macos-arm64-v0.1.0 -o devdock
 chmod +x devdock
 sudo mv devdock /usr/local/bin/
 ```
 
-**Intel Macs:**
+**macOS (Intel):**
 ```bash
 curl -L https://github.com/askscio/devdock/releases/download/v0.1.0/devdock-macos-x86_64-v0.1.0 -o devdock
 chmod +x devdock
 sudo mv devdock /usr/local/bin/
 ```
 
-### Linux 
-
-x`**x86_64 (Any Linux distribution):**
+**Linux (x86_64):**
 ```bash
 curl -L https://github.com/askscio/devdock/releases/download/v0.1.0/devdock-linux-x86_64-v0.1.0 -o devdock
 chmod +x devdock
 sudo mv devdock /usr/local/bin/
 ```
-
-Statically-linked musl binary - works on any Linux distribution with any GLIBC version.
 
 ### From Source
 
@@ -59,6 +58,12 @@ cargo install --path crates/devdock-cli
 
 ```bash
 devdock --version  # Should output: devdock 0.1.0
+```
+
+### Uninstall
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/askscio/devdock/main/uninstall.sh | bash
 ```
 
 ## 🎯 Quick Start

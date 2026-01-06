@@ -34,19 +34,21 @@ Use this checklist for every DevDock release.
   - [ ] Linux x86_64
 - [ ] Verify checksums match
 
-## Homebrew Formula (if using Homebrew tap)
+## Verify Installation Methods
 
-- [ ] Clone homebrew-tap repo
-- [ ] Update `Formula/devdock.rb`:
-  - [ ] Update version number
-  - [ ] Update URLs for new release
-  - [ ] Update SHA256 checksums (from GitHub release checksums.txt)
-- [ ] Commit and push formula
-- [ ] Test Homebrew installation:
+- [ ] Test the one-line installer:
   ```bash
-  brew uninstall devdock  # if installed
-  brew install YOUR_ORG/tap/devdock
+  curl -fsSL https://raw.githubusercontent.com/askscio/devdock/main/install.sh | bash
   devdock --version
+  ```
+- [ ] Test manual download and verify checksums:
+  ```bash
+  # Download binary for your platform
+  curl -L https://github.com/askscio/devdock/releases/download/vX.Y.Z/devdock-macos-arm64-vX.Y.Z -o devdock
+  
+  # Verify checksum
+  curl -L https://github.com/askscio/devdock/releases/download/vX.Y.Z/checksums.txt
+  shasum -a 256 devdock
   ```
 
 ## Post-Release

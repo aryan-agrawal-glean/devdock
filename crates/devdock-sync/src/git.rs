@@ -41,12 +41,10 @@ pub fn list_all_files(repo_path: &Path) -> Result<Vec<PathBuf>> {
         .git_exclude(true)
         .build();
     
-    for entry in walker {
-        if let Ok(entry) = entry {
-            if entry.path().is_file() {
-                if let Ok(rel_path) = entry.path().strip_prefix(repo_path) {
-                    files.push(rel_path.to_path_buf());
-                }
+    for entry in walker.flatten() {
+        if entry.path().is_file() {
+            if let Ok(rel_path) = entry.path().strip_prefix(repo_path) {
+                files.push(rel_path.to_path_buf());
             }
         }
     }
