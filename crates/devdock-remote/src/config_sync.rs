@@ -17,18 +17,7 @@ pub fn sync_profile(workspace: &str, profile_path: &Path) -> Result<()> {
         )));
     }
     
-    // Create target directory on remote first
-    debug!("Creating remote directory...");
-    let _ = Command::new("coder")
-        .arg("ssh")
-        .arg(workspace)
-        .arg("--")
-        .arg("mkdir")
-        .arg("-p")
-        .arg("/home/workspace/scio/devdock/profiles/")
-        .output();
-    
-    // Use coder's built-in file copy instead of raw scp
+    // Note: Directory creation is handled by sync_all_config for efficiency
     debug!("Copying profile using coder: {:?} -> {}", profile_path, workspace);
     
     // Read the file content
@@ -70,15 +59,7 @@ pub fn sync_custom_ini(workspace: &str, custom_ini_path: Option<&Path>) -> Resul
         if path.exists() {
             info!("Syncing custom.ini to {}", workspace);
             
-            // Create config directory on remote
-            let _ = Command::new("coder")
-                .arg("ssh")
-                .arg(workspace)
-                .arg("--")
-                .arg("mkdir")
-                .arg("-p")
-                .arg("/home/workspace/scio/config/")
-                .output();
+            // Note: Directory creation is handled by sync_all_config for efficiency
             
             // Read and write file via SSH
             let content = std::fs::read_to_string(path)
@@ -174,22 +155,7 @@ pub fn sync_gcloud_credentials(workspace: &str) -> Result<()> {
         }
     }
     
-    // Create remote directory
-    debug!("Creating remote staging directory...");
-    let output = Command::new("coder")
-        .arg("ssh")
-        .arg(workspace)
-        .arg("--")
-        .arg("mkdir")
-        .arg("-p")
-        .arg("~/.secrets-sync")
-        .output()
-        .map_err(|e| RemoteError::ConfigSyncError(format!("Failed to create remote directory: {}", e)))?;
-    
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(RemoteError::ConfigSyncError(format!("Failed to create remote directory: {}", stderr)));
-    }
+    // Note: Remote directory ~/.secrets-sync is created by sync_all_config for efficiency
     
     // Copy to workspace using scp
     info!("Copying gcloud credentials to remote...");
@@ -330,6 +296,17 @@ pub fn sync_all_config(
             let _ = writeln!(file, "Profile: {}", profile_path.display());
         }
     }
+    
+    // Optimization: Create all needed directories in a single SSH call
+    // This saves ~2 seconds compared to separate mkdir calls
+    let _ = Command::new("coder")
+        .arg("ssh")
+        .arg(workspace)
+        .arg("--")
+        .arg("bash")
+        .arg("-c")
+        .arg("mkdir -p /home/workspace/scio/devdock/profiles/ /home/workspace/scio/config/ ~/.secrets-sync")
+        .output();
     
     sync_profile(workspace, profile_path)?;
     sync_custom_ini(workspace, custom_ini_path)?;

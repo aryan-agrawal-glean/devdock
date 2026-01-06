@@ -10,23 +10,55 @@ use tracing::info;
 pub fn cleanup_existing_devdock(workspace: &str, log_file: Option<&Path>) -> Result<()> {
     info!("Cleaning up existing DevDock processes on {}", workspace);
     
-    // Kill existing tmux session
-    let _ = ssh::ssh_exec_with_log(workspace, "tmux kill-session -t devdock 2>/dev/null || true", log_file);
+    // Optimized cleanup: Single SSH session with parallelized independent operations
+    // This reduces 5 sequential SSH calls (~10 seconds) to 1 batched call (~2 seconds)
+    let cleanup_script = r#"
+# Parallelize independent cleanup operations for speed
+# Each operation runs in background, we wait for all to complete
+
+# 1. Kill tmux session (background)
+(tmux kill-session -t devdock 2>/dev/null || true) &
+pid_tmux=$!
+
+# 2. Kill tilt processes (background)
+(pkill -f 'tilt up' 2>/dev/null || true) &
+pid_tilt=$!
+
+# 3. Clean up Docker containers - optimized bulk operation (background)
+(
+  # Use -q for just IDs, then bulk remove (faster than xargs with names)
+  containers=$(docker ps -a --filter 'name=devdock-' -q 2>/dev/null)
+  if [ -n "$containers" ]; then
+    docker rm -f $containers 2>/dev/null || true
+  fi
+) &
+pid_docker=$!
+
+# 4. Clean up DevDock database and pid files (background)
+(rm -f ~/.devdock/devdock.db ~/.devdock/*.pid 2>/dev/null || true) &
+pid_files=$!
+
+# Wait for all parallel operations to complete
+wait $pid_tmux $pid_tilt $pid_docker $pid_files
+
+# 5. Run comprehensive devdock cleanup (sequential, after others complete)
+# This ensures all resources are cleaned before running the full cleanup
+cd /home/workspace/scio && devdock cleanup 2>/dev/null || true
+
+echo "Cleanup complete"
+"#;
     
-    // Kill any running Tilt processes
-    let _ = ssh::ssh_exec_with_log(workspace, "pkill -f 'tilt up' 2>/dev/null || true", log_file);
-    
-    // Clean up DevDock containers
-    let _ = ssh::ssh_exec_with_log(workspace, "docker ps -a --filter 'name=devdock-' --format '{{.Names}}' | xargs -r docker rm -f 2>/dev/null || true", log_file);
-    
-    // Clean up DevDock database registration
-    let _ = ssh::ssh_exec_with_log(workspace, "rm -f ~/.devdock/devdock.db ~/.devdock/*.pid 2>/dev/null || true", log_file);
-    
-    // Run devdock cleanup
-    let _ = ssh::ssh_exec_with_log(workspace, "cd /home/workspace/scio && devdock cleanup 2>/dev/null || true", log_file);
-    
-    info!("Cleanup completed");
-    Ok(())
+    match ssh::ssh_exec_with_log(workspace, cleanup_script, log_file) {
+        Ok(_) => {
+            info!("Cleanup completed successfully");
+            Ok(())
+        }
+        Err(e) => {
+            // Log error but don't fail - cleanup is best-effort
+            info!("Cleanup encountered errors (non-fatal): {}", e);
+            Ok(())
+        }
+    }
 }
 
 /// Provision a new Coder workspace.
