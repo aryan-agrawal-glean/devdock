@@ -61,7 +61,7 @@ pub async fn start_remote_devdock(
     } else {
         format!(
             "cd /home/workspace/scio && export DEVDOCK_ID={} && export DEVDOCK_PORT_OFFSET={} && tmux new-session -d -s devdock 'devdock start {}'",
-            devdock_id, offset, profile
+            devdock_id, offset
         )
     };
     
@@ -104,9 +104,9 @@ pub async fn start_remote_devdock(
         }
     }
     
-    // 3. Wait for DevDock tmux session to be running
-    println!("  Waiting for DevDock tmux session to start...");
-    let timeout = Duration::from_secs(120);
+    // 3. Wait for Tilt process to start (check if port 10350 is in use)
+    println!("  Waiting for Tilt to start (checking port 10350)...");
+    let timeout = Duration::from_secs(30);
     let start = std::time::Instant::now();
     let mut attempts = 0;
     
@@ -114,48 +114,38 @@ pub async fn start_remote_devdock(
         attempts += 1;
         let elapsed = start.elapsed().as_secs();
         
-        // Check if tmux session exists (using grep -q which sets exit code)
-        match ssh::ssh_check(workspace, "tmux list-sessions 2>/dev/null | grep -q devdock", log_file) {
+        // Check if Tilt is listening on port 10350 using lsof
+        match ssh::ssh_check(workspace, "lsof -i:10350 >/dev/null 2>&1", log_file) {
             Ok(true) => {
-                println!("  ✓ DevDock tmux session started!");
-                println!("\n  To view DevDock logs:");
-                println!("    coder ssh {}", workspace);
-                println!("    tmux attach -t devdock");
+                println!("  ✓ Tilt process is running on port 10350!");
                 break;
             },
             Ok(false) => {
-                // Not found yet, continue waiting
+                // Not running yet, continue waiting
             },
             Err(_) => {
                 // Error executing command, continue waiting
             }
         }
         
-        // Print progress every 10 seconds
-        if elapsed > 0 && elapsed % 10 == 0 {
-            println!("  Still waiting... ({}s elapsed, {} attempts)", elapsed, attempts);
+        // Print progress every 5 seconds
+        if elapsed > 0 && elapsed % 5 == 0 {
+            println!("  Still waiting for Tilt... ({}s elapsed)", elapsed);
         }
         
         if start.elapsed() > timeout {
-            eprintln!("  ❌ ERROR: DevDock did not start in time (checked {} times)", attempts);
-            
-            // Try to get tmux session list for debugging
-            if let Ok(sessions) = ssh::ssh_exec_with_log(workspace, "tmux list-sessions 2>&1 || echo 'No tmux sessions'", log_file) {
-                eprintln!("  Tmux sessions: {}", sessions.trim());
-            }
-            
-            eprintln!("  Debug steps:");
-            eprintln!("    1. SSH into workspace: coder ssh {}", workspace);
-            eprintln!("    2. Check tmux sessions: tmux list-sessions");
-            eprintln!("    3. Try starting manually: cd /home/workspace/scio && ./scio devdock -p {}", profile);
-            return Err(RemoteError::CommandFailed(format!(
-                "DevDock did not start in time after {} attempts",
-                attempts
-            )));
+            eprintln!("  ⚠ Warning: Tilt not detected on port 10350 after 30 seconds");
+            eprintln!("  This may be normal if services are still starting up");
+            eprintln!("  Continuing to wait for Tilt UI to be ready...");
+            break;
         }
         
-        sleep(Duration::from_secs(5));
+        sleep(Duration::from_secs(2));
     }
+    
+    println!("\n  To view DevDock logs:");
+    println!("    coder ssh {}", workspace);
+    println!("    tmux attach -t devdock");
     
     // 4. Wait for Tilt UI to be ready on remote
     println!("\n  Waiting for Tilt UI to start on remote (checking port 10350)...");
