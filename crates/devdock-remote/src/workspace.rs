@@ -53,14 +53,15 @@ pub async fn start_remote_devdock(
     println!("  ✓ Configuration synced");
     
     // 2. Start DevDock in tmux session on remote
+    // Use full path to devdock and pass environment variables into tmux session
     let start_script = if let Some(svc) = services {
         format!(
-            "cd /home/workspace/scio && export DEVDOCK_ID={} && export DEVDOCK_PORT_OFFSET={} && tmux new-session -d -s devdock 'devdock start {} -s {}'",
+            "cd /home/workspace/scio && tmux new-session -d -s devdock 'export DEVDOCK_ID={} && export DEVDOCK_PORT_OFFSET={} && /usr/local/bin/devdock start {} -s {} 2>&1 | tee /tmp/devdock-start.log'",
             devdock_id, offset, profile, svc
         )
     } else {
         format!(
-            "cd /home/workspace/scio && export DEVDOCK_ID={} && export DEVDOCK_PORT_OFFSET={} && tmux new-session -d -s devdock 'devdock start {}'",
+            "cd /home/workspace/scio && tmux new-session -d -s devdock 'export DEVDOCK_ID={} && export DEVDOCK_PORT_OFFSET={} && /usr/local/bin/devdock start {} 2>&1 | tee /tmp/devdock-start.log'",
             devdock_id, offset, profile
         )
     };
@@ -101,6 +102,31 @@ pub async fn start_remote_devdock(
                 eprintln!("  ❌ ERROR: DevDock start command failed: {}", e);
                 return Err(e);
             }
+        }
+    }
+    
+    // Wait a moment for tmux session to initialize
+    sleep(Duration::from_secs(2));
+    
+    // Verify tmux session exists
+    match ssh::ssh_check(workspace, "tmux list-sessions 2>/dev/null | grep -q devdock", log_file) {
+        Ok(true) => {
+            println!("  ✓ tmux session 'devdock' is running");
+        },
+        Ok(false) => {
+            eprintln!("  ⚠ Warning: tmux session 'devdock' not found");
+            eprintln!("  Checking startup logs...");
+            
+            // Try to get the startup logs
+            if let Ok(logs) = ssh::ssh_exec_with_log(workspace, "cat /tmp/devdock-start.log 2>/dev/null || echo 'No logs found'", log_file) {
+                eprintln!("  Startup logs:\n{}", logs);
+            }
+            
+            eprintln!("  The session may have exited due to an error.");
+            eprintln!("  Try running manually: coder ssh {} -- 'cd /home/workspace/scio && /usr/local/bin/devdock start {}'", workspace, profile);
+        },
+        Err(_) => {
+            eprintln!("  ⚠ Warning: Could not verify tmux session");
         }
     }
     
