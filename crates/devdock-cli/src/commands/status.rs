@@ -93,7 +93,7 @@ async fn print_instance_status(state_manager: &StateManager, instance: &Instance
         // Check Tilt status
         println!("\n{}", "Tilt Status".bold());
         println!("{}", "─".repeat(50));
-        print_tilt_status()?;
+        print_tilt_status(&instance.mode, state_manager).await?;
     }
 
     // Always show quick access info
@@ -176,25 +176,50 @@ fn print_docker_status() -> Result<()> {
     Ok(())
 }
 
-fn print_tilt_status() -> Result<()> {
-    // Check if Tilt is running
-    let output = Command::new("pgrep")
-        .args(["-f", "tilt up"])
-        .output();
-
-    match output {
-        Ok(output) if output.status.success() => {
-            let pids = String::from_utf8_lossy(&output.stdout);
-            let pid_count = pids.lines().filter(|s| !s.is_empty()).count();
-            println!(
-                "  {} ({} process{})",
-                "Tilt is running".green(),
-                pid_count,
-                if pid_count == 1 { "" } else { "es" }
-            );
+async fn print_tilt_status(mode: &str, state_manager: &StateManager) -> Result<()> {
+    if mode == "remote" {
+        // For remote mode, check Tilt on the remote workspace
+        let workspace_path = std::env::current_dir()?.display().to_string();
+        
+        if let Ok(Some(instance)) = state_manager.get_instance_by_workspace(&workspace_path).await {
+            if let Ok(Some((workspace_name, _, _, _))) = state_manager.get_sync_session(&instance.id).await {
+                // Check Tilt on remote using lsof
+                let check_cmd = format!("coder ssh {} -- 'lsof -i:10350 >/dev/null 2>&1 && echo running || echo stopped'", workspace_name);
+                
+                if let Ok(output) = Command::new("bash")
+                    .args(["-c", &check_cmd])
+                    .output()
+                {
+                    let result = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                    if result == "running" {
+                        println!("  {} (on remote workspace)", "Tilt is running".green());
+                        return Ok(());
+                    }
+                }
+            }
         }
-        _ => {
-            println!("  {}", "Tilt is not running".yellow());
+        
+        println!("  {} (on remote workspace)", "Tilt status unknown".yellow());
+    } else {
+        // Local mode - check local process
+        let output = Command::new("pgrep")
+            .args(["-f", "tilt up"])
+            .output();
+
+        match output {
+            Ok(output) if output.status.success() => {
+                let pids = String::from_utf8_lossy(&output.stdout);
+                let pid_count = pids.lines().filter(|s| !s.is_empty()).count();
+                println!(
+                    "  {} ({} process{})",
+                    "Tilt is running".green(),
+                    pid_count,
+                    if pid_count == 1 { "" } else { "es" }
+                );
+            }
+            _ => {
+                println!("  {}", "Tilt is not running".yellow());
+            }
         }
     }
 

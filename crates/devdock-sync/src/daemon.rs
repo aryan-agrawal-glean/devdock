@@ -25,7 +25,7 @@ impl SyncDaemon {
         repo_path: PathBuf,
         full_mode: bool,
     ) -> Result<Self> {
-        let remote_path = PathBuf::from("~/scio");
+        let remote_path = PathBuf::from("/home/workspace/scio");
         
         let rsync_client = RsyncClient::new(
             workspace_name.clone(),

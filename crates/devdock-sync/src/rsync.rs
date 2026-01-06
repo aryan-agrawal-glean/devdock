@@ -40,11 +40,11 @@ impl RsyncClient {
             cmd.arg("--delete");
         }
         
-        // Add files-from stdin
+        // Add files-from stdin and rsync over SSH (coder sets up .ssh/config)
         cmd.arg("--files-from=-")
             .arg(&self.local_path)
             .arg(format!(
-                "coder:{}:{}",
+                "{}.coder:{}",
                 self.workspace_name,
                 self.remote_path.display()
             ))
@@ -89,7 +89,7 @@ impl RsyncClient {
             .arg("--exclude=bazel-*")
             .arg(format!("{}/", self.local_path.display()))
             .arg(format!(
-                "coder:{}:{}",
+                "{}.coder:{}",
                 self.workspace_name,
                 self.remote_path.display()
             ))

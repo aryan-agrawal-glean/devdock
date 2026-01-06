@@ -45,12 +45,97 @@ pub struct PortForwardManager {
 struct ProfileService {
     port: Option<u16>,
     debug_port: Option<u16>,
+    #[serde(rename = "type")]
+    service_type: Option<String>,
 }
 
 /// Profile structure (simplified).
 #[derive(Debug, Deserialize)]
 struct Profile {
     services: Option<HashMap<String, ProfileService>>,
+}
+
+/// Service config from devdock_config.json
+#[derive(Debug, Deserialize)]
+struct ServiceConfig {
+    env: Option<HashMap<String, serde_json::Value>>,
+    debug_port: Option<serde_json::Value>,
+}
+
+/// Read service port from devdock_config.json
+fn read_service_config_port(service_name: &str) -> Option<u16> {
+    let config_path = PathBuf::from(std::env::var("DEVDOCK_ROOT").unwrap_or_else(|_| ".".to_string()))
+        .join("devdock/config/services")
+        .join(service_name)
+        .join("devdock_config.json");
+    
+    if !config_path.exists() {
+        debug!("No config found for service: {} at {:?}", service_name, config_path);
+        return None;
+    }
+    
+    match fs::read_to_string(&config_path) {
+        Ok(contents) => {
+            if let Ok(config) = serde_json::from_str::<ServiceConfig>(&contents) {
+                // Try to get PORT from env
+                if let Some(env) = config.env {
+                    if let Some(port_value) = env.get("PORT") {
+                        // PORT can be a string or number
+                        if let Some(port_str) = port_value.as_str() {
+                            if let Ok(port) = port_str.parse::<u16>() {
+                                debug!("Found port {} for service {} from config", port, service_name);
+                                return Some(port);
+                            }
+                        } else if let Some(port_num) = port_value.as_u64() {
+                            debug!("Found port {} for service {} from config", port_num, service_name);
+                            return Some(port_num as u16);
+                        }
+                    }
+                }
+            }
+        }
+        Err(e) => {
+            debug!("Failed to read config for {}: {}", service_name, e);
+        }
+    }
+    
+    None
+}
+
+/// Read service debug port from devdock_config.json
+fn read_service_config_debug_port(service_name: &str) -> Option<u16> {
+    let config_path = PathBuf::from(std::env::var("DEVDOCK_ROOT").unwrap_or_else(|_| ".".to_string()))
+        .join("devdock/config/services")
+        .join(service_name)
+        .join("devdock_config.json");
+    
+    if !config_path.exists() {
+        return None;
+    }
+    
+    match fs::read_to_string(&config_path) {
+        Ok(contents) => {
+            if let Ok(config) = serde_json::from_str::<ServiceConfig>(&contents) {
+                if let Some(debug_port_value) = config.debug_port {
+                    // debug_port can be a string or number
+                    if let Some(port_str) = debug_port_value.as_str() {
+                        if let Ok(port) = port_str.parse::<u16>() {
+                            debug!("Found debug port {} for service {} from config", port, service_name);
+                            return Some(port);
+                        }
+                    } else if let Some(port_num) = debug_port_value.as_u64() {
+                        debug!("Found debug port {} for service {} from config", port_num, service_name);
+                        return Some(port_num as u16);
+                    }
+                }
+            }
+        }
+        Err(e) => {
+            debug!("Failed to read config for {}: {}", service_name, e);
+        }
+    }
+    
+    None
 }
 
 impl PortForwardManager {
@@ -83,8 +168,17 @@ impl PortForwardManager {
         // Extract service ports
         if let Some(services) = profile.services {
             for (service_name, service) in services {
-                // Add main service port
-                if let Some(port) = service.port {
+                // Skip if service type is not local
+                if let Some(ref service_type) = service.service_type {
+                    if service_type != "local" {
+                        debug!("Skipping non-local service: {}", service_name);
+                        continue;
+                    }
+                }
+                
+                // Add main service port (priority: explicit > config file)
+                let port = service.port.or_else(|| read_service_config_port(&service_name));
+                if let Some(port) = port {
                     mappings.push(PortMapping {
                         service_name: service_name.clone(),
                         port_type: PortType::Service,
@@ -92,10 +186,14 @@ impl PortForwardManager {
                         remote_port: port,
                         process_pid: None,
                     });
+                    debug!("Added port mapping for {}: {}->{}", service_name, offset + port, port);
+                } else {
+                    debug!("No port mapping found for service: {}", service_name);
                 }
                 
-                // Add debug port if present
-                if let Some(debug_port) = service.debug_port {
+                // Add debug port if present (priority: explicit > config file)
+                let debug_port = service.debug_port.or_else(|| read_service_config_debug_port(&service_name));
+                if let Some(debug_port) = debug_port {
                     mappings.push(PortMapping {
                         service_name: service_name.clone(),
                         port_type: PortType::Debug,
@@ -103,6 +201,7 @@ impl PortForwardManager {
                         remote_port: debug_port,
                         process_pid: None,
                     });
+                    debug!("Added debug port mapping for {}: {}->{}", service_name, offset + debug_port, debug_port);
                 }
             }
         }
