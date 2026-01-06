@@ -328,11 +328,9 @@ pub fn sync_all_config(
                     }
                 }
                 // Continue even if setting project fails
-            } else {
-                if let Some(log_path) = log_file {
-                    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(log_path) {
-                        let _ = writeln!(file, "✓ gcloud project set successfully");
-                    }
+            } else if let Some(log_path) = log_file {
+                if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(log_path) {
+                    let _ = writeln!(file, "✓ gcloud project set successfully");
                 }
             }
         }

@@ -75,6 +75,7 @@ pub async fn provision_workspace(config: &coder::CoderWorkspaceConfig) -> Result
 }
 
 /// Start DevDock on remote workspace with optional port forwarding.
+#[allow(clippy::too_many_arguments)]
 pub async fn start_remote_devdock(
     workspace: &str,
     profile: &str,
@@ -187,7 +188,7 @@ pub async fn start_remote_devdock(
         }
         
         // Print progress every 5 seconds
-        if elapsed > 0 && elapsed % 5 == 0 {
+        if elapsed > 0 && elapsed.is_multiple_of(5) {
             println!("  Still waiting for Tilt... ({}s elapsed)", elapsed);
         }
         
@@ -261,7 +262,7 @@ pub fn wait_for_tilt_ui(port: u16, timeout_secs: u64) -> Result<()> {
         }
         
         // Try to connect to Tilt UI
-        if let Ok(_) = std::net::TcpStream::connect(format!("127.0.0.1:{}", port)) {
+        if std::net::TcpStream::connect(format!("127.0.0.1:{}", port)).is_ok() {
             info!("Tilt UI is ready");
             println!("  ✓ Tilt UI is ready!");
             return Ok(());
