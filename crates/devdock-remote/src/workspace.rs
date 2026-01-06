@@ -129,31 +129,8 @@ pub async fn start_remote_devdock(
         }
     }
     
-    // Wait for tmux session to initialize and DevDock to start
-    println!("  Waiting for tmux session to initialize (5 seconds)...");
-    sleep(Duration::from_secs(5));
-    
-    // Verify tmux session exists
-    println!("  Verifying tmux session...");
-    match ssh::ssh_check(workspace, "tmux list-sessions 2>/dev/null | grep -q devdock", log_file) {
-        Ok(true) => {
-            println!("  ✓ tmux session 'devdock' is running");
-        },
-        Ok(false) => {
-            println!("  ⚠ Warning: tmux session 'devdock' not detected yet");
-            
-            // Try to list sessions for debugging
-            if let Ok(sessions) = ssh::ssh_exec_with_log(workspace, "tmux list-sessions 2>/dev/null || echo 'No sessions'", log_file) {
-                println!("  Available sessions: {}", sessions.trim());
-            }
-            
-            println!("  Continuing anyway, DevDock may still be starting...");
-        },
-        Err(e) => {
-            eprintln!("  ⚠ Warning: Could not verify tmux session: {}", e);
-            eprintln!("  Continuing anyway...");
-        }
-    }
+    println!("  ✓ DevDock command started in background");
+    println!("  To view logs: coder ssh {} -- tmux attach -t devdock", workspace);
     
     // 3. Wait for Tilt process to start (check if port 10350 is in use)
     println!("  Waiting for Tilt to start (checking port 10350)...");
