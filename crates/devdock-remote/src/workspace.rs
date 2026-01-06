@@ -140,8 +140,14 @@ pub async fn start_remote_devdock(
             println!("  ✓ tmux session 'devdock' is running");
         },
         Ok(false) => {
-            eprintln!("  ⚠ Warning: tmux session 'devdock' not found");
-            eprintln!("  Continuing anyway, DevDock may still be starting...");
+            println!("  ⚠ Warning: tmux session 'devdock' not detected yet");
+            
+            // Try to list sessions for debugging
+            if let Ok(sessions) = ssh::ssh_exec_with_log(workspace, "tmux list-sessions 2>/dev/null || echo 'No sessions'", log_file) {
+                println!("  Available sessions: {}", sessions.trim());
+            }
+            
+            println!("  Continuing anyway, DevDock may still be starting...");
         },
         Err(e) => {
             eprintln!("  ⚠ Warning: Could not verify tmux session: {}", e);
