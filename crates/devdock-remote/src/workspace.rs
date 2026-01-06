@@ -173,12 +173,7 @@ pub async fn start_remote_devdock(
     println!("    coder ssh {}", workspace);
     println!("    tmux attach -t devdock");
     
-    // 4. Wait for Tilt UI to be ready on remote
-    println!("\n  Waiting for Tilt UI to start on remote (checking port 10350)...");
-    println!("  (This may take 3-5 minutes as services start up)");
-    wait_for_tilt_on_remote(workspace, 300, log_file)?;
-    
-    // 5. Setup port forwarding AFTER Tilt is ready
+    // 4. Setup port forwarding
     println!("\n  Setting up port forwarding...");
     let port_mgr = if auto_forward {
         info!("Setting up auto port forwarding...");
@@ -203,58 +198,12 @@ pub async fn start_remote_devdock(
         None
     };
     
-    // 6. Final success message
+    // 5. Final success message
     println!("\n  ✅ DevDock is running!");
     println!("  Tilt UI: http://localhost:{}", offset + 10350);
     println!("  Logs: coder ssh {} && tmux attach -t devdock", workspace);
     
     Ok(port_mgr)
-}
-
-/// Wait for Tilt UI to start on the remote workspace.
-pub fn wait_for_tilt_on_remote(workspace: &str, timeout_secs: u64, log_file: Option<&Path>) -> Result<()> {
-    use std::time::Instant;
-    
-    info!("Waiting for Tilt UI on remote workspace");
-    
-    let start = Instant::now();
-    let timeout = Duration::from_secs(timeout_secs);
-    let mut last_update = 0u64;
-    
-    loop {
-        let elapsed = start.elapsed().as_secs();
-        
-        // Print progress every 30 seconds
-        if elapsed - last_update >= 30 {
-            println!("  Still waiting for Tilt... ({}s elapsed)", elapsed);
-            last_update = elapsed;
-        }
-        
-        // Check if Tilt UI port is listening on remote - curl returns 0 on 200
-        match ssh::ssh_check(workspace, "curl -s -f -o /dev/null http://localhost:10350 2>/dev/null", log_file) {
-            Ok(true) => {
-                println!("  ✓ Tilt UI is ready on remote!");
-                return Ok(());
-            },
-            Ok(false) => {
-                // Not ready yet, continue waiting
-            },
-            Err(_) => {
-                // Error executing command, continue waiting
-            }
-        }
-        
-        if start.elapsed() > timeout {
-            eprintln!("\n  ❌ Timeout: Tilt UI not ready on remote after {} seconds", timeout_secs);
-            eprintln!("  Debug: coder ssh {} -- 'curl -v http://localhost:10350'", workspace);
-            return Err(RemoteError::CommandFailed(format!(
-                "Tilt UI not ready on remote after {} seconds",
-                timeout_secs
-            )));
-        }
-        
-        sleep(Duration::from_secs(10));
-    }
 }
 
 /// Wait for Tilt UI to become accessible with progress updates.
