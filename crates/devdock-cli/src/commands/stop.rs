@@ -289,6 +289,7 @@ fn cleanup_temp_files(workspace_path: &str) -> Result<()> {
         format!("{}/.devdock/resource_monitor.yaml", home),
         format!("{}/.devdock/resource_monitor.log", home),
         format!("{}/.devdock/startup-monitor.pid", home),
+        format!("{}/.devdock/session_timing.txt", home),
     ];
 
     let mut cleaned_count = 0;
@@ -342,6 +343,19 @@ fn cleanup_temp_files(workspace_path: &str) -> Result<()> {
 /// Perform cleanup for remote DevDock instances
 async fn perform_remote_cleanup(state_manager: &StateManager, instance_id: &str, force: bool) -> Result<()> {
     output::info("Cleaning up remote DevDock resources...");
+    
+    // 0. Clean up local state files
+    let home = std::env::var("HOME").unwrap_or_default();
+    let state_files = vec![
+        format!("{}/.devdock/startup-monitor.pid", home),
+        format!("{}/.devdock/session_timing.txt", home),
+        format!("{}/.devdock/resource_monitor.yaml", home),
+        format!("{}/.devdock/resource_monitor.log", home),
+    ];
+    
+    for file_path in state_files {
+        let _ = std::fs::remove_file(&file_path);
+    }
     
     // 1. Stop file sync
     output::info("Stopping file sync...");
