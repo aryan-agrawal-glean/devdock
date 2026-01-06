@@ -153,7 +153,7 @@ pub async fn start_remote(
                     
                     // Create new workspace
                     logger.log_section("Creating Workspace")?;
-                    logger.log(&format!("Template: devdock-glean"))?;
+                    logger.log("Template: devdock-glean")?;
                     logger.log(&format!("Workspace name: {}", workspace_name))?;
                     logger.log(&format!("Region: {}", region))?;
                     
@@ -185,7 +185,7 @@ pub async fn start_remote(
         } else {
             // Workspace doesn't exist, create it
             logger.log_section("Creating Workspace")?;
-            logger.log(&format!("Template: devdock-glean"))?;
+            logger.log("Template: devdock-glean")?;
             logger.log(&format!("Workspace name: {}", workspace_name))?;
             logger.log(&format!("Region: {}", region))?;
             
@@ -228,7 +228,7 @@ pub async fn start_remote(
         profile,
         &profile_path,
         &instance_id,
-        services.as_deref(),
+        services,
         auto_forward,
         offset,
         Some(logger.path()),
@@ -353,7 +353,7 @@ fn get_current_worktree() -> Result<String> {
     use std::process::Command;
     
     let output = Command::new("git")
-        .args(&["rev-parse", "--show-toplevel"])
+        .args(["rev-parse", "--show-toplevel"])
         .output()?;
     
     if !output.status.success() {
@@ -368,7 +368,7 @@ fn get_current_branch() -> Result<String> {
     use std::process::Command;
     
     let output = Command::new("git")
-        .args(&["rev-parse", "--abbrev-ref", "HEAD"])
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
         .output()?;
     
     if !output.status.success() {

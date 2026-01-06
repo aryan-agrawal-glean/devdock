@@ -36,7 +36,7 @@ impl OperationLogger {
             log_path,
         };
         
-        logger.log_line(&format!("=== DevDock Remote Session Started ==="))?;
+        logger.log_line("=== DevDock Remote Session Started ===")?;
         logger.log_line(&format!("DevDock ID: {}", devdock_id))?;
         logger.log_line(&format!("Timestamp: {}", Local::now().to_rfc3339()))?;
         logger.log_line("")?;

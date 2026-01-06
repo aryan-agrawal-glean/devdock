@@ -471,7 +471,7 @@ async fn perform_remote_cleanup(state_manager: &StateManager, instance_id: &str,
                     
                     match Command::new("coder")
                         .arg("stop")
-                        .arg(&workspace_name)
+                        .arg(workspace_name)
                         .arg("--yes")
                         .output()
                     {
@@ -493,7 +493,7 @@ async fn perform_remote_cleanup(state_manager: &StateManager, instance_id: &str,
                     
                     match Command::new("coder")
                         .arg("delete")
-                        .arg(&workspace_name)
+                        .arg(workspace_name)
                         .arg("--yes")
                         .output()
                     {

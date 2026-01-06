@@ -90,7 +90,7 @@ pub fn format_elapsed(seconds: u64) -> String {
 pub fn notify(title: &str, message: &str) {
     use std::process::Command;
     let _ = Command::new("osascript")
-        .args(&[
+        .args([
             "-e",
             &format!(
                 r#"display notification "{}" with title "{}" sound name "Glass""#,
@@ -105,7 +105,7 @@ pub fn notify(title: &str, message: &str) {
 pub fn notify(title: &str, message: &str) {
     use std::process::Command;
     let _ = Command::new("notify-send")
-        .args(&[title, message])
+        .args([title, message])
         .output();
 }
 

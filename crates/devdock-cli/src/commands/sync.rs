@@ -95,7 +95,7 @@ fn get_current_worktree() -> Result<String> {
     use std::process::Command;
     
     let output = Command::new("git")
-        .args(&["rev-parse", "--show-toplevel"])
+        .args(["rev-parse", "--show-toplevel"])
         .output()?;
     
     if !output.status.success() {
