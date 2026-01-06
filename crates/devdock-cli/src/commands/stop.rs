@@ -357,6 +357,15 @@ async fn perform_remote_cleanup(state_manager: &StateManager, instance_id: &str,
         let _ = std::fs::remove_file(&file_path);
     }
     
+    // Get workspace name BEFORE cleaning up (we'll need it for prompts later)
+    let workspace_name = if let Ok(Some((ws_name, _, _, _))) = state_manager.get_sync_session(instance_id).await {
+        println!("DEBUG: Found workspace name from sync session: {}", ws_name);
+        Some(ws_name)
+    } else {
+        println!("DEBUG: No sync session found for instance {}", instance_id);
+        None
+    };
+    
     // 1. Stop file sync
     output::info("Stopping file sync...");
     if let Err(e) = sync_daemon::stop_daemon(instance_id) {
@@ -372,13 +381,6 @@ async fn perform_remote_cleanup(state_manager: &StateManager, instance_id: &str,
     
     // 2. Stop port forwards
     output::info("Stopping port forwards...");
-    
-    // Get workspace name to find all port-forward processes
-    let workspace_name = if let Ok(Some((ws_name, _, _, _))) = state_manager.get_sync_session(instance_id).await {
-        Some(ws_name)
-    } else {
-        None
-    };
     
     let mut stopped_count = 0;
     
@@ -406,7 +408,7 @@ async fn perform_remote_cleanup(state_manager: &StateManager, instance_id: &str,
     }
     
     // Also search for and kill any port-forward processes for this workspace
-    if let Some(ws_name) = workspace_name {
+    if let Some(ref ws_name) = workspace_name {
         #[cfg(unix)]
         {
             let output = Command::new("pgrep")
@@ -440,7 +442,8 @@ async fn perform_remote_cleanup(state_manager: &StateManager, instance_id: &str,
     }
     
     // 3. Prompt for workspace cleanup (skip prompt if force flag)
-    if let Ok(Some((workspace_name, _, _, _))) = state_manager.get_sync_session(instance_id).await {
+    println!("DEBUG: workspace_name = {:?}, force = {}", workspace_name, force);
+    if let Some(ref workspace_name) = workspace_name {
         if force {
             // With --force, just leave workspace running
             output::info(&format!("Workspace '{}' left running (use --force to skip prompts)", workspace_name));
