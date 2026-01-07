@@ -16,13 +16,22 @@ pub fn ssh_exec(workspace: &str, command: &str) -> Result<String> {
 pub fn ssh_exec_with_log(workspace: &str, command: &str, log_file: Option<&Path>) -> Result<String> {
     info!("Executing on {}: {}", workspace, command);
     
-    // Pass command directly to coder ssh - it handles the shell invocation
-    // The `coder ssh workspace -- command` format works for both simple and complex commands
+    // Match Python implementation: wrap command in single quotes
+    // Python does: coder ssh {workspace} -- '{command}'
+    // This allows multiline scripts and special characters to work correctly
+    let quoted_command = if command.contains('\'') {
+        // If command contains single quotes, escape them
+        let escaped = command.replace('\'', "'\\''");
+        format!("'{}'", escaped)
+    } else {
+        format!("'{}'", command)
+    };
+    
     let output = Command::new("coder")
         .arg("ssh")
         .arg(workspace)
         .arg("--")
-        .arg(command)
+        .arg(&quoted_command)
         .output()
         .map_err(|e| RemoteError::SshError(format!("Failed to execute SSH command: {}", e)))?;
     
@@ -62,12 +71,19 @@ pub fn ssh_check(workspace: &str, command: &str, log_file: Option<&Path>) -> Res
 pub fn ssh_check_with_timeout(workspace: &str, command: &str, log_file: Option<&Path>, timeout_secs: Option<u64>) -> Result<bool> {
     debug!("Checking on {}: {}", workspace, command);
     
-    // Pass command directly to coder ssh
+    // Match Python implementation: wrap command in single quotes
+    let quoted_command = if command.contains('\'') {
+        let escaped = command.replace('\'', "'\\''");
+        format!("'{}'", escaped)
+    } else {
+        format!("'{}'", command)
+    };
+    
     let mut cmd = Command::new("coder");
     cmd.arg("ssh")
         .arg(workspace)
         .arg("--")
-        .arg(command);
+        .arg(&quoted_command);
     
     let output = if let Some(timeout) = timeout_secs {
         // Spawn and wait with timeout
