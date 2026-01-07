@@ -19,19 +19,19 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 info() {
-    echo -e "${BLUE}ℹ${NC} $1"
+    echo -e "${BLUE}ℹ${NC} $1" >&2
 }
 
 success() {
-    echo -e "${GREEN}✓${NC} $1"
+    echo -e "${GREEN}✓${NC} $1" >&2
 }
 
 warning() {
-    echo -e "${YELLOW}⚠${NC} $1"
+    echo -e "${YELLOW}⚠${NC} $1" >&2
 }
 
 error() {
-    echo -e "${RED}✗${NC} $1"
+    echo -e "${RED}✗${NC} $1" >&2
     exit 1
 }
 
@@ -180,10 +180,10 @@ install_binary() {
 check_path() {
     if ! echo "$PATH" | grep -q "$INSTALL_DIR"; then
         warning "${INSTALL_DIR} is not in your PATH"
-        echo ""
-        echo "Add it to your shell profile:"
-        echo "  export PATH=\"${INSTALL_DIR}:\$PATH\""
-        echo ""
+        echo "" >&2
+        echo "Add it to your shell profile:" >&2
+        echo "  export PATH=\"${INSTALL_DIR}:\$PATH\"" >&2
+        echo "" >&2
     fi
 }
 
@@ -192,7 +192,6 @@ main() {
     echo ""
     echo "╔════════════════════════════════════════╗"
     echo "║       DevDock Installation Script      ║"
-    echo "║         (Private Repository)           ║"
     echo "╚════════════════════════════════════════╝"
     echo ""
     
@@ -217,9 +216,9 @@ main() {
         
         if [ "$current_version" = "${version#v}" ]; then
             info "You already have the latest version installed"
-            echo ""
+            echo "" >&2
             read -p "Reinstall anyway? [y/N] " -n 1 -r
-            echo ""
+            echo "" >&2
             if [[ ! $REPLY =~ ^[Yy]$ ]]; then
                 info "Installation cancelled"
                 exit 0
@@ -245,15 +244,15 @@ main() {
         check_path
     fi
     
-    echo ""
-    echo "════════════════════════════════════════"
-    echo ""
+    echo "" >&2
+    echo "════════════════════════════════════════" >&2
+    echo "" >&2
     success "Installation complete!"
-    echo ""
+    echo "" >&2
     info "Get started:"
-    echo "  devdock --help"
-    echo "  devdock start <profile>"
-    echo ""
+    echo "  devdock --help" >&2
+    echo "  devdock start <profile>" >&2
+    echo "" >&2
 }
 
 main "$@"
