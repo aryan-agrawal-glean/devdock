@@ -23,12 +23,6 @@ jobs:
             binary_name: devdock
             artifact_name: devdock-macos-arm64
           
-          - os: macos-13
-            platform: macos-x86_64
-            target: x86_64-apple-darwin
-            binary_name: devdock
-            artifact_name: devdock-macos-x86_64
-          
           - os: ubuntu-latest
             platform: linux-x86_64
             target: x86_64-unknown-linux-gnu
@@ -118,19 +112,13 @@ jobs:
           body: |
             ## DevDock ${{ github.ref_name }}
             
-            🎉 First release of DevDock in Rust!
+            🎉 New release of DevDock!
             
             ### ⚡ Quick Install
             
-            #### macOS (Apple Silicon)
+            #### macOS (Apple Silicon - M1/M2/M3)
             ```bash
             curl -L https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/devdock-macos-arm64-${{ github.ref_name }} -o devdock
-            chmod +x devdock && sudo mv devdock /usr/local/bin/
-            ```
-            
-            #### macOS (Intel)
-            ```bash
-            curl -L https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/devdock-macos-x86_64-${{ github.ref_name }} -o devdock
             chmod +x devdock && sudo mv devdock /usr/local/bin/
             ```
             
@@ -142,7 +130,7 @@ jobs:
             
             ### Verify Installation
             ```bash
-            devdock --version  # Should output: devdock 0.1.0
+            devdock --version
             ```
             
             ### 📚 Documentation
@@ -152,6 +140,10 @@ jobs:
             ### 🔒 Checksums
             
             See `checksums.txt` for SHA256 verification.
+            
+            ---
+            
+            **Note:** Intel Mac support (x86_64) has been discontinued as macOS-13 runners are retired. Apple Silicon Macs can run x86_64 binaries via Rosetta 2 if needed, but native ARM64 is recommended.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
