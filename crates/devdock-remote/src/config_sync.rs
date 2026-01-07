@@ -244,40 +244,79 @@ pub fn sync_gcloud_credentials(workspace: &str, verbose: bool) -> Result<()> {
     if verbose {
         println!("    → Verifying gcloud authentication...");
     }
-    let output = Command::new("coder")
+    
+    // Use Rust's spawn + timeout, pass command as single string (not via bash -c)
+    let mut child = Command::new("coder")
         .arg("ssh")
         .arg(workspace)
         .arg("--")
-        .arg("bash")
-        .arg("-c")
-        .arg("timeout 10s gcloud auth list --filter=status:ACTIVE --format='value(account)' 2>&1 || echo 'TIMEOUT'")
-        .output()
-        .map_err(|e| RemoteError::ConfigSyncError(format!("Failed to verify gcloud: {}", e)))?;
+        .arg("gcloud auth list --filter=status:ACTIVE --format=value(account)")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| RemoteError::ConfigSyncError(format!("Failed to spawn gcloud verify: {}", e)))?;
     
-    let auth_output = String::from_utf8_lossy(&output.stdout);
-    let auth_error = String::from_utf8_lossy(&output.stderr);
+    // Wait with 10 second timeout
+    use std::time::{Duration, Instant};
+    let start = Instant::now();
+    let timeout = Duration::from_secs(10);
     
-    if auth_output.contains("TIMEOUT") {
-        eprintln!("\n⚠️  WARNING: gcloud auth verification timed out!");
-        eprintln!("   This may indicate network issues or gcloud is hung.");
-        eprintln!("   Continuing anyway, but DevDock startup may fail.");
-        eprintln!();
-    } else if output.status.success() && !auth_output.trim().is_empty() {
-        info!("gcloud credentials synced and verified: {}", auth_output.trim());
-        if verbose {
-            println!("      (authenticated as: {})", auth_output.trim());
+    let result = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                // Process completed
+                let output = child.wait_with_output()
+                    .map_err(|e| RemoteError::ConfigSyncError(format!("Failed to read output: {}", e)))?;
+                break Some((status, output));
+            },
+            Ok(None) => {
+                // Still running
+                if start.elapsed() > timeout {
+                    // Timeout - kill it
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    break None;
+                }
+                std::thread::sleep(Duration::from_millis(200));
+            },
+            Err(e) => {
+                return Err(RemoteError::ConfigSyncError(format!("Failed to check status: {}", e)));
+            }
         }
-    } else {
-        // Credentials may be stale - warn but don't fail
-        if auth_error.contains("invalid_grant") || auth_error.contains("refreshing your current auth tokens") {
-            eprintln!("\n⚠️  WARNING: Synced gcloud credentials appear to be expired!");
-            eprintln!("   You will need to authenticate on the remote workspace:");
-            eprintln!("     1. coder ssh {}", workspace);
-            eprintln!("     2. gcloud auth login");
-            eprintln!("     3. gcloud auth application-default login");
+    };
+    
+    match result {
+        Some((status, output)) => {
+            let auth_output = String::from_utf8_lossy(&output.stdout);
+            let auth_error = String::from_utf8_lossy(&output.stderr);
+            
+            if status.success() && !auth_output.trim().is_empty() {
+                info!("gcloud credentials synced and verified: {}", auth_output.trim());
+                if verbose {
+                    println!("      (authenticated as: {})", auth_output.trim());
+                }
+            } else {
+                // Credentials may be stale - warn but don't fail
+                if auth_error.contains("invalid_grant") || auth_error.contains("refreshing your current auth tokens") {
+                    eprintln!("\n⚠️  WARNING: Synced gcloud credentials appear to be expired!");
+                    eprintln!("   You will need to authenticate on the remote workspace:");
+                    eprintln!("     1. coder ssh {}", workspace);
+                    eprintln!("     2. gcloud auth login");
+                    eprintln!("     3. gcloud auth application-default login");
+                    eprintln!();
+                } else if !auth_output.trim().is_empty() || !auth_error.trim().is_empty() {
+                    debug!("gcloud auth check completed but no active account: {}", auth_error);
+                    if verbose {
+                        println!("      (no active account found)");
+                    }
+                }
+            }
+        },
+        None => {
+            eprintln!("\n⚠️  WARNING: gcloud auth verification timed out after 10s!");
+            eprintln!("   This may indicate network issues or gcloud is hung.");
+            eprintln!("   Continuing anyway, but DevDock startup may fail.");
             eprintln!();
-        } else {
-            debug!("gcloud credentials copied but authentication not verified: {}", auth_error);
         }
     }
     
