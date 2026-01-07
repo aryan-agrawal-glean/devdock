@@ -104,8 +104,8 @@ pub async fn start_remote_devdock(
     
     // 1. Sync configuration files
     info!("Syncing configuration to remote...");
-    println!("  Syncing profile: {:?}", profile_path);
-    config_sync::sync_all_config(workspace, profile_path, None, log_file)?;
+    println!("  Syncing configuration files...");
+    config_sync::sync_all_config(workspace, profile_path, None, log_file, true)?;
     println!("  ✓ Configuration synced");
     
     // 1.5. Verify gcloud authentication (diagnostic)

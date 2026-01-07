@@ -7,8 +7,11 @@ use std::process::Command;
 use tracing::{debug, info};
 
 /// Sync profile YAML to remote workspace.
-pub fn sync_profile(workspace: &str, profile_path: &Path) -> Result<()> {
+pub fn sync_profile(workspace: &str, profile_path: &Path, verbose: bool) -> Result<()> {
     info!("Syncing profile to {}: {:?}", workspace, profile_path);
+    if verbose {
+        println!("    → Syncing profile...");
+    }
     
     if !profile_path.exists() {
         return Err(RemoteError::ConfigSyncError(format!(
@@ -54,10 +57,13 @@ pub fn sync_profile(workspace: &str, profile_path: &Path) -> Result<()> {
 }
 
 /// Sync custom.ini to remote workspace if it exists.
-pub fn sync_custom_ini(workspace: &str, custom_ini_path: Option<&Path>) -> Result<()> {
+pub fn sync_custom_ini(workspace: &str, custom_ini_path: Option<&Path>, verbose: bool) -> Result<()> {
     if let Some(path) = custom_ini_path {
         if path.exists() {
             info!("Syncing custom.ini to {}", workspace);
+            if verbose {
+                println!("    → Syncing custom.ini...");
+            }
             
             // Note: Directory creation is handled by sync_all_config for efficiency
             
@@ -92,8 +98,11 @@ pub fn sync_custom_ini(workspace: &str, custom_ini_path: Option<&Path>) -> Resul
 }
 
 /// Sync gcloud credentials to remote workspace.
-pub fn sync_gcloud_credentials(workspace: &str) -> Result<()> {
+pub fn sync_gcloud_credentials(workspace: &str, verbose: bool) -> Result<()> {
     info!("Syncing gcloud credentials to {}", workspace);
+    if verbose {
+        println!("    → Syncing gcloud credentials (this may take 10-20s)...");
+    }
     
     // Check if gcloud credentials exist locally
     let gcloud_dir = dirs::home_dir()
@@ -102,6 +111,9 @@ pub fn sync_gcloud_credentials(workspace: &str) -> Result<()> {
     
     if !gcloud_dir.exists() {
         debug!("No ~/.config/gcloud found; skipping gcloud sync");
+        if verbose {
+            println!("    → No local gcloud credentials found, skipping");
+        }
         return Ok(());
     }
     
@@ -159,6 +171,9 @@ pub fn sync_gcloud_credentials(workspace: &str) -> Result<()> {
     
     // Copy to workspace using scp
     info!("Copying gcloud credentials to remote...");
+    if verbose {
+        println!("      (copying files via scp...)");
+    }
     let gcloud_temp_str = gcloud_temp.to_string_lossy();
     let scp_target = format!("{}.coder:~/.secrets-sync/", workspace);
     
@@ -168,6 +183,12 @@ pub fn sync_gcloud_credentials(workspace: &str) -> Result<()> {
         .arg("StrictHostKeyChecking=no")
         .arg("-o")
         .arg("UserKnownHostsFile=/dev/null")
+        .arg("-o")
+        .arg("ConnectTimeout=30")
+        .arg("-o")
+        .arg("ServerAliveInterval=10")
+        .arg("-o")
+        .arg("ServerAliveCountMax=3")
         .arg("-r")
         .arg(gcloud_temp_str.as_ref())
         .arg(&scp_target)
@@ -220,21 +241,32 @@ pub fn sync_gcloud_credentials(workspace: &str) -> Result<()> {
     
     // Verify gcloud auth actually works (not just config exists)
     debug!("Verifying gcloud authentication...");
+    if verbose {
+        println!("    → Verifying gcloud authentication...");
+    }
     let output = Command::new("coder")
         .arg("ssh")
         .arg(workspace)
         .arg("--")
         .arg("bash")
         .arg("-c")
-        .arg("gcloud auth list --filter=status:ACTIVE --format='value(account)' 2>&1")
+        .arg("timeout 10 gcloud auth list --filter=status:ACTIVE --format='value(account)' 2>&1 || echo 'TIMEOUT'")
         .output()
         .map_err(|e| RemoteError::ConfigSyncError(format!("Failed to verify gcloud: {}", e)))?;
     
     let auth_output = String::from_utf8_lossy(&output.stdout);
     let auth_error = String::from_utf8_lossy(&output.stderr);
     
-    if output.status.success() && !auth_output.trim().is_empty() {
+    if auth_output.contains("TIMEOUT") {
+        eprintln!("\n⚠️  WARNING: gcloud auth verification timed out!");
+        eprintln!("   This may indicate network issues or gcloud is hung.");
+        eprintln!("   Continuing anyway, but DevDock startup may fail.");
+        eprintln!();
+    } else if output.status.success() && !auth_output.trim().is_empty() {
         info!("gcloud credentials synced and verified: {}", auth_output.trim());
+        if verbose {
+            println!("      (authenticated as: {})", auth_output.trim());
+        }
     } else {
         // Credentials may be stale - warn but don't fail
         if auth_error.contains("invalid_grant") || auth_error.contains("refreshing your current auth tokens") {
@@ -264,8 +296,11 @@ pub fn get_profile_project(profile_path: &Path) -> Result<String> {
 }
 
 /// Set gcloud project on remote workspace.
-pub fn set_gcloud_project(workspace: &str, project: &str) -> Result<()> {
+pub fn set_gcloud_project(workspace: &str, project: &str, verbose: bool) -> Result<()> {
     info!("Setting gcloud project to: {}", project);
+    if verbose {
+        println!("    → Setting gcloud project: {}...", project);
+    }
     
     let output = Command::new("coder")
         .arg("ssh")
@@ -296,6 +331,7 @@ pub fn sync_all_config(
     profile_path: &Path,
     custom_ini_path: Option<&Path>,
     log_file: Option<&Path>,
+    verbose: bool,
 ) -> Result<()> {
     use std::fs::OpenOptions;
     use std::io::Write;
@@ -311,6 +347,9 @@ pub fn sync_all_config(
     
     // Optimization: Create all needed directories in a single SSH call
     // This saves ~2 seconds compared to separate mkdir calls
+    if verbose {
+        println!("    → Creating directories on remote...");
+    }
     let _ = Command::new("coder")
         .arg("ssh")
         .arg(workspace)
@@ -320,9 +359,9 @@ pub fn sync_all_config(
         .arg("mkdir -p /home/workspace/scio/devdock/profiles/ /home/workspace/scio/config/ ~/.secrets-sync")
         .output();
     
-    sync_profile(workspace, profile_path)?;
-    sync_custom_ini(workspace, custom_ini_path)?;
-    sync_gcloud_credentials(workspace)?;
+    sync_profile(workspace, profile_path, verbose)?;
+    sync_custom_ini(workspace, custom_ini_path, verbose)?;
+    sync_gcloud_credentials(workspace, verbose)?;
     
     // Set gcloud project from profile
     match get_profile_project(profile_path) {
@@ -332,7 +371,7 @@ pub fn sync_all_config(
                     let _ = writeln!(file, "Setting gcloud project: {}", project);
                 }
             }
-            if let Err(e) = set_gcloud_project(workspace, &project) {
+            if let Err(e) = set_gcloud_project(workspace, &project, verbose) {
                 debug!("Failed to set gcloud project: {}", e);
                 if let Some(log_path) = log_file {
                     if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(log_path) {
@@ -361,6 +400,10 @@ pub fn sync_all_config(
         if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(log_path) {
             let _ = writeln!(file, "✓ Configuration sync completed");
         }
+    }
+    
+    if verbose {
+        println!("    ✓ All configuration files synced");
     }
     
     Ok(())
