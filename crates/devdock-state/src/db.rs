@@ -41,6 +41,7 @@ impl StateManager {
             CREATE TABLE IF NOT EXISTS instances (
                 id TEXT PRIMARY KEY,
                 workspace_path TEXT NOT NULL,
+                workspace_name TEXT,
                 branch TEXT NOT NULL,
                 profile TEXT NOT NULL,
                 mode TEXT NOT NULL,
@@ -53,6 +54,11 @@ impl StateManager {
         )
         .execute(&self.pool)
         .await?;
+        
+        // Add workspace_name column if it doesn't exist (migration for existing databases)
+        let _ = sqlx::query("ALTER TABLE instances ADD COLUMN workspace_name TEXT")
+            .execute(&self.pool)
+            .await;
 
         sqlx::query(
             r#"
@@ -110,12 +116,13 @@ impl StateManager {
     pub async fn register_instance(&self, instance: &Instance) -> Result<()> {
         sqlx::query(
             r#"
-            INSERT INTO instances (id, workspace_path, branch, profile, mode, status, port_base, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO instances (id, workspace_path, workspace_name, branch, profile, mode, status, port_base, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(&instance.id)
         .bind(&instance.workspace_path)
+        .bind(&instance.workspace_name)
         .bind(&instance.branch)
         .bind(&instance.profile)
         .bind(&instance.mode)
@@ -132,7 +139,7 @@ impl StateManager {
     /// Get an instance by ID.
     pub async fn get_instance(&self, id: &str) -> Result<Option<Instance>> {
         let row = sqlx::query(
-            "SELECT id, workspace_path, branch, profile, mode, status, port_base, created_at, updated_at FROM instances WHERE id = ?"
+            "SELECT id, workspace_path, workspace_name, branch, profile, mode, status, port_base, created_at, updated_at FROM instances WHERE id = ?"
         )
         .bind(id)
         .fetch_optional(&self.pool)
@@ -141,6 +148,7 @@ impl StateManager {
         Ok(row.map(|r| Instance {
             id: r.get("id"),
             workspace_path: r.get("workspace_path"),
+            workspace_name: r.get("workspace_name"),
             branch: r.get("branch"),
             profile: r.get("profile"),
             mode: r.get("mode"),
@@ -156,7 +164,7 @@ impl StateManager {
         // Prefer Running > Starting > Stopping > Stopped > Error
         // Order by status priority, then most recently updated
         let row = sqlx::query(
-            "SELECT id, workspace_path, branch, profile, mode, status, port_base, created_at, updated_at 
+            "SELECT id, workspace_path, workspace_name, branch, profile, mode, status, port_base, created_at, updated_at 
              FROM instances 
              WHERE workspace_path = ? 
              ORDER BY 
@@ -177,6 +185,7 @@ impl StateManager {
         Ok(row.map(|r| Instance {
             id: r.get("id"),
             workspace_path: r.get("workspace_path"),
+            workspace_name: r.get("workspace_name"),
             branch: r.get("branch"),
             profile: r.get("profile"),
             mode: r.get("mode"),
@@ -195,7 +204,7 @@ impl StateManager {
     /// List all instances.
     pub async fn list_instances(&self) -> Result<Vec<Instance>> {
         let rows = sqlx::query(
-            "SELECT id, workspace_path, branch, profile, mode, status, port_base, created_at, updated_at FROM instances ORDER BY created_at DESC"
+            "SELECT id, workspace_path, workspace_name, branch, profile, mode, status, port_base, created_at, updated_at FROM instances ORDER BY created_at DESC"
         )
         .fetch_all(&self.pool)
         .await?;
@@ -203,6 +212,7 @@ impl StateManager {
         Ok(rows.iter().map(|r| Instance {
             id: r.get("id"),
             workspace_path: r.get("workspace_path"),
+            workspace_name: r.get("workspace_name"),
             branch: r.get("branch"),
             profile: r.get("profile"),
             mode: r.get("mode"),

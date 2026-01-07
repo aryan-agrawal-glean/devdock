@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 pub struct Instance {
     pub id: String,
     pub workspace_path: String,
+    pub workspace_name: Option<String>, // For remote instances: coder workspace name
     pub branch: String,
     pub profile: String,
     pub mode: String, // "local" or "remote"

@@ -43,6 +43,7 @@ pub async fn start_remote(
     let instance = Instance {
         id: instance_id.clone(),
         workspace_path: worktree.clone(),
+        workspace_name: Some(workspace_name.clone()),
         branch: branch.clone(),
         profile: profile.to_string(),
         mode: "remote".to_string(),

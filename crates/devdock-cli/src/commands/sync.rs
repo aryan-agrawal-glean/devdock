@@ -85,9 +85,11 @@ async fn get_current_instance(state: &StateManager) -> Result<(String, String)> 
         .find(|i| i.workspace_path == worktree && i.status.as_str() == "running")
         .ok_or_else(|| anyhow!("No running DevDock instance found for current worktree"))?;
     
-    // Get workspace name from instance (for remote instances)
-    // For now, use instance ID as workspace name
-    Ok((instance.id.clone(), instance.id.clone()))
+    // Get workspace name from instance (for remote instances, use coder workspace name)
+    let workspace_name = instance.workspace_name.clone()
+        .unwrap_or_else(|| instance.id.clone());
+    
+    Ok((instance.id.clone(), workspace_name))
 }
 
 /// Get current git worktree path.

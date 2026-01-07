@@ -46,6 +46,7 @@ pub async fn execute(profile_name: &str, services: Option<&str>, _ci_mode: bool)
     let instance = Instance {
         id: Instance::generate_id(),
         workspace_path: workspace_path.clone(),
+        workspace_name: None, // Local instances don't need workspace name
         branch,
         profile: profile_name.to_string(),
         mode: "local".to_string(),
