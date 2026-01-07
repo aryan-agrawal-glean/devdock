@@ -381,6 +381,27 @@ enum InfraOpenSearchCommands {
 
 #[tokio::main]
 async fn main() {
+    // Check if we're being called as the sync daemon (hidden internal command)
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() >= 5 && args[1] == "__sync_daemon__" {
+        // Run as sync daemon process
+        let devdock_id = &args[2];
+        let workspace_name = &args[3];
+        let repo_path = std::path::PathBuf::from(&args[4]);
+        let full_mode = args.get(5).map(|s| s == "true").unwrap_or(false);
+        
+        if let Err(e) = devdock_sync::daemon::run_daemon_process(
+            devdock_id,
+            workspace_name,
+            &repo_path,
+            full_mode
+        ) {
+            eprintln!("Daemon process error: {}", e);
+            process::exit(1);
+        }
+        process::exit(0);
+    }
+    
     let cli = Cli::parse();
 
     // Set up logging

@@ -1,6 +1,6 @@
 //! Sync daemon for background file synchronization.
 
-use crate::{git, health::HealthMonitor, rsync::RsyncClient, watcher::FileWatcher, Result};
+use crate::{git, health::HealthMonitor, rsync::RsyncClient, watcher::FileWatcher, Result, SyncError};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -160,23 +160,27 @@ impl SyncDaemon {
                     
                     match self.rsync_client.sync_files(chunk, false) {
                         Ok(_) => {
-                            eprintln!("[SYNC] Batch {}/{} completed", batch_num + 1, total_batches);
+                            eprintln!("[SYNC] Batch {}/{} completed successfully", batch_num + 1, total_batches);
                         }
                         Err(e) => {
                             eprintln!("[SYNC] ERROR in batch {}/{}: {}", batch_num + 1, total_batches, e);
                             return Err(e);
                         }
                     }
+                    eprintln!("[SYNC] After batch {}/{} sync", batch_num + 1, total_batches);
                 }
                 info!("Modified files sync completed successfully");
-                eprintln!("[SYNC] Modified files sync completed!");
+                eprintln!("[SYNC] All batches completed!");
             }
             
+            eprintln!("[SYNC] About to record success in health monitor");
             // NOTE: Full baseline sync will happen later via file watcher
             // This approach prioritizes fast startup over completeness
         }
         
+        eprintln!("[SYNC] Recording success...");
         self.health_monitor.record_success();
+        eprintln!("[SYNC] Health monitor updated, returning Ok");
         Ok(())
     }
     
@@ -262,74 +266,100 @@ pub fn start_daemon_foreground(
     daemon.start()
 }
 
-/// Start sync daemon in background.
+/// Start sync daemon as a separate background process.
 pub fn start_daemon(
     devdock_id: &str,
     workspace_name: &str,
     repo_path: &Path,
     full_mode: bool,
 ) -> Result<u32> {
-    info!("Starting sync daemon in background");
+    use std::process::Command;
+    
+    info!("Starting sync daemon as background process");
     info!("DevDock ID: {}", devdock_id);
     info!("Workspace: {}", workspace_name);
     info!("Repo path: {}", repo_path.display());
     info!("Full mode: {}", full_mode);
     
-    // For now, we'll start it in a separate thread
-    // In production, this should be a proper daemon process
+    // Get the current executable path
+    let exe_path = std::env::current_exe()
+        .map_err(|e| SyncError::DaemonError(format!("Failed to get current exe: {}", e)))?;
+    
+    // Spawn daemon as a separate process using a hidden subcommand
+    let mut cmd = Command::new(exe_path);
+    cmd.arg("__sync_daemon__")  // Hidden internal command
+        .arg(devdock_id)
+        .arg(workspace_name)
+        .arg(repo_path)
+        .arg(if full_mode { "true" } else { "false" });
+    
+    // Redirect stdout/stderr - daemon will log to file
+    cmd.stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::inherit())  // Keep for debugging
+        .stderr(std::process::Stdio::inherit());  // Keep for debugging
+    
+    let child = cmd.spawn()
+        .map_err(|e| SyncError::DaemonError(format!("Failed to spawn daemon process: {}", e)))?;
+    
+    let pid = child.id();
+    eprintln!("[SYNC] Spawned daemon process with PID: {}", pid);
+    
+    // Don't wait for child - let it run independently
+    // The child will write its own PID file
+    
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    Ok(pid)
+}
+
+/// Run the sync daemon (called by hidden __sync_daemon__ command).
+pub fn run_daemon_process(
+    devdock_id: &str,
+    workspace_name: &str,
+    repo_path: &Path,
+    full_mode: bool,
+) -> Result<()> {
+    // This function runs in the daemonized child process
     let devdock_id = devdock_id.to_string();
     let workspace_name = workspace_name.to_string();
     let repo_path = repo_path.to_path_buf();
     
-    std::thread::spawn(move || {
-        // Set up panic hook to log panics
-        let default_panic = std::panic::take_hook();
-        std::panic::set_hook(Box::new(move |panic_info| {
-            eprintln!("SYNC DAEMON PANIC: {:?}", panic_info);
-            default_panic(panic_info);
-        }));
-        
-        // Get log file path for error logging
-        let pid_dir = SyncDaemon::get_pid_dir();
-        let log_file = pid_dir.join(format!("{}.log", devdock_id));
-        
-        let write_log = |msg: &str| {
-            use std::fs::OpenOptions;
-            use std::io::Write;
-            eprintln!("SYNC DAEMON: {}", msg);  // Also log to stderr for debugging
-            if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&log_file) {
-                let timestamp = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_secs())
-                    .unwrap_or(0);
-                let _ = writeln!(f, "[{}] {}", timestamp, msg);
-            }
-        };
-        
-        write_log(&format!("Sync daemon thread started for {}", devdock_id));
-        
-        let mut daemon = match SyncDaemon::new(devdock_id.clone(), workspace_name.clone(), repo_path.clone(), full_mode) {
-            Ok(d) => {
-                write_log(&format!("Sync daemon created successfully for {}", devdock_id));
-                d
-            },
-            Err(e) => {
-                write_log(&format!("ERROR: Failed to create sync daemon: {}", e));
-                return;
-            }
-        };
-        
-        if let Err(e) = daemon.start() {
-            write_log(&format!("ERROR: Sync daemon error: {}", e));
-        } else {
-            write_log("Sync daemon stopped normally");
+    // Get log file path for error logging
+    let pid_dir = SyncDaemon::get_pid_dir();
+    let log_file = pid_dir.join(format!("{}.log", devdock_id));
+    
+    let write_log = |msg: &str| {
+        use std::fs::OpenOptions;
+        use std::io::Write;
+        eprintln!("SYNC DAEMON: {}", msg);
+        if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&log_file) {
+            let timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let _ = writeln!(f, "[{}] {}", timestamp, msg);
         }
-    });
+    };
     
-    // Give the thread a moment to start
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    write_log(&format!("Sync daemon process started for {}", devdock_id));
     
-    Ok(std::process::id())
+    let mut daemon = match SyncDaemon::new(devdock_id.clone(), workspace_name.clone(), repo_path.clone(), full_mode) {
+        Ok(d) => {
+            write_log(&format!("Sync daemon created successfully for {}", devdock_id));
+            d
+        },
+        Err(e) => {
+            write_log(&format!("ERROR: Failed to create sync daemon: {}", e));
+            return Err(e);
+        }
+    };
+    
+    if let Err(e) = daemon.start() {
+        write_log(&format!("ERROR: Sync daemon error: {}", e));
+        Err(e)
+    } else {
+        write_log("Sync daemon stopped normally");
+        Ok(())
+    }
 }
 
 /// Stop sync daemon and clean up all related files.
