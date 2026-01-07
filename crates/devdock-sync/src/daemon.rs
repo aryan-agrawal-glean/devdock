@@ -105,23 +105,31 @@ impl SyncDaemon {
     
     /// Perform initial sync of all relevant files.
     fn initial_sync(&mut self) -> Result<()> {
+        eprintln!("[SYNC] Starting initial_sync, full_mode={}", self.full_mode);
         if self.full_mode {
             info!("Starting initial sync in full mode");
+            eprintln!("[SYNC] Calling rsync_client.sync_all()");
             self.rsync_client.sync_all()?;
         } else {
             info!("Listing git-tracked files for initial sync");
+            eprintln!("[SYNC] Listing git-tracked files...");
             let files = git::list_git_tracked_files(&self.repo_path)?;
             info!("Found {} git-tracked files to sync", files.len());
+            eprintln!("[SYNC] Found {} git-tracked files", files.len());
             
             // Sync in batches to avoid overwhelming rsync
             const BATCH_SIZE: usize = 5000;
             let total_batches = (files.len() + BATCH_SIZE - 1) / BATCH_SIZE;
+            eprintln!("[SYNC] Will sync in {} batches of up to {} files", total_batches, BATCH_SIZE);
             
             for (batch_num, chunk) in files.chunks(BATCH_SIZE).enumerate() {
                 info!("Syncing batch {}/{} ({} files)", batch_num + 1, total_batches, chunk.len());
+                eprintln!("[SYNC] Syncing batch {}/{} ({} files)", batch_num + 1, total_batches, chunk.len());
                 self.rsync_client.sync_files(chunk, false)?;
+                eprintln!("[SYNC] Batch {}/{} completed", batch_num + 1, total_batches);
             }
             info!("Initial sync completed successfully");
+            eprintln!("[SYNC] Initial sync completed!");
         }
         
         self.health_monitor.record_success();
