@@ -25,7 +25,7 @@ struct JiraIssueFields {
 }
 
 #[derive(Debug, Serialize)]
-struct JiraDescription {
+pub struct JiraDescription {
     version: u8,
     #[serde(rename = "type")]
     doc_type: String,
@@ -33,7 +33,7 @@ struct JiraDescription {
 }
 
 #[derive(Debug, Serialize)]
-struct JiraContent {
+pub struct JiraContent {
     #[serde(rename = "type")]
     content_type: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -43,7 +43,7 @@ struct JiraContent {
 }
 
 #[derive(Debug, Serialize)]
-struct JiraText {
+pub struct JiraText {
     #[serde(rename = "type")]
     text_type: String,
     text: String,
