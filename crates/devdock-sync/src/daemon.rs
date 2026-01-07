@@ -106,10 +106,22 @@ impl SyncDaemon {
     /// Perform initial sync of all relevant files.
     fn initial_sync(&mut self) -> Result<()> {
         if self.full_mode {
+            info!("Starting initial sync in full mode");
             self.rsync_client.sync_all()?;
         } else {
+            info!("Listing git-tracked files for initial sync");
             let files = git::list_git_tracked_files(&self.repo_path)?;
-            self.rsync_client.sync_files(&files, false)?;
+            info!("Found {} git-tracked files to sync", files.len());
+            
+            // Sync in batches to avoid overwhelming rsync
+            const BATCH_SIZE: usize = 5000;
+            let total_batches = (files.len() + BATCH_SIZE - 1) / BATCH_SIZE;
+            
+            for (batch_num, chunk) in files.chunks(BATCH_SIZE).enumerate() {
+                info!("Syncing batch {}/{} ({} files)", batch_num + 1, total_batches, chunk.len());
+                self.rsync_client.sync_files(chunk, false)?;
+            }
+            info!("Initial sync completed successfully");
         }
         
         self.health_monitor.record_success();
@@ -195,23 +207,39 @@ pub fn start_daemon(
     let repo_path = repo_path.to_path_buf();
     
     std::thread::spawn(move || {
-        info!("Sync daemon thread started for {}", devdock_id);
+        // Get log file path for error logging
+        let pid_dir = SyncDaemon::get_pid_dir();
+        let log_file = pid_dir.join(format!("{}.log", devdock_id));
+        
+        let write_log = |msg: &str| {
+            use std::fs::OpenOptions;
+            use std::io::Write;
+            if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&log_file) {
+                let timestamp = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                let _ = writeln!(f, "[{}] {}", timestamp, msg);
+            }
+        };
+        
+        write_log(&format!("Sync daemon thread started for {}", devdock_id));
         
         let mut daemon = match SyncDaemon::new(devdock_id.clone(), workspace_name.clone(), repo_path.clone(), full_mode) {
             Ok(d) => {
-                info!("Sync daemon created successfully for {}", devdock_id);
+                write_log(&format!("Sync daemon created successfully for {}", devdock_id));
                 d
             },
             Err(e) => {
-                error!("Failed to create sync daemon for {}: {}", devdock_id, e);
+                write_log(&format!("ERROR: Failed to create sync daemon: {}", e));
                 return;
             }
         };
         
         if let Err(e) = daemon.start() {
-            error!("Sync daemon error for {}: {}", devdock_id, e);
+            write_log(&format!("ERROR: Sync daemon error: {}", e));
         } else {
-            info!("Sync daemon stopped normally for {}", devdock_id);
+            write_log("Sync daemon stopped normally");
         }
     });
     
