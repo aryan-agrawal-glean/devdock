@@ -322,6 +322,7 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
         auto_forward,
         offset,
         Some(logger.path()),
+        verbose,
     )
     .await?;
     

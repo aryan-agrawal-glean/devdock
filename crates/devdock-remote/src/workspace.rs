@@ -85,6 +85,7 @@ pub async fn start_remote_devdock(
     auto_forward: bool,
     offset: u16,
     log_file: Option<&Path>,
+    verbose: bool,
 ) -> Result<Option<PortForwardManager>> {
     info!("Starting DevDock on remote workspace: {}", workspace);
     
@@ -104,9 +105,13 @@ pub async fn start_remote_devdock(
     
     // 1. Sync configuration files
     info!("Syncing configuration to remote...");
-    println!("  Syncing configuration files...");
-    config_sync::sync_all_config(workspace, profile_path, None, log_file, true)?;
-    println!("  ✓ Configuration synced");
+    if verbose {
+        println!("  Syncing configuration files...");
+    }
+    config_sync::sync_all_config(workspace, profile_path, None, log_file, verbose)?;
+    if verbose {
+        println!("  ✓ Configuration synced");
+    }
     
     // 1.5. Verify gcloud authentication (both regular and ADC)
     info!("Verifying gcloud authentication on remote...");
@@ -181,10 +186,12 @@ pub async fn start_remote_devdock(
     };
     
     info!("Starting DevDock in tmux session");
-    println!("  Starting DevDock on remote workspace...");
-    println!("  Profile: {}", profile);
-    println!("  DevDock ID: {}", &devdock_id[..8.min(devdock_id.len())]);
-    println!("  Port Offset: {}", offset);
+    if verbose {
+        println!("  Starting DevDock on remote workspace...");
+        println!("  Profile: {}", profile);
+        println!("  DevDock ID: {}", &devdock_id[..8.min(devdock_id.len())]);
+        println!("  Port Offset: {}", offset);
+    }
     
     match ssh::ssh_exec_with_log(workspace, &start_script, log_file) {
         Ok(output) => {
@@ -220,11 +227,15 @@ pub async fn start_remote_devdock(
         }
     }
     
-    println!("  ✓ DevDock command started in background");
-    println!("  To view logs: coder ssh {} -- tmux attach -t devdock", workspace);
+    if verbose {
+        println!("  ✓ DevDock command started in background");
+        println!("  To view logs: coder ssh {} -- tmux attach -t devdock", workspace);
+    }
     
     // 3. Verify DevDock is actually running (not failed immediately)
-    println!("  Verifying DevDock startup (waiting 5s)...");
+    if verbose {
+        println!("  Verifying DevDock startup (waiting 5s)...");
+    }
     sleep(Duration::from_secs(5)); // Give it time to start or fail
     
     // Check if tmux session still exists (with 10s timeout)
@@ -232,7 +243,9 @@ pub async fn start_remote_devdock(
     std::io::Write::flush(&mut std::io::stdout()).ok();
     match ssh::ssh_check_with_timeout(workspace, "tmux has-session -t devdock 2>/dev/null", log_file, Some(10)) {
         Ok(true) => {
-            println!(" ✓ DevDock tmux session is active");
+            if verbose {
+                println!(" ✓ DevDock tmux session is active");
+            }
         },
         Ok(false) => {
             println!();
@@ -254,7 +267,9 @@ pub async fn start_remote_devdock(
     }
     
     // 4. Wait for Tilt process to start (check if port 10350 is in use)
-    println!("  Waiting for Tilt to start (timeout: 60s)...");
+    if verbose {
+        println!("  Waiting for Tilt to start (timeout: 60s)...");
+    }
     let timeout = Duration::from_secs(60); // Increased timeout
     let start = std::time::Instant::now();
     let mut last_print = 0u64;
@@ -277,7 +292,9 @@ pub async fn start_remote_devdock(
         // Check if Tilt is listening on port 10350 using lsof (with 10s timeout)
         match ssh::ssh_check_with_timeout(workspace, "lsof -i:10350 >/dev/null 2>&1", log_file, Some(10)) {
             Ok(true) => {
-                println!("  ✓ Tilt process is running on port 10350!");
+                if verbose {
+                    println!("  ✓ Tilt process is running on port 10350!");
+                }
                 break;
             },
             Ok(false) => {
@@ -309,7 +326,9 @@ pub async fn start_remote_devdock(
     println!("    tmux attach -t devdock");
     
     // 4. Setup port forwarding
-    println!("\n  Setting up port forwarding...");
+    if verbose {
+        println!("\n  Setting up port forwarding...");
+    }
     let port_mgr = if auto_forward {
         info!("Setting up auto port forwarding...");
         let mut mgr = PortForwardManager::from_profile(
@@ -319,7 +338,9 @@ pub async fn start_remote_devdock(
             offset,
         )?;
         mgr.start_all_forwards()?;
-        println!("  ✓ Auto port forwarding enabled");
+        if verbose {
+            println!("  ✓ Auto port forwarding enabled");
+        }
         Some(mgr)
     } else {
         // Manual mode: only forward Tilt UI
@@ -329,14 +350,18 @@ pub async fn start_remote_devdock(
         let _child = coder::port_forward_single(workspace, tilt_port, 10350)?;
         // Keep the child process alive - it will be cleaned up when the program exits
         std::mem::forget(_child);
-        println!("  ✓ Tilt UI port forward started");
+        if verbose {
+            println!("  ✓ Tilt UI port forward started");
+        }
         None
     };
     
-    // 5. Final success message
-    println!("\n  ✅ DevDock is running!");
-    println!("  Tilt UI: http://localhost:{}", offset + 10350);
-    println!("  Logs: coder ssh {} && tmux attach -t devdock", workspace);
+    // 5. Final success message (only in verbose mode, caller shows better summary)
+    if verbose {
+        println!("\n  ✅ DevDock is running!");
+        println!("  Tilt UI: http://localhost:{}", offset + 10350);
+        println!("  Logs: coder ssh {} && tmux attach -t devdock", workspace);
+    }
     
     Ok(port_mgr)
 }
