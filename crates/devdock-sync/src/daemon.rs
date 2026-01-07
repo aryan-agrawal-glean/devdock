@@ -187,6 +187,29 @@ impl Drop for SyncDaemon {
     }
 }
 
+/// Start sync daemon in foreground (for debugging).
+pub fn start_daemon_foreground(
+    devdock_id: &str,
+    workspace_name: &str,
+    repo_path: &Path,
+    full_mode: bool,
+) -> Result<()> {
+    info!("Starting sync daemon in FOREGROUND");
+    info!("DevDock ID: {}", devdock_id);
+    info!("Workspace: {}", workspace_name);
+    info!("Repo path: {}", repo_path.display());
+    info!("Full mode: {}", full_mode);
+    
+    let mut daemon = SyncDaemon::new(
+        devdock_id.to_string(),
+        workspace_name.to_string(),
+        repo_path.to_path_buf(),
+        full_mode,
+    )?;
+    
+    daemon.start()
+}
+
 /// Start sync daemon in background.
 pub fn start_daemon(
     devdock_id: &str,
@@ -207,6 +230,13 @@ pub fn start_daemon(
     let repo_path = repo_path.to_path_buf();
     
     std::thread::spawn(move || {
+        // Set up panic hook to log panics
+        let default_panic = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |panic_info| {
+            eprintln!("SYNC DAEMON PANIC: {:?}", panic_info);
+            default_panic(panic_info);
+        }));
+        
         // Get log file path for error logging
         let pid_dir = SyncDaemon::get_pid_dir();
         let log_file = pid_dir.join(format!("{}.log", devdock_id));
@@ -214,6 +244,7 @@ pub fn start_daemon(
         let write_log = |msg: &str| {
             use std::fs::OpenOptions;
             use std::io::Write;
+            eprintln!("SYNC DAEMON: {}", msg);  // Also log to stderr for debugging
             if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&log_file) {
                 let timestamp = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
