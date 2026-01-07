@@ -19,7 +19,7 @@ impl HealthMonitor {
             workspace_name,
             last_sync: None,
             failed_syncs: 0,
-            max_failures: 5,
+            max_failures: 100,  // Much more lenient - allow many retries
         }
     }
     

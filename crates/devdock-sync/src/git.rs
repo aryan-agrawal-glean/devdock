@@ -30,8 +30,8 @@ const SYNC_FILENAMES: &[&str] = &[
     "pom.xml", "Makefile", "package.json", "pnpm-lock.yaml",
 ];
 
-/// Check if a file should be synced based on patterns.
-fn should_sync_file_pattern(path: &Path) -> bool {
+/// Check if a file should be synced based on patterns (monitored dirs + extensions).
+pub fn should_sync_file_by_pattern(path: &Path) -> bool {
     // Check if in monitored directory
     let path_str = path.to_string_lossy();
     let in_monitored_dir = MONITORED_DIRS.iter().any(|dir| path_str.starts_with(dir));
@@ -73,7 +73,7 @@ pub fn list_git_tracked_files(repo_path: &Path) -> Result<Vec<PathBuf>> {
         let path = PathBuf::from(String::from_utf8_lossy(&entry.path).to_string());
         let full_path = repo_path.join(&path);
         
-        if full_path.exists() && full_path.is_file() && should_sync_file_pattern(&path) {
+        if full_path.exists() && full_path.is_file() && should_sync_file_by_pattern(&path) {
             files.push(path);
         }
     }
@@ -154,7 +154,7 @@ pub fn list_git_modified_files(repo_path: &Path) -> Result<Vec<PathBuf>> {
         let full_path = repo_path.join(&path);
         
         // Only include existing files that match sync patterns
-        if full_path.exists() && full_path.is_file() && should_sync_file_pattern(&path) {
+        if full_path.exists() && full_path.is_file() && should_sync_file_by_pattern(&path) {
             files.push(path);
         }
     }
