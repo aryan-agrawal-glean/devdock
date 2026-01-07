@@ -37,9 +37,19 @@ pub struct JiraContent {
     #[serde(rename = "type")]
     content_type: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    attrs: Option<JiraAttrs>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     content: Option<Vec<JiraText>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     text: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct JiraAttrs {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    level: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    language: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -176,6 +186,10 @@ pub fn format_description(
     // User Description section
     content.push(JiraContent {
         content_type: "heading".to_string(),
+        attrs: Some(JiraAttrs {
+            level: Some(2),
+            language: None,
+        }),
         content: Some(vec![JiraText {
             text_type: "text".to_string(),
             text: "User Description".to_string(),
@@ -184,6 +198,7 @@ pub fn format_description(
     });
     content.push(JiraContent {
         content_type: "paragraph".to_string(),
+        attrs: None,
         content: Some(vec![JiraText {
             text_type: "text".to_string(),
             text: description.to_string(),
@@ -194,6 +209,10 @@ pub fn format_description(
     // Command Run section
     content.push(JiraContent {
         content_type: "heading".to_string(),
+        attrs: Some(JiraAttrs {
+            level: Some(2),
+            language: None,
+        }),
         content: Some(vec![JiraText {
             text_type: "text".to_string(),
             text: "Command Run".to_string(),
@@ -202,6 +221,10 @@ pub fn format_description(
     });
     content.push(JiraContent {
         content_type: "codeBlock".to_string(),
+        attrs: Some(JiraAttrs {
+            level: None,
+            language: Some("bash".to_string()),
+        }),
         content: Some(vec![JiraText {
             text_type: "text".to_string(),
             text: command.to_string(),
@@ -212,6 +235,10 @@ pub fn format_description(
     // Git Branch section
     content.push(JiraContent {
         content_type: "heading".to_string(),
+        attrs: Some(JiraAttrs {
+            level: Some(2),
+            language: None,
+        }),
         content: Some(vec![JiraText {
             text_type: "text".to_string(),
             text: "Git Branch".to_string(),
@@ -220,6 +247,7 @@ pub fn format_description(
     });
     content.push(JiraContent {
         content_type: "codeBlock".to_string(),
+        attrs: None,
         content: Some(vec![JiraText {
             text_type: "text".to_string(),
             text: git_branch.to_string(),
@@ -230,6 +258,10 @@ pub fn format_description(
     // System Information section
     content.push(JiraContent {
         content_type: "heading".to_string(),
+        attrs: Some(JiraAttrs {
+            level: Some(2),
+            language: None,
+        }),
         content: Some(vec![JiraText {
             text_type: "text".to_string(),
             text: "System Information".to_string(),
@@ -238,6 +270,7 @@ pub fn format_description(
     });
     content.push(JiraContent {
         content_type: "paragraph".to_string(),
+        attrs: None,
         content: Some(vec![JiraText {
             text_type: "text".to_string(),
             text: format!(
@@ -251,6 +284,10 @@ pub fn format_description(
     // Docker Containers section
     content.push(JiraContent {
         content_type: "heading".to_string(),
+        attrs: Some(JiraAttrs {
+            level: Some(2),
+            language: None,
+        }),
         content: Some(vec![JiraText {
             text_type: "text".to_string(),
             text: "Docker Containers".to_string(),
@@ -259,6 +296,10 @@ pub fn format_description(
     });
     content.push(JiraContent {
         content_type: "codeBlock".to_string(),
+        attrs: Some(JiraAttrs {
+            level: None,
+            language: Some("json".to_string()),
+        }),
         content: Some(vec![JiraText {
             text_type: "text".to_string(),
             text: serde_json::to_string_pretty(&system_info.docker).unwrap_or_default(),
@@ -270,6 +311,10 @@ pub fn format_description(
     if !config_files.is_empty() {
         content.push(JiraContent {
             content_type: "heading".to_string(),
+            attrs: Some(JiraAttrs {
+                level: Some(2),
+                language: None,
+            }),
             content: Some(vec![JiraText {
                 text_type: "text".to_string(),
                 text: "Configuration Files".to_string(),
@@ -279,6 +324,7 @@ pub fn format_description(
         for (filename, file_content) in config_files {
             content.push(JiraContent {
                 content_type: "paragraph".to_string(),
+                attrs: None,
                 content: Some(vec![JiraText {
                     text_type: "text".to_string(),
                     text: format!("File: {}", filename),
@@ -287,6 +333,7 @@ pub fn format_description(
             });
             content.push(JiraContent {
                 content_type: "codeBlock".to_string(),
+                attrs: None,
                 content: Some(vec![JiraText {
                     text_type: "text".to_string(),
                     text: file_content.clone(),
@@ -299,6 +346,10 @@ pub fn format_description(
     // Full System Details section
     content.push(JiraContent {
         content_type: "heading".to_string(),
+        attrs: Some(JiraAttrs {
+            level: Some(2),
+            language: None,
+        }),
         content: Some(vec![JiraText {
             text_type: "text".to_string(),
             text: "Full System Details".to_string(),
@@ -307,6 +358,10 @@ pub fn format_description(
     });
     content.push(JiraContent {
         content_type: "codeBlock".to_string(),
+        attrs: Some(JiraAttrs {
+            level: None,
+            language: Some("json".to_string()),
+        }),
         content: Some(vec![JiraText {
             text_type: "text".to_string(),
             text: serde_json::to_string_pretty(system_info).unwrap_or_default(),
