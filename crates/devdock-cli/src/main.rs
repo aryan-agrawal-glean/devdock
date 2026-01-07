@@ -471,15 +471,11 @@ async fn main() {
             description,
             command,
         } => {
-            if summary.is_some() && description.is_some() && command.is_some() {
-                commands::report::report_bug_with_details(
-                    summary.unwrap(),
-                    description.unwrap(),
-                    command.unwrap(),
-                )
-                .await
-            } else {
-                commands::report::report_bug().await
+            match (summary, description, command) {
+                (Some(s), Some(d), Some(c)) => {
+                    commands::report::report_bug_with_details(s, d, c).await
+                }
+                _ => commands::report::report_bug().await,
             }
         }
 
