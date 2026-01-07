@@ -10,12 +10,13 @@ use tracing::warn;
 pub fn get_config_files() -> Result<HashMap<String, String>> {
     let mut config_files = HashMap::new();
 
-    // Get DEVDOCK_ROOT or fallback to default
+    // Get DEVDOCK_ROOT or fallback to current directory
     let devdock_root = std::env::var("DEVDOCK_ROOT")
         .ok()
-        .and_then(|p| Some(PathBuf::from(p)))
+        .map(PathBuf::from)
         .or_else(|| {
-            dirs::home_dir().map(|h| h.join(".devdock"))
+            // Fallback: try current directory (matches Python behavior)
+            std::env::current_dir().ok()
         });
 
     if let Some(devdock_root) = devdock_root {
@@ -24,7 +25,7 @@ pub fn get_config_files() -> Result<HashMap<String, String>> {
         if let Ok(content) = fs::read_to_string(&devdock_ini) {
             config_files.insert("devdock.ini".to_string(), content);
         } else {
-            warn!("Could not read devdock.ini");
+            warn!("Could not read devdock.ini at {:?}", devdock_ini);
         }
 
         // Check for temp_profile.yaml
@@ -32,17 +33,15 @@ pub fn get_config_files() -> Result<HashMap<String, String>> {
         if let Ok(content) = fs::read_to_string(&temp_profile) {
             config_files.insert("temp_profile.yaml".to_string(), content);
         } else {
-            warn!("Could not read temp_profile.yaml");
+            warn!("Could not read temp_profile.yaml at {:?}", temp_profile);
         }
 
-        // Check for config/custom.ini
-        if let Some(parent) = devdock_root.parent() {
-            let custom_ini = parent.join("config/custom.ini");
-            if let Ok(content) = fs::read_to_string(&custom_ini) {
-                config_files.insert("config/custom.ini".to_string(), content);
-            } else {
-                warn!("Could not read config/custom.ini");
-            }
+        // Check for config/custom.ini (in workspace root)
+        let custom_ini = devdock_root.join("config/custom.ini");
+        if let Ok(content) = fs::read_to_string(&custom_ini) {
+            config_files.insert("config/custom.ini".to_string(), content);
+        } else {
+            warn!("Could not read config/custom.ini at {:?}", custom_ini);
         }
     }
 
