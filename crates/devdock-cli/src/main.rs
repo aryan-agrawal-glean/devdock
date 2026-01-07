@@ -177,6 +177,21 @@ enum Commands {
         #[command(subcommand)]
         command: SyncCommands,
     },
+
+    /// Report a bug to Jira (interactive)
+    Report {
+        /// Brief summary of the issue (skip interactive prompt)
+        #[arg(long)]
+        summary: Option<String>,
+
+        /// Detailed description of the issue (skip interactive prompt)
+        #[arg(long)]
+        description: Option<String>,
+
+        /// Command that was run when the issue occurred (skip interactive prompt)
+        #[arg(long)]
+        command: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -450,6 +465,23 @@ async fn main() {
             SyncCommands::Stop => commands::sync::stop().await,
             SyncCommands::Status => commands::sync::status().await,
         },
+
+        Commands::Report {
+            summary,
+            description,
+            command,
+        } => {
+            if summary.is_some() && description.is_some() && command.is_some() {
+                commands::report::report_bug_with_details(
+                    summary.unwrap(),
+                    description.unwrap(),
+                    command.unwrap(),
+                )
+                .await
+            } else {
+                commands::report::report_bug().await
+            }
+        }
 
         Commands::Service { command } => match command {
             ServiceCommands::Enable { name } => commands::service::enable(&name).await,

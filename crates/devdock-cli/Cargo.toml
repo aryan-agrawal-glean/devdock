@@ -17,6 +17,7 @@ devdock-state = { path = "../devdock-state" }
 devdock-codegen = { path = "../devdock-codegen" }
 devdock-remote = { path = "../devdock-remote" }
 devdock-sync = { path = "../devdock-sync" }
+devdock-diagnostics = { path = "../devdock-diagnostics" }
 
 anyhow.workspace = true
 clap.workspace = true

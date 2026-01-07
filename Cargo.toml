@@ -6,7 +6,7 @@ members = [
     "crates/devdock-state",
     "crates/devdock-codegen",
     "crates/devdock-remote",
-    "crates/devdock-sync",
+    "crates/devdock-sync", "crates/devdock-diagnostics",
 ]
 resolver = "2"
 

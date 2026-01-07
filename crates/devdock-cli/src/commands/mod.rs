@@ -11,6 +11,7 @@ pub mod ports;
 pub mod profile;
 pub mod plugin;
 pub mod remote;
+pub mod report;
 pub mod service;
 pub mod setup;
 pub mod start;
