@@ -16,17 +16,14 @@ pub fn ssh_exec(workspace: &str, command: &str) -> Result<String> {
 pub fn ssh_exec_with_log(workspace: &str, command: &str, log_file: Option<&Path>) -> Result<String> {
     info!("Executing on {}: {}", workspace, command);
     
-    // Use bash -c only for commands with shell features (redirections, pipes, etc.)
-    let mut cmd = Command::new("coder");
-    cmd.arg("ssh").arg(workspace).arg("--");
-    
-    if command.contains('>') || command.contains('|') || command.contains('&') || command.contains('$') || command.contains('(') {
-        cmd.arg("bash").arg("-c").arg(command);
-    } else {
-        cmd.arg(command);
-    }
-    
-    let output = cmd.output()
+    // Pass command directly to coder ssh - it handles the shell invocation
+    // The `coder ssh workspace -- command` format works for both simple and complex commands
+    let output = Command::new("coder")
+        .arg("ssh")
+        .arg(workspace)
+        .arg("--")
+        .arg(command)
+        .output()
         .map_err(|e| RemoteError::SshError(format!("Failed to execute SSH command: {}", e)))?;
     
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
@@ -65,17 +62,12 @@ pub fn ssh_check(workspace: &str, command: &str, log_file: Option<&Path>) -> Res
 pub fn ssh_check_with_timeout(workspace: &str, command: &str, log_file: Option<&Path>, timeout_secs: Option<u64>) -> Result<bool> {
     debug!("Checking on {}: {}", workspace, command);
     
+    // Pass command directly to coder ssh
     let mut cmd = Command::new("coder");
     cmd.arg("ssh")
         .arg(workspace)
-        .arg("--");
-    
-    // If command contains shell redirections or pipes, use bash -c
-    if command.contains('>') || command.contains('|') || command.contains('&') {
-        cmd.arg("bash").arg("-c").arg(command);
-    } else {
-        cmd.arg(command);
-    }
+        .arg("--")
+        .arg(command);
     
     let output = if let Some(timeout) = timeout_secs {
         // Spawn and wait with timeout

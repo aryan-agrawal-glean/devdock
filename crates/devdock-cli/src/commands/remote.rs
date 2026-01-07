@@ -218,9 +218,8 @@ pub async fn start_remote(
     logger.log(&format!("Profile: {}", profile))?;
     logger.log(&format!("Services filter: {:?}", services))?;
     logger.log(&format!("Command: devdock start {} {}", profile, services.map(|s| format!("-s {}", s)).unwrap_or_default()))?;
-    logger.log("This may take 3-5 minutes...")?;
     
-    output::info("Starting DevDock on remote (this may take 3-5 minutes)...");
+    output::info("Starting DevDock on remote...");
     logger.log(&format!("Remote logs: coder ssh {} -- tail -f /tmp/devdock-start.log", &workspace_name))?;
     
     let port_mgr = workspace::start_remote_devdock(

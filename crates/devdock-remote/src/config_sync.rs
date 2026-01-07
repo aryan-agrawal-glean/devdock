@@ -228,8 +228,6 @@ pub fn sync_gcloud_credentials(workspace: &str, verbose: bool) -> Result<()> {
         .arg("ssh")
         .arg(workspace)
         .arg("--")
-        .arg("bash")
-        .arg("-c")
         .arg(move_script)
         .output()
         .map_err(|e| RemoteError::ConfigSyncError(format!("Failed to move credentials: {}", e)))?;
