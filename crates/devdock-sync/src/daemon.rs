@@ -118,15 +118,24 @@ impl SyncDaemon {
             eprintln!("[SYNC] Found {} git-tracked files", files.len());
             
             // Sync in batches to avoid overwhelming rsync
-            const BATCH_SIZE: usize = 5000;
+            // Python uses MAX_BATCH_SIZE = 5, we use slightly larger for efficiency
+            const BATCH_SIZE: usize = 10;
             let total_batches = (files.len() + BATCH_SIZE - 1) / BATCH_SIZE;
             eprintln!("[SYNC] Will sync in {} batches of up to {} files", total_batches, BATCH_SIZE);
             
             for (batch_num, chunk) in files.chunks(BATCH_SIZE).enumerate() {
                 info!("Syncing batch {}/{} ({} files)", batch_num + 1, total_batches, chunk.len());
                 eprintln!("[SYNC] Syncing batch {}/{} ({} files)", batch_num + 1, total_batches, chunk.len());
-                self.rsync_client.sync_files(chunk, false)?;
-                eprintln!("[SYNC] Batch {}/{} completed", batch_num + 1, total_batches);
+                
+                match self.rsync_client.sync_files(chunk, false) {
+                    Ok(_) => {
+                        eprintln!("[SYNC] Batch {}/{} completed", batch_num + 1, total_batches);
+                    }
+                    Err(e) => {
+                        eprintln!("[SYNC] ERROR in batch {}/{}: {}", batch_num + 1, total_batches, e);
+                        return Err(e);
+                    }
+                }
             }
             info!("Initial sync completed successfully");
             eprintln!("[SYNC] Initial sync completed!");

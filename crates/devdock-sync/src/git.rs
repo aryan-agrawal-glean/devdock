@@ -6,9 +6,62 @@ use ignore::WalkBuilder;
 use std::path::{Path, PathBuf};
 use tracing::debug;
 
-/// List all git-tracked files in a repository.
+/// Directories to monitor for sync (matches Python MONITORED_DIRS).
+const MONITORED_DIRS: &[&str] = &[
+    "go/",
+    "python_scio/",
+    "typescript/",
+    "java/",
+    "com/askscio/proto/",
+    "config/",
+    "javatests/",
+    "openapi/",
+    "devdock/",
+];
+
+/// File patterns to sync (matches Python SYNC_PATTERNS).
+const SYNC_EXTENSIONS: &[&str] = &[
+    ".go", ".py", ".ts", ".tsx", ".java", ".proto", ".ini", ".json",
+    ".yaml", ".yml", ".sh", ".sql", ".gradle", ".properties",
+];
+
+/// File names to always sync.
+const SYNC_FILENAMES: &[&str] = &[
+    "pom.xml", "Makefile", "package.json", "pnpm-lock.yaml",
+];
+
+/// Check if a file should be synced based on patterns.
+fn should_sync_file_pattern(path: &Path) -> bool {
+    // Check if in monitored directory
+    let path_str = path.to_string_lossy();
+    let in_monitored_dir = MONITORED_DIRS.iter().any(|dir| path_str.starts_with(dir));
+    
+    if !in_monitored_dir {
+        return false;
+    }
+    
+    // Check filename
+    if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
+        if SYNC_FILENAMES.contains(&filename) {
+            return true;
+        }
+    }
+    
+    // Check extension
+    if let Some(ext_os) = path.extension() {
+        if let Some(ext) = ext_os.to_str() {
+            let ext_with_dot = format!(".{}", ext);
+            return SYNC_EXTENSIONS.contains(&ext_with_dot.as_str());
+        }
+    }
+    
+    false
+}
+
+/// List all git-tracked files in monitored directories that match sync patterns.
 pub fn list_git_tracked_files(repo_path: &Path) -> Result<Vec<PathBuf>> {
     debug!("Listing git-tracked files in {:?}", repo_path);
+    eprintln!("[SYNC-GIT] Listing git-tracked files in monitored directories...");
     
     let repo = Repository::open(repo_path)
         .map_err(|_| SyncError::GitRepoNotFound(repo_path.display().to_string()))?;
@@ -20,12 +73,13 @@ pub fn list_git_tracked_files(repo_path: &Path) -> Result<Vec<PathBuf>> {
         let path = PathBuf::from(String::from_utf8_lossy(&entry.path).to_string());
         let full_path = repo_path.join(&path);
         
-        if full_path.exists() && full_path.is_file() {
+        if full_path.exists() && full_path.is_file() && should_sync_file_pattern(&path) {
             files.push(path);
         }
     }
     
-    debug!("Found {} git-tracked files", files.len());
+    debug!("Found {} git-tracked files in monitored directories", files.len());
+    eprintln!("[SYNC-GIT] Found {} git-tracked files to sync (after filtering)", files.len());
     Ok(files)
 }
 
