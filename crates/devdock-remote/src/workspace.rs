@@ -108,6 +108,25 @@ pub async fn start_remote_devdock(
     config_sync::sync_all_config(workspace, profile_path, None, log_file)?;
     println!("  ✓ Configuration synced");
     
+    // 1.5. Verify gcloud authentication (diagnostic)
+    info!("Verifying gcloud authentication on remote...");
+    match ssh::ssh_exec_with_log(workspace, "gcloud auth list --filter=status:ACTIVE --format='value(account)' 2>&1 | head -1", log_file) {
+        Ok(account) if !account.trim().is_empty() => {
+            println!("  ✓ gcloud authenticated as: {}", account.trim());
+        },
+        Ok(_) => {
+            eprintln!("\n  ⚠ WARNING: No active gcloud account on remote workspace!");
+            eprintln!("  DevDock may fail during platform initialization.");
+            eprintln!("\n  To fix this, SSH to the workspace and run:");
+            eprintln!("    coder ssh {}", workspace);
+            eprintln!("    gcloud auth login");
+            eprintln!("    gcloud auth application-default login");
+        },
+        Err(e) => {
+            eprintln!("  ⚠ Warning: Could not verify gcloud auth: {}", e);
+        }
+    }
+    
     // 2. Start DevDock in tmux session on remote
     // Export environment variables before tmux, they will be inherited by the session
     let start_script = if let Some(svc) = services {
@@ -165,13 +184,54 @@ pub async fn start_remote_devdock(
     println!("  ✓ DevDock command started in background");
     println!("  To view logs: coder ssh {} -- tmux attach -t devdock", workspace);
     
-    // 3. Wait for Tilt process to start (check if port 10350 is in use)
+    // 3. Verify DevDock is actually running (not failed immediately)
+    println!("  Verifying DevDock startup...");
+    sleep(Duration::from_secs(5)); // Give it time to start or fail
+    
+    // Check if tmux session still exists
+    match ssh::ssh_check(workspace, "tmux has-session -t devdock 2>/dev/null", log_file) {
+        Ok(true) => {
+            println!("  ✓ DevDock tmux session is active");
+        },
+        Ok(false) => {
+            eprintln!("\n  ❌ ERROR: DevDock tmux session terminated unexpectedly!");
+            eprintln!("  The DevDock process may have failed during startup.");
+            eprintln!("\n  To debug:");
+            eprintln!("    1. SSH to workspace: coder ssh {}", workspace);
+            eprintln!("    2. Check logs: cat /tmp/devdock-start.log");
+            eprintln!("    3. Try manual start: devdock start {}", profile);
+            eprintln!("    4. Check gcloud auth: gcloud auth list");
+            return Err(RemoteError::CommandFailed(
+                "DevDock tmux session terminated - startup failed".to_string()
+            ));
+        },
+        Err(e) => {
+            eprintln!("  ⚠ Warning: Could not verify tmux session: {}", e);
+        }
+    }
+    
+    // 4. Wait for Tilt process to start (check if port 10350 is in use)
     println!("  Waiting for Tilt to start (checking port 10350)...");
-    let timeout = Duration::from_secs(30);
+    let timeout = Duration::from_secs(60); // Increased timeout
     let start = std::time::Instant::now();
     
     loop {
         let elapsed = start.elapsed().as_secs();
+        
+        // First verify tmux session is still alive
+        match ssh::ssh_check(workspace, "tmux has-session -t devdock 2>/dev/null", log_file) {
+            Ok(false) => {
+                eprintln!("\n  ❌ ERROR: DevDock tmux session died while waiting for Tilt!");
+                eprintln!("\n  To debug:");
+                eprintln!("    1. SSH to workspace: coder ssh {}", workspace);
+                eprintln!("    2. Check logs: cat /tmp/devdock-start.log");
+                eprintln!("    3. Try manual start: devdock start {}", profile);
+                return Err(RemoteError::CommandFailed(
+                    "DevDock process died during startup".to_string()
+                ));
+            },
+            _ => {}
+        }
         
         // Check if Tilt is listening on port 10350 using lsof
         match ssh::ssh_check(workspace, "lsof -i:10350 >/dev/null 2>&1", log_file) {
@@ -187,19 +247,19 @@ pub async fn start_remote_devdock(
             }
         }
         
-        // Print progress every 5 seconds
-        if elapsed > 0 && elapsed.is_multiple_of(5) {
+        // Print progress every 10 seconds
+        if elapsed > 0 && elapsed % 10 == 0 {
             println!("  Still waiting for Tilt... ({}s elapsed)", elapsed);
         }
         
         if start.elapsed() > timeout {
-            eprintln!("  ⚠ Warning: Tilt not detected on port 10350 after 30 seconds");
-            eprintln!("  This may be normal if services are still starting up");
-            eprintln!("  Continuing to wait for Tilt UI to be ready...");
+            eprintln!("\n  ⚠ Warning: Tilt not detected on port 10350 after {} seconds", timeout.as_secs());
+            eprintln!("  DevDock may still be starting up. Check logs:");
+            eprintln!("    coder ssh {} -- tmux attach -t devdock", workspace);
             break;
         }
         
-        sleep(Duration::from_secs(2));
+        sleep(Duration::from_secs(3));
     }
     
     println!("\n  To view DevDock logs:");

@@ -218,23 +218,35 @@ pub fn sync_gcloud_credentials(workspace: &str) -> Result<()> {
         debug!("Warning during credential move: {}", stderr);
     }
     
-    // Verify gcloud auth
-    debug!("Verifying gcloud configuration...");
+    // Verify gcloud auth actually works (not just config exists)
+    debug!("Verifying gcloud authentication...");
     let output = Command::new("coder")
         .arg("ssh")
         .arg(workspace)
         .arg("--")
-        .arg("gcloud")
-        .arg("config")
-        .arg("configurations")
-        .arg("list")
+        .arg("bash")
+        .arg("-c")
+        .arg("gcloud auth list --filter=status:ACTIVE --format='value(account)' 2>&1")
         .output()
         .map_err(|e| RemoteError::ConfigSyncError(format!("Failed to verify gcloud: {}", e)))?;
     
-    if output.status.success() {
-        info!("gcloud credentials synced and verified");
+    let auth_output = String::from_utf8_lossy(&output.stdout);
+    let auth_error = String::from_utf8_lossy(&output.stderr);
+    
+    if output.status.success() && !auth_output.trim().is_empty() {
+        info!("gcloud credentials synced and verified: {}", auth_output.trim());
     } else {
-        debug!("gcloud credentials copied but configuration not verified");
+        // Credentials may be stale - warn but don't fail
+        if auth_error.contains("invalid_grant") || auth_error.contains("refreshing your current auth tokens") {
+            eprintln!("\n⚠️  WARNING: Synced gcloud credentials appear to be expired!");
+            eprintln!("   You will need to authenticate on the remote workspace:");
+            eprintln!("     1. coder ssh {}", workspace);
+            eprintln!("     2. gcloud auth login");
+            eprintln!("     3. gcloud auth application-default login");
+            eprintln!();
+        } else {
+            debug!("gcloud credentials copied but authentication not verified: {}", auth_error);
+        }
     }
     
     Ok(())

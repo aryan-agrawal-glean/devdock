@@ -146,12 +146,25 @@ impl GooglePlatform {
             ])
             .output()
             .await
-            .context("Failed to get project number")?;
+            .context("Failed to execute gcloud command - is gcloud installed and in PATH?")?;
 
         if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            eprintln!("\n❌ Failed to get GCP project number for '{}'", project);
+            eprintln!("Error: {}", stderr);
+            eprintln!("\nPossible causes:");
+            eprintln!("  1. Not authenticated with gcloud");
+            eprintln!("     → Run: gcloud auth login");
+            eprintln!("  2. No access to project '{}'", project);
+            eprintln!("     → Verify project exists and you have access");
+            eprintln!("  3. Wrong active gcloud account");
+            eprintln!("     → Run: gcloud auth list");
+            eprintln!("  4. Wrong gcloud project configured");
+            eprintln!("     → Run: gcloud config set project {}", project);
             anyhow::bail!(
-                "Failed to get project number: {}",
-                String::from_utf8_lossy(&output.stderr)
+                "gcloud projects describe failed for '{}': {}",
+                project,
+                stderr.trim()
             );
         }
 

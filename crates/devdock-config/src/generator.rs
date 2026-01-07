@@ -99,7 +99,13 @@ impl ConfigGenerator {
             dynamic_ini.as_ref(),
         )
             .await
-            .context("Failed to create platform")?;
+            .context(format!(
+                "Failed to create platform '{}' for project '{}'. \
+                This usually indicates authentication issues with your cloud provider. \
+                See error details above.",
+                profile.platform,
+                profile.project
+            ))?;
         println!("✅ Platform initialized in {:.2}s (total: {:.2}s)", 
             step_start.elapsed().as_secs_f64(),
             total_start.elapsed().as_secs_f64()
