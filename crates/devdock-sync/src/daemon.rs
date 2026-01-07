@@ -119,7 +119,7 @@ impl SyncDaemon {
                         eprintln!("[SYNC] After filtering: {} files to sync", files_to_sync.len());
                         
                         if !files_to_sync.is_empty() {
-                            for (i, file) in files_to_sync.iter().enumerate().take(5) {
+                            for file in files_to_sync.iter().take(5) {
                                 eprintln!("[SYNC]   Syncing: {:?}", file);
                             }
                             
@@ -380,18 +380,12 @@ pub fn run_daemon_process(
     repo_path: &Path,
     full_mode: bool,
 ) -> Result<()> {
-    use std::fs::OpenOptions;
-    
     // This function runs in the daemonized child process
     let devdock_id = devdock_id.to_string();
     let workspace_name = workspace_name.to_string();
     let repo_path = repo_path.to_path_buf();
     
-    // Get log file path and redirect stderr to it
-    let pid_dir = SyncDaemon::get_pid_dir();
-    let log_file_path = pid_dir.join(format!("{}.log", devdock_id));
-    
-    // Print startup info (will be captured in log file via stderr redirect)
+    // Print startup info (will be captured in log file via stderr redirect from parent)
     eprintln!("\n=== Sync daemon process started ===");
     eprintln!("DevDock ID: {}", devdock_id);
     eprintln!("Workspace: {}", workspace_name);
