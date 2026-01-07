@@ -58,6 +58,10 @@ enum Commands {
         /// Auto-forward all service ports (opt-in for remote)
         #[arg(long)]
         auto_forward: bool,
+
+        /// Show detailed progress (all substeps)
+        #[arg(long)]
+        verbose: bool,
     },
 
     /// Stop DevDock instance
@@ -459,6 +463,7 @@ async fn main() {
             region,
             port_base,
             auto_forward,
+            verbose,
         } => {
             if mode == "remote" {
                 commands::remote::start_remote(
@@ -469,6 +474,7 @@ async fn main() {
                     vm,
                     auto_forward,
                     services.as_deref(),
+                    verbose,
                 ).await
             } else {
                 commands::start::execute(&profile, services.as_deref(), ci_mode).await

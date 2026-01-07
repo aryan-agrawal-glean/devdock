@@ -114,8 +114,19 @@ download_binary() {
         exit 1
     fi
     
+    # Verify the download succeeded
+    if [ ! -f "${temp_dir}/${asset_name}" ]; then
+        error "Downloaded file not found: ${asset_name}"
+    fi
+    
     # Rename the downloaded file
     mv "${temp_dir}/${asset_name}" "${temp_dir}/${BINARY_NAME}"
+    
+    # Verify it's a valid executable (basic check)
+    if ! file "${temp_dir}/${BINARY_NAME}" | grep -q "executable"; then
+        warning "Downloaded file may not be a valid executable:"
+        file "${temp_dir}/${BINARY_NAME}" >&2
+    fi
     
     # Download and verify checksums if available
     info "Verifying checksum..."
@@ -148,7 +159,7 @@ download_binary() {
     echo "$temp_dir"
 }
 
-# Install binary
+# Install binary with proper permissions and macOS support
 install_binary() {
     local temp_dir="$1"
     local needs_sudo=false
@@ -162,16 +173,32 @@ install_binary() {
     
     info "Installing to ${INSTALL_DIR}/${BINARY_NAME}..."
     
+    # Use install command for atomic operation with correct permissions
     if [ "$needs_sudo" = true ]; then
         if ! command -v sudo >/dev/null 2>&1; then
             error "sudo is required but not found."
         fi
-        sudo mv "${temp_dir}/${BINARY_NAME}" "${INSTALL_DIR}/${BINARY_NAME}"
+        sudo install -m 755 "${temp_dir}/${BINARY_NAME}" "${INSTALL_DIR}/${BINARY_NAME}"
     else
-        mv "${temp_dir}/${BINARY_NAME}" "${INSTALL_DIR}/${BINARY_NAME}"
+        install -m 755 "${temp_dir}/${BINARY_NAME}" "${INSTALL_DIR}/${BINARY_NAME}"
+    fi
+    
+    # On macOS, remove quarantine attribute to avoid Gatekeeper issues
+    if [ "$(uname -s)" = "Darwin" ]; then
+        info "Removing macOS quarantine attribute..."
+        if [ "$needs_sudo" = true ]; then
+            sudo xattr -d com.apple.quarantine "${INSTALL_DIR}/${BINARY_NAME}" 2>/dev/null || true
+        else
+            xattr -d com.apple.quarantine "${INSTALL_DIR}/${BINARY_NAME}" 2>/dev/null || true
+        fi
     fi
     
     rm -rf "$temp_dir"
+    
+    # Verify the binary actually works before declaring success
+    if ! "${INSTALL_DIR}/${BINARY_NAME}" --version >/dev/null 2>&1; then
+        error "Installed binary is not executable or corrupt. Try downloading again."
+    fi
     
     success "DevDock installed successfully!"
 }
@@ -296,21 +323,44 @@ main() {
         # Check if using the correct binary location
         if [ "$which_devdock" != "${INSTALL_DIR}/${BINARY_NAME}" ]; then
             warning "Found existing devdock at: $which_devdock"
+            info "This binary will take precedence (appears first in PATH)"
+            echo "" >&2
             info "Overriding with new binary..."
             
+            # Use install command for proper permissions
             if [ -w "$(dirname "$which_devdock")" ]; then
-                cp "${INSTALL_DIR}/${BINARY_NAME}" "$which_devdock"
-                success "Replaced $which_devdock"
+                install -m 755 "${INSTALL_DIR}/${BINARY_NAME}" "$which_devdock"
             else
-                sudo cp "${INSTALL_DIR}/${BINARY_NAME}" "$which_devdock"
-                success "Replaced $which_devdock"
+                sudo install -m 755 "${INSTALL_DIR}/${BINARY_NAME}" "$which_devdock"
             fi
+            
+            # Remove quarantine on macOS
+            if [ "$(uname -s)" = "Darwin" ]; then
+                if [ -w "$(dirname "$which_devdock")" ]; then
+                    xattr -d com.apple.quarantine "$which_devdock" 2>/dev/null || true
+                else
+                    sudo xattr -d com.apple.quarantine "$which_devdock" 2>/dev/null || true
+                fi
+            fi
+            
+            success "Replaced $which_devdock"
         fi
         
-        # Final verification
+        # Final verification - test the binary actually runs
         local installed_version
         installed_version=$(devdock --version 2>/dev/null | awk '{print $2}')
+        
+        if [ -z "$installed_version" ]; then
+            error "Binary installed but not working. Run: xattr -d com.apple.quarantine $(which devdock)"
+        fi
+        
         success "Active version: ${installed_version} ($(which devdock))"
+        
+        # Verify version matches what we expected
+        if [ "$installed_version" != "${version#v}" ]; then
+            warning "Installed version (${installed_version}) doesn't match expected (${version#v})"
+            info "This may be due to PATH ordering. Check: which -a devdock"
+        fi
     else
         check_path
     fi
@@ -324,6 +374,34 @@ main() {
     echo "  devdock --help" >&2
     echo "  devdock start <profile>" >&2
     echo "" >&2
+    
+    # Show troubleshooting tips if there are multiple devdock binaries
+    if [ "$(which -a devdock 2>/dev/null | wc -l)" -gt 1 ]; then
+        info "Multiple devdock binaries found in PATH:"
+        which -a devdock | while read -r binary; do
+            local ver
+            ver=$("$binary" --version 2>/dev/null | awk '{print $2}' || echo "error")
+            echo "  → $binary (v$ver)" >&2
+        done
+        echo "" >&2
+        info "Using: $(which devdock)"
+    fi
+}
+
+# Trap errors and provide helpful message
+trap 'handle_error' ERR
+
+handle_error() {
+    echo "" >&2
+    echo "════════════════════════════════════════" >&2
+    error "Installation failed!"
+    echo "" >&2
+    echo "Common issues:" >&2
+    echo "  • macOS Gatekeeper blocking: xattr -d com.apple.quarantine /usr/local/bin/devdock" >&2
+    echo "  • Permission denied: Run with appropriate permissions" >&2
+    echo "  • Network issues: Check GitHub connection" >&2
+    echo "" >&2
+    echo "For help: https://github.com/askscio/devdock/issues" >&2
 }
 
 main "$@"
