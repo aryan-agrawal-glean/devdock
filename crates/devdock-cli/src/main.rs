@@ -466,16 +466,16 @@ async fn main() {
             verbose,
         } => {
             if mode == "remote" {
-                commands::remote::start_remote(
-                    &profile,
+                commands::remote::start_remote(commands::remote::RemoteStartConfig {
+                    profile,
                     workspace_name,
-                    &region,
+                    region,
                     port_base,
                     vm,
                     auto_forward,
-                    services.as_deref(),
+                    services,
                     verbose,
-                ).await
+                }).await
             } else {
                 commands::start::execute(&profile, services.as_deref(), ci_mode).await
             }

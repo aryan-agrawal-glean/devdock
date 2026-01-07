@@ -10,17 +10,27 @@ use std::time::Instant;
 use tracing::{info, warn};
 use crate::{output, logging::OperationLogger};
 
+/// Configuration for starting remote DevDock.
+pub struct RemoteStartConfig {
+    pub profile: String,
+    pub workspace_name: Option<String>,
+    pub region: String,
+    pub port_base: Option<u16>,
+    pub vm: Option<String>,
+    pub auto_forward: bool,
+    pub services: Option<String>,
+    pub verbose: bool,
+}
+
 /// Progress reporter for cleaner output.
 struct ProgressReporter {
-    verbose: bool,
     current_step: usize,
     total_steps: usize,
 }
 
 impl ProgressReporter {
-    fn new(verbose: bool, total_steps: usize) -> Self {
+    fn new(total_steps: usize) -> Self {
         Self {
-            verbose,
             current_step: 0,
             total_steps,
         }
@@ -40,32 +50,22 @@ impl ProgressReporter {
             println!("{}", "✓".green());
         }
     }
-    
-    fn substep(&self, message: &str) {
-        if self.verbose {
-            println!("  → {}", message);
-        }
-    }
-    
-    fn substep_success(&self, message: &str) {
-        if self.verbose {
-            println!("  {} {}", "✓".green(), message);
-        }
-    }
 }
 
 /// Start remote DevDock workflow.
-pub async fn start_remote(
-    profile: &str,
-    workspace_name: Option<String>,
-    region: &str,
-    port_base: Option<u16>,
-    vm: Option<String>,
-    auto_forward: bool,
-    services: Option<&str>,
-    verbose: bool,
-) -> Result<()> {
+pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
     info!("Starting remote DevDock workflow");
+    
+    let RemoteStartConfig {
+        profile,
+        workspace_name,
+        region,
+        port_base,
+        vm,
+        auto_forward,
+        services,
+        verbose,
+    } = config;
     
     // Get current git info
     let worktree = get_current_worktree()?;
@@ -78,7 +78,7 @@ pub async fn start_remote(
     let workspace_name = sanitize_workspace_name(&workspace_name);
     
     // Find profile path
-    let profile_path = find_profile(profile)?;
+    let profile_path = find_profile(&profile)?;
     
     // Register instance in database
     let state = StateManager::new().await?;
@@ -114,8 +114,8 @@ pub async fn start_remote(
     logger.log(&format!("Auto-forward: {}", auto_forward))?;
     logger.log(&format!("Verbose: {}", verbose))?;
     
-    // Create progress reporter (4 main steps)
-    let mut progress = ProgressReporter::new(verbose, 4);
+    // Create progress reporter (4 main steps) - only used in non-verbose mode
+    let mut progress = ProgressReporter::new(4);
     
     // Display initial info (cleaner, more compact)
     println!();
@@ -174,7 +174,7 @@ pub async fn start_remote(
                 output::warn(&format!("Workspace '{}' already exists!", workspace_name));
                 println!();
             } else {
-                println!("{}", format!("⚠️  Existing workspace - restarting (use --recreate to start fresh)").yellow());
+                println!("{}", "⚠️  Existing workspace - restarting (use --recreate to start fresh)".to_string().yellow());
                 println!();
             }
             
@@ -301,7 +301,7 @@ pub async fn start_remote(
     logger.log_section("Starting DevDock")?;
     logger.log(&format!("Profile: {}", profile))?;
     logger.log(&format!("Services filter: {:?}", services))?;
-    logger.log(&format!("Command: devdock start {} {}", profile, services.map(|s| format!("-s {}", s)).unwrap_or_default()))?;
+    logger.log(&format!("Command: devdock start {} {}", profile, services.as_ref().map(|s| format!("-s {}", s)).unwrap_or_default()))?;
     logger.log(&format!("Remote logs: coder ssh {} -- tail -f /tmp/devdock-start.log", &workspace_name))?;
     
     // Step 1: Config sync (timing handled internally by workspace functions)
@@ -315,10 +315,10 @@ pub async fn start_remote(
     // The actual config sync and devdock start happens inside workspace::start_remote_devdock
     let port_mgr = workspace::start_remote_devdock(
         &workspace_name,
-        profile,
+        &profile,
         &profile_path,
         &instance_id,
-        services,
+        services.as_deref(),
         auto_forward,
         offset,
         Some(logger.path()),
