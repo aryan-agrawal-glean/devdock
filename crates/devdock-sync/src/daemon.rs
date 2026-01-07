@@ -56,13 +56,36 @@ impl SyncDaemon {
         
         // Perform initial sync
         info!("Performing initial sync (mode: {})", if self.full_mode { "full" } else { "git-tracked" });
+        eprintln!("[SYNC] About to call initial_sync()");
         self.initial_sync()?;
+        eprintln!("[SYNC] initial_sync() completed successfully");
         
-        // Start watching for changes
-        self.file_watcher.watch(&self.repo_path)?;
+        // Start watching for changes - watch specific monitored directories, not entire repo
+        eprintln!("[SYNC] Setting up file watcher for monitored directories...");
+        
+        // Only watch directories that exist
+        let monitored_dirs = vec![
+            "go", "python_scio", "typescript", "java", "com/askscio/proto",
+            "config", "javatests", "openapi", "devdock",
+        ];
+        
+        let mut watched_count = 0;
+        for dir in &monitored_dirs {
+            let dir_path = self.repo_path.join(dir);
+            if dir_path.exists() {
+                eprintln!("[SYNC] Watching directory: {}", dir);
+                self.file_watcher.watch(&dir_path)?;
+                watched_count += 1;
+            } else {
+                eprintln!("[SYNC] Skipping non-existent directory: {}", dir);
+            }
+        }
+        
+        eprintln!("[SYNC] File watcher setup complete, watching {} directories", watched_count);
         
         // Main event loop
         info!("File sync daemon running, watching for changes...");
+        eprintln!("[SYNC] Entering main event loop...");
         loop {
             // Check health
             if !self.health_monitor.is_healthy() {
