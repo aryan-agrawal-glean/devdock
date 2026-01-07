@@ -224,19 +224,11 @@ pub fn sync_gcloud_credentials(workspace: &str, verbose: bool) -> Result<()> {
         find /tmp/.config/gcloud -type f -exec chmod 600 {} \; 2>/dev/null || true
     "#;
     
-    // Wrap multiline script in quotes like Python implementation does
-    let quoted_script = if move_script.contains('\'') {
-        let escaped = move_script.replace('\'', "'\\''");
-        format!("'{}'", escaped)
-    } else {
-        format!("'{}'", move_script)
-    };
-    
     let output = Command::new("coder")
         .arg("ssh")
         .arg(workspace)
         .arg("--")
-        .arg(&quoted_script)
+        .arg(move_script)
         .output()
         .map_err(|e| RemoteError::ConfigSyncError(format!("Failed to move credentials: {}", e)))?;
     
