@@ -107,6 +107,62 @@ pub fn list_all_files(repo_path: &Path) -> Result<Vec<PathBuf>> {
     Ok(files)
 }
 
+/// List git-modified files (changed since origin/master or origin/main).
+/// This is used for fast initial sync - only sync files you're actually working on.
+pub fn list_git_modified_files(repo_path: &Path) -> Result<Vec<PathBuf>> {
+    eprintln!("[SYNC-GIT] Finding git-modified files since origin/master or origin/main...");
+    
+    use std::process::Command;
+    
+    // For Scio, we always use origin/master as the base branch
+    let output = Command::new("git")
+        .args(&["merge-base", "origin/master", "HEAD"])
+        .current_dir(repo_path)
+        .output();
+    
+    let base = if let Ok(output) = output {
+        if output.status.success() {
+            let merge_base = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            eprintln!("[SYNC-GIT] Using merge base with origin/master: {}", &merge_base[..8.min(merge_base.len())]);
+            merge_base
+        } else {
+            eprintln!("[SYNC-GIT] Could not find merge base with origin/master, using HEAD (uncommitted changes only)");
+            "HEAD".to_string()
+        }
+    } else {
+        eprintln!("[SYNC-GIT] Git merge-base failed, using HEAD (uncommitted changes only)");
+        "HEAD".to_string()
+    };
+    
+    // Get changed files: modified, added, renamed
+    let output = Command::new("git")
+        .args(&["diff", "--name-only", "--diff-filter=ACDMRT", &base])
+        .current_dir(repo_path)
+        .output()
+        .map_err(|e| SyncError::DaemonError(format!("Failed to run git diff: {}", e)))?;
+    
+    if !output.status.success() {
+        eprintln!("[SYNC-GIT] git diff failed, falling back to empty list");
+        return Ok(Vec::new());
+    }
+    
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut files = Vec::new();
+    
+    for line in stdout.lines() {
+        let path = PathBuf::from(line.trim());
+        let full_path = repo_path.join(&path);
+        
+        // Only include existing files that match sync patterns
+        if full_path.exists() && full_path.is_file() && should_sync_file_pattern(&path) {
+            files.push(path);
+        }
+    }
+    
+    eprintln!("[SYNC-GIT] Found {} modified files to sync", files.len());
+    Ok(files)
+}
+
 /// Check if a path should be synced based on git tracking.
 pub fn should_sync_file(repo_path: &Path, file_path: &Path, full_mode: bool) -> Result<bool> {
     if full_mode {

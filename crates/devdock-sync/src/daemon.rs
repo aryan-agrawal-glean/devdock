@@ -103,42 +103,54 @@ impl SyncDaemon {
         Ok(())
     }
     
-    /// Perform initial sync of all relevant files.
+    /// Perform initial sync of modified files only (fast startup).
+    /// This matches Python's strategy: sync only git-modified files, not all tracked files.
     fn initial_sync(&mut self) -> Result<()> {
         eprintln!("[SYNC] Starting initial_sync, full_mode={}", self.full_mode);
+        
         if self.full_mode {
             info!("Starting initial sync in full mode");
             eprintln!("[SYNC] Calling rsync_client.sync_all()");
             self.rsync_client.sync_all()?;
         } else {
-            info!("Listing git-tracked files for initial sync");
-            eprintln!("[SYNC] Listing git-tracked files...");
-            let files = git::list_git_tracked_files(&self.repo_path)?;
-            info!("Found {} git-tracked files to sync", files.len());
-            eprintln!("[SYNC] Found {} git-tracked files", files.len());
+            // FAST STARTUP: Only sync git-modified files (changed since origin/master)
+            // This dramatically reduces startup time from minutes to seconds
+            info!("Syncing git-modified files only (fast startup)");
+            eprintln!("[SYNC] Using FAST startup: syncing only git-modified files...");
             
-            // Sync in batches to avoid overwhelming rsync
-            // Python uses MAX_BATCH_SIZE = 5, we use slightly larger for efficiency
-            const BATCH_SIZE: usize = 10;
-            let total_batches = (files.len() + BATCH_SIZE - 1) / BATCH_SIZE;
-            eprintln!("[SYNC] Will sync in {} batches of up to {} files", total_batches, BATCH_SIZE);
+            let files = git::list_git_modified_files(&self.repo_path)?;
             
-            for (batch_num, chunk) in files.chunks(BATCH_SIZE).enumerate() {
-                info!("Syncing batch {}/{} ({} files)", batch_num + 1, total_batches, chunk.len());
-                eprintln!("[SYNC] Syncing batch {}/{} ({} files)", batch_num + 1, total_batches, chunk.len());
+            if files.is_empty() {
+                info!("No modified files to sync - you're up to date!");
+                eprintln!("[SYNC] No modified files found - workspace is up to date");
+            } else {
+                info!("Found {} modified files to sync", files.len());
+                eprintln!("[SYNC] Found {} modified files to sync", files.len());
                 
-                match self.rsync_client.sync_files(chunk, false) {
-                    Ok(_) => {
-                        eprintln!("[SYNC] Batch {}/{} completed", batch_num + 1, total_batches);
-                    }
-                    Err(e) => {
-                        eprintln!("[SYNC] ERROR in batch {}/{}: {}", batch_num + 1, total_batches, e);
-                        return Err(e);
+                // Sync modified files in small batches
+                const BATCH_SIZE: usize = 10;
+                let total_batches = (files.len() + BATCH_SIZE - 1) / BATCH_SIZE;
+                
+                for (batch_num, chunk) in files.chunks(BATCH_SIZE).enumerate() {
+                    info!("Syncing batch {}/{} ({} files)", batch_num + 1, total_batches, chunk.len());
+                    eprintln!("[SYNC] Syncing batch {}/{} ({} files)", batch_num + 1, total_batches, chunk.len());
+                    
+                    match self.rsync_client.sync_files(chunk, false) {
+                        Ok(_) => {
+                            eprintln!("[SYNC] Batch {}/{} completed", batch_num + 1, total_batches);
+                        }
+                        Err(e) => {
+                            eprintln!("[SYNC] ERROR in batch {}/{}: {}", batch_num + 1, total_batches, e);
+                            return Err(e);
+                        }
                     }
                 }
+                info!("Modified files sync completed successfully");
+                eprintln!("[SYNC] Modified files sync completed!");
             }
-            info!("Initial sync completed successfully");
-            eprintln!("[SYNC] Initial sync completed!");
+            
+            // NOTE: Full baseline sync will happen later via file watcher
+            // This approach prioritizes fast startup over completeness
         }
         
         self.health_monitor.record_success();
