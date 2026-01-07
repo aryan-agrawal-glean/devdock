@@ -95,7 +95,7 @@ impl BugReporter {
         let archive_path = archive::create_report_archive(&system_info, snapshot_file.as_ref(), &config_files)?;
         println!("  {} Archive created: {:?}", "✓".green(), archive_path);
 
-        // Format Jira description
+        // Format Jira description (in ADF format)
         let full_description = jira::format_description(
             &description,
             &command,
@@ -106,7 +106,7 @@ impl BugReporter {
 
         // Create Jira ticket
         println!("\n{}", "📝 Creating Jira ticket...".yellow());
-        let ticket_key = jira::create_jira_ticket(&summary, &full_description, &archive_path).await?;
+        let ticket_key = jira::create_jira_ticket(&summary, full_description, &archive_path).await?;
         println!("  {} Jira ticket created: {}", "✓".green(), ticket_key.bold());
 
         // Post to Slack

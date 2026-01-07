@@ -17,11 +17,36 @@ const JIRA_EMAIL: &str = "oncall_user@askscio.com";
 struct JiraIssueFields {
     project: JiraProject,
     summary: String,
-    description: String,
+    description: JiraDescription,
     issuetype: JiraIssueType,
     parent: JiraParent,
     #[serde(skip_serializing_if = "Option::is_none")]
     reporter: Option<JiraReporter>,
+}
+
+#[derive(Debug, Serialize)]
+struct JiraDescription {
+    version: u8,
+    #[serde(rename = "type")]
+    doc_type: String,
+    content: Vec<JiraContent>,
+}
+
+#[derive(Debug, Serialize)]
+struct JiraContent {
+    #[serde(rename = "type")]
+    content_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    content: Option<Vec<JiraText>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    text: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct JiraText {
+    #[serde(rename = "type")]
+    text_type: String,
+    text: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -138,71 +163,168 @@ async fn get_user_account_id(client: &reqwest::Client, email: &str, token: &str)
     Ok(None)
 }
 
-/// Format the Jira description with all collected information.
+/// Format the Jira description with all collected information in ADF format.
 pub fn format_description(
     description: &str,
     command: &str,
     git_branch: &str,
     system_info: &SystemInfo,
     config_files: &HashMap<String, String>,
-) -> String {
-    let mut desc = format!(
-        r#"h2. User Description
-{}
+) -> JiraDescription {
+    let mut content = Vec::new();
 
-h2. Command Run
-{{{{{}}}}}
+    // User Description section
+    content.push(JiraContent {
+        content_type: "heading".to_string(),
+        content: Some(vec![JiraText {
+            text_type: "text".to_string(),
+            text: "User Description".to_string(),
+        }]),
+        text: None,
+    });
+    content.push(JiraContent {
+        content_type: "paragraph".to_string(),
+        content: Some(vec![JiraText {
+            text_type: "text".to_string(),
+            text: description.to_string(),
+        }]),
+        text: None,
+    });
 
-h2. Git Branch
-{{{{{}}}}}
+    // Command Run section
+    content.push(JiraContent {
+        content_type: "heading".to_string(),
+        content: Some(vec![JiraText {
+            text_type: "text".to_string(),
+            text: "Command Run".to_string(),
+        }]),
+        text: None,
+    });
+    content.push(JiraContent {
+        content_type: "codeBlock".to_string(),
+        content: Some(vec![JiraText {
+            text_type: "text".to_string(),
+            text: command.to_string(),
+        }]),
+        text: None,
+    });
 
-h2. System Information
-* CPU Usage: {:.1}%
-* Memory Usage: {:.1}%
-* Disk Usage: {:.1}%
+    // Git Branch section
+    content.push(JiraContent {
+        content_type: "heading".to_string(),
+        content: Some(vec![JiraText {
+            text_type: "text".to_string(),
+            text: "Git Branch".to_string(),
+        }]),
+        text: None,
+    });
+    content.push(JiraContent {
+        content_type: "codeBlock".to_string(),
+        content: Some(vec![JiraText {
+            text_type: "text".to_string(),
+            text: git_branch.to_string(),
+        }]),
+        text: None,
+    });
 
-h2. Docker Containers
-{{{{code}}}}
-{}
-{{{{code}}}}"#,
-        description,
-        command,
-        git_branch,
-        system_info.cpu.percent,
-        system_info.memory.percent,
-        system_info.disk.percent,
-        serde_json::to_string_pretty(&system_info.docker).unwrap_or_default()
-    );
+    // System Information section
+    content.push(JiraContent {
+        content_type: "heading".to_string(),
+        content: Some(vec![JiraText {
+            text_type: "text".to_string(),
+            text: "System Information".to_string(),
+        }]),
+        text: None,
+    });
+    content.push(JiraContent {
+        content_type: "paragraph".to_string(),
+        content: Some(vec![JiraText {
+            text_type: "text".to_string(),
+            text: format!(
+                "CPU Usage: {:.1}% | Memory Usage: {:.1}% | Disk Usage: {:.1}%",
+                system_info.cpu.percent, system_info.memory.percent, system_info.disk.percent
+            ),
+        }]),
+        text: None,
+    });
 
-    // Add configuration files
+    // Docker Containers section
+    content.push(JiraContent {
+        content_type: "heading".to_string(),
+        content: Some(vec![JiraText {
+            text_type: "text".to_string(),
+            text: "Docker Containers".to_string(),
+        }]),
+        text: None,
+    });
+    content.push(JiraContent {
+        content_type: "codeBlock".to_string(),
+        content: Some(vec![JiraText {
+            text_type: "text".to_string(),
+            text: serde_json::to_string_pretty(&system_info.docker).unwrap_or_default(),
+        }]),
+        text: None,
+    });
+
+    // Configuration Files section (if any)
     if !config_files.is_empty() {
-        desc.push_str("\n\nh2. Configuration Files\n");
-        for (filename, content) in config_files {
-            desc.push_str(&format!(
-                "\nh3. {}\n{{{{code}}}}\n{}\n{{{{code}}}}\n",
-                filename, content
-            ));
+        content.push(JiraContent {
+            content_type: "heading".to_string(),
+            content: Some(vec![JiraText {
+                text_type: "text".to_string(),
+                text: "Configuration Files".to_string(),
+            }]),
+            text: None,
+        });
+        for (filename, file_content) in config_files {
+            content.push(JiraContent {
+                content_type: "paragraph".to_string(),
+                content: Some(vec![JiraText {
+                    text_type: "text".to_string(),
+                    text: format!("File: {}", filename),
+                }]),
+                text: None,
+            });
+            content.push(JiraContent {
+                content_type: "codeBlock".to_string(),
+                content: Some(vec![JiraText {
+                    text_type: "text".to_string(),
+                    text: file_content.clone(),
+                }]),
+                text: None,
+            });
         }
     }
 
-    // Add full system details
-    desc.push_str(&format!(
-        r#"
+    // Full System Details section
+    content.push(JiraContent {
+        content_type: "heading".to_string(),
+        content: Some(vec![JiraText {
+            text_type: "text".to_string(),
+            text: "Full System Details".to_string(),
+        }]),
+        text: None,
+    });
+    content.push(JiraContent {
+        content_type: "codeBlock".to_string(),
+        content: Some(vec![JiraText {
+            text_type: "text".to_string(),
+            text: serde_json::to_string_pretty(system_info).unwrap_or_default(),
+        }]),
+        text: None,
+    });
 
-h2. Full System Details
-{{{{code:json}}}}
-{}
-{{{{code}}}}"#,
-        serde_json::to_string_pretty(system_info).unwrap_or_default()
-    ));
-
-    desc
+    JiraDescription {
+        version: 1,
+        doc_type: "doc".to_string(),
+        content,
+    }
 }
 
 /// Create a Jira subtask with the bug report.
 pub async fn create_jira_ticket(
     summary: &str,
-    description: &str,
+    description: JiraDescription,
     attachment_path: &Path,
 ) -> Result<String> {
     info!("Creating Jira ticket...");
@@ -226,7 +348,7 @@ pub async fn create_jira_ticket(
             key: "EN".to_string(),
         },
         summary: format!("Devdock Bug Report - {}", summary),
-        description: description.to_string(),
+        description,
         issuetype: JiraIssueType {
             name: "Sub-task".to_string(),
         },
