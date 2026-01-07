@@ -250,7 +250,7 @@ pub fn sync_gcloud_credentials(workspace: &str, verbose: bool) -> Result<()> {
         .arg("--")
         .arg("bash")
         .arg("-c")
-        .arg("timeout 10 gcloud auth list --filter=status:ACTIVE --format='value(account)' 2>&1 || echo 'TIMEOUT'")
+        .arg("timeout 10s gcloud auth list --filter=status:ACTIVE --format='value(account)' 2>&1 || echo 'TIMEOUT'")
         .output()
         .map_err(|e| RemoteError::ConfigSyncError(format!("Failed to verify gcloud: {}", e)))?;
     
