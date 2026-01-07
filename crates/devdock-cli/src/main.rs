@@ -165,11 +165,10 @@ enum Commands {
         command: LogsCommands,
     },
 
-    /// Show port mappings for remote DevDock
+    /// Port management for remote DevDock
     Ports {
-        /// Show ports for specific instance ID
-        #[arg(long)]
-        instance: Option<String>,
+        #[command(subcommand)]
+        command: PortCommands,
     },
 
     /// File sync management (for remote DevDock)
@@ -226,6 +225,37 @@ enum PluginCommands {
     Install { name: String },
     /// Remove a plugin
     Remove { name: String },
+}
+
+#[derive(Subcommand)]
+enum PortCommands {
+    /// List port mappings (alias for compatibility)
+    List {
+        /// Show ports for specific instance ID
+        #[arg(long)]
+        instance: Option<String>,
+    },
+    /// Enable auto port forwarding for remote DevDock
+    Forward {
+        /// Forward all common service ports
+        #[arg(long)]
+        all: bool,
+        /// Forward specific service port (e.g., qe, fe, tilt)
+        #[arg(long)]
+        service: Option<String>,
+        /// Custom port mapping in format local:remote
+        #[arg(long)]
+        custom: Option<String>,
+    },
+    /// Stop port forwarding
+    Stop {
+        /// Stop all port forwards
+        #[arg(long)]
+        all: bool,
+        /// Stop specific service port forward
+        #[arg(long)]
+        service: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -479,7 +509,15 @@ async fn main() {
             LogsCommands::Status => commands::logs::status().await,
         },
 
-        Commands::Ports { instance } => commands::ports::execute(instance).await,
+        Commands::Ports { command } => match command {
+            PortCommands::List { instance } => commands::ports::list(instance).await,
+            PortCommands::Forward { all, service, custom } => {
+                commands::ports::forward(all, service.as_deref(), custom.as_deref()).await
+            }
+            PortCommands::Stop { all, service } => {
+                commands::ports::stop(all, service.as_deref()).await
+            }
+        },
 
         Commands::Sync { command } => match command {
             SyncCommands::Start { full } => commands::sync::start(full).await,

@@ -304,6 +304,53 @@ impl StateManager {
             r.get::<Option<i64>, _>("process_pid").map(|p| p as u32),
         )).collect())
     }
+    
+    /// Save a single port mapping.
+    pub async fn save_port_mapping(
+        &self,
+        devdock_id: &str,
+        service_name: &str,
+        port_type: &str,
+        local_port: u16,
+        remote_port: u16,
+        pid: Option<u32>,
+    ) -> Result<()> {
+        // Delete existing mapping for this service
+        sqlx::query("DELETE FROM port_mappings WHERE devdock_id = ? AND service_name = ?")
+            .bind(devdock_id)
+            .bind(service_name)
+            .execute(&self.pool)
+            .await?;
+        
+        // Insert new mapping
+        sqlx::query(
+            r#"
+            INSERT INTO port_mappings (devdock_id, service_name, port_type, local_port, remote_port, process_pid)
+            VALUES (?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(devdock_id)
+        .bind(service_name)
+        .bind(port_type)
+        .bind(local_port as i64)
+        .bind(remote_port as i64)
+        .bind(pid.map(|p| p as i64))
+        .execute(&self.pool)
+        .await?;
+        
+        Ok(())
+    }
+    
+    /// Remove a specific port mapping.
+    pub async fn remove_port_mapping(&self, devdock_id: &str, service_name: &str) -> Result<()> {
+        sqlx::query("DELETE FROM port_mappings WHERE devdock_id = ? AND service_name = ?")
+            .bind(devdock_id)
+            .bind(service_name)
+            .execute(&self.pool)
+            .await?;
+        
+        Ok(())
+    }
 
     /// Delete port mappings for a DevDock instance.
     pub async fn delete_port_mappings(&self, devdock_id: &str) -> Result<()> {
