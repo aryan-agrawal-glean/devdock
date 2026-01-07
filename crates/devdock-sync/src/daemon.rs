@@ -323,6 +323,7 @@ pub fn start_daemon(
     repo_path: &Path,
     full_mode: bool,
 ) -> Result<u32> {
+    use std::fs::OpenOptions;
     use std::process::Command;
     
     info!("Starting sync daemon as background process");
@@ -335,6 +336,17 @@ pub fn start_daemon(
     let exe_path = std::env::current_exe()
         .map_err(|e| SyncError::DaemonError(format!("Failed to get current exe: {}", e)))?;
     
+    // Get PID directory and ensure it exists
+    let pid_dir = SyncDaemon::get_pid_dir();
+    fs::create_dir_all(&pid_dir)?;
+    
+    // Create log file for daemon output
+    let log_file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(pid_dir.join(format!("{}.log", devdock_id)))
+        .map_err(|e| SyncError::DaemonError(format!("Failed to open log file: {}", e)))?;
+    
     // Spawn daemon as a separate process using a hidden subcommand
     let mut cmd = Command::new(exe_path);
     cmd.arg("__sync_daemon__")  // Hidden internal command
@@ -343,10 +355,10 @@ pub fn start_daemon(
         .arg(repo_path)
         .arg(if full_mode { "true" } else { "false" });
     
-    // Redirect stdout/stderr - daemon will log to file
+    // Redirect stdin/stdout/stderr to log file
     cmd.stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::inherit())  // Keep for debugging
-        .stderr(std::process::Stdio::inherit());  // Keep for debugging
+        .stdout(log_file.try_clone().map(std::process::Stdio::from).unwrap_or(std::process::Stdio::null()))
+        .stderr(std::process::Stdio::from(log_file));
     
     let child = cmd.spawn()
         .map_err(|e| SyncError::DaemonError(format!("Failed to spawn daemon process: {}", e)))?;
@@ -379,20 +391,9 @@ pub fn run_daemon_process(
     let pid_dir = SyncDaemon::get_pid_dir();
     let log_file_path = pid_dir.join(format!("{}.log", devdock_id));
     
-    // Write initial log entry
-    use std::io::Write;
-    if let Ok(mut log_file) = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_file_path)
-    {
-        let _ = writeln!(log_file, "\n=== Sync daemon process started for {} ===", devdock_id);
-        let _ = writeln!(log_file, "Workspace: {}", workspace_name);
-        let _ = writeln!(log_file, "Repo: {}", repo_path.display());
-        let _ = writeln!(log_file, "Time: {:?}\n", std::time::SystemTime::now());
-    }
-    
-    eprintln!("\n=== Sync daemon process started for {} ===", devdock_id);
+    // Print startup info (will be captured in log file via stderr redirect)
+    eprintln!("\n=== Sync daemon process started ===");
+    eprintln!("DevDock ID: {}", devdock_id);
     eprintln!("Workspace: {}", workspace_name);
     eprintln!("Repo: {}", repo_path.display());
     eprintln!("Time: {:?}\n", std::time::SystemTime::now());
