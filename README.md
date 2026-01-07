@@ -13,12 +13,33 @@ A fast, extensible, standalone binary for managing local and remote development 
 
 ## 📦 Installation
 
+### Prerequisites
+
+- **GitHub CLI (`gh`)**: Required for private repository access
+  ```bash
+  # Install gh CLI if not already installed
+  # macOS: brew install gh
+  # Linux: https://cli.github.com/
+  
+  # Authenticate (one-time)
+  gh auth login
+  ```
+
 ### Quick Install (Recommended)
 
 **One-line installer** - automatically detects your OS and architecture:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/askscio/devdock/main/install.sh | bash
+# Clone the repo and run installer (works with private repos)
+git clone https://github.com/askscio/devdock.git && cd devdock && ./install.sh
+```
+
+**Or** download and run the installer script:
+
+```bash
+gh repo clone askscio/devdock
+cd devdock
+./install.sh
 ```
 
 ### Manual Installation

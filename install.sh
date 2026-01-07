@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# DevDock Installation Script
-# Usage: curl -fsSL https://raw.githubusercontent.com/askscio/devdock/main/install.sh | bash
+# DevDock Installation Script for Private Repository
+# Requires: GitHub CLI (gh) with authentication
+# Usage: bash <(gh api repos/askscio/devdock/contents/install.sh --jq .content | base64 -d)
+#    or: gh repo clone askscio/devdock && cd devdock && ./install.sh
 
 set -e
 
@@ -16,7 +18,6 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# Helper functions
 info() {
     echo -e "${BLUE}ℹ${NC} $1"
 }
@@ -34,12 +35,25 @@ error() {
     exit 1
 }
 
+# Check if gh CLI is available
+check_gh_cli() {
+    if ! command -v gh >/dev/null 2>&1; then
+        error "GitHub CLI (gh) is required but not installed.\nInstall it: https://cli.github.com/"
+    fi
+    
+    # Check if authenticated
+    if ! gh auth status >/dev/null 2>&1; then
+        error "GitHub CLI is not authenticated.\nRun: gh auth login"
+    fi
+    
+    success "GitHub CLI is authenticated"
+}
+
 # Detect OS and architecture
 detect_platform() {
     local os=""
     local arch=""
     
-    # Detect OS
     case "$(uname -s)" in
         Linux*)
             os="linux"
@@ -52,7 +66,6 @@ detect_platform() {
             ;;
     esac
     
-    # Detect architecture
     case "$(uname -m)" in
         x86_64|amd64)
             arch="x86_64"
@@ -72,10 +85,10 @@ detect_platform() {
     echo "${os}-${arch}"
 }
 
-# Get latest release version from GitHub
+# Get latest release version
 get_latest_version() {
     local version
-    version=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+    version=$(gh release list --repo "$REPO" --limit 1 --json tagName --jq '.[0].tagName')
     
     if [ -z "$version" ]; then
         error "Failed to fetch latest version from GitHub"
@@ -84,31 +97,33 @@ get_latest_version() {
     echo "$version"
 }
 
-# Download and verify binary
+# Download binary using gh CLI
 download_binary() {
     local version="$1"
     local platform="$2"
-    local binary_url="https://github.com/${REPO}/releases/download/${version}/${BINARY_NAME}-${platform}-${version}"
-    local checksums_url="https://github.com/${REPO}/releases/download/${version}/checksums.txt"
+    local asset_name="${BINARY_NAME}-${platform}-${version}"
     local temp_dir
     temp_dir=$(mktemp -d)
     
     info "Downloading DevDock ${version} for ${platform}..."
     
-    # Download binary
-    if ! curl -fsSL "$binary_url" -o "${temp_dir}/${BINARY_NAME}"; then
-        error "Failed to download binary from ${binary_url}"
+    # Download using gh CLI (works with private repos)
+    if ! gh release download "$version" --repo "$REPO" --pattern "$asset_name" --dir "$temp_dir"; then
+        error "Failed to download binary. Available assets:"
+        gh release view "$version" --repo "$REPO" --json assets --jq '.assets[].name'
+        exit 1
     fi
     
-    # Download checksums
+    # Rename the downloaded file
+    mv "${temp_dir}/${asset_name}" "${temp_dir}/${BINARY_NAME}"
+    
+    # Download and verify checksums if available
     info "Verifying checksum..."
-    if curl -fsSL "$checksums_url" -o "${temp_dir}/checksums.txt" 2>/dev/null; then
-        # Extract expected checksum for this platform
+    if gh release download "$version" --repo "$REPO" --pattern "checksums.txt" --dir "$temp_dir" 2>/dev/null; then
         local expected_checksum
-        expected_checksum=$(grep "${BINARY_NAME}-${platform}-${version}" "${temp_dir}/checksums.txt" | awk '{print $1}')
+        expected_checksum=$(grep "$asset_name" "${temp_dir}/checksums.txt" | awk '{print $1}')
         
         if [ -n "$expected_checksum" ]; then
-            # Compute actual checksum
             local actual_checksum
             if command -v shasum >/dev/null 2>&1; then
                 actual_checksum=$(shasum -a 256 "${temp_dir}/${BINARY_NAME}" | awk '{print $1}')
@@ -125,8 +140,6 @@ download_binary() {
             fi
             
             success "Checksum verified"
-        else
-            warning "Could not find checksum for this platform, skipping verification"
         fi
     else
         warning "Could not download checksums, skipping verification"
@@ -140,28 +153,24 @@ install_binary() {
     local temp_dir="$1"
     local needs_sudo=false
     
-    # Check if we need sudo
     if [ ! -w "$INSTALL_DIR" ]; then
         needs_sudo=true
         warning "Installation directory ${INSTALL_DIR} requires sudo access"
     fi
     
-    # Make binary executable
     chmod +x "${temp_dir}/${BINARY_NAME}"
     
-    # Install binary
     info "Installing to ${INSTALL_DIR}/${BINARY_NAME}..."
     
     if [ "$needs_sudo" = true ]; then
         if ! command -v sudo >/dev/null 2>&1; then
-            error "sudo is required but not found. Please run as root or install to a writable directory."
+            error "sudo is required but not found."
         fi
         sudo mv "${temp_dir}/${BINARY_NAME}" "${INSTALL_DIR}/${BINARY_NAME}"
     else
         mv "${temp_dir}/${BINARY_NAME}" "${INSTALL_DIR}/${BINARY_NAME}"
     fi
     
-    # Cleanup
     rm -rf "$temp_dir"
     
     success "DevDock installed successfully!"
@@ -170,7 +179,7 @@ install_binary() {
 # Check if binary is in PATH
 check_path() {
     if ! echo "$PATH" | grep -q "$INSTALL_DIR"; then
-        warning "⚠️  ${INSTALL_DIR} is not in your PATH"
+        warning "${INSTALL_DIR} is not in your PATH"
         echo ""
         echo "Add it to your shell profile:"
         echo "  export PATH=\"${INSTALL_DIR}:\$PATH\""
@@ -183,8 +192,12 @@ main() {
     echo ""
     echo "╔════════════════════════════════════════╗"
     echo "║       DevDock Installation Script      ║"
+    echo "║         (Private Repository)           ║"
     echo "╚════════════════════════════════════════╝"
     echo ""
+    
+    # Check prerequisites
+    check_gh_cli
     
     # Detect platform
     local platform
@@ -241,10 +254,7 @@ main() {
     echo "  devdock --help"
     echo "  devdock start <profile>"
     echo ""
-    info "Documentation: https://github.com/${REPO}"
-    echo ""
 }
 
-# Run main function
 main "$@"
 

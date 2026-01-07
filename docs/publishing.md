@@ -67,31 +67,54 @@ devdock --version
 
 ## Installation Methods
 
-Users can install DevDock in three ways:
+**Note:** The repository is currently **PRIVATE**, which requires authentication.
 
-### 1. One-line Installer (Recommended)
+### 1. Installer Script (Recommended for Internal Users)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/askscio/devdock/main/install.sh | bash
+gh repo clone askscio/devdock
+cd devdock
+./install.sh
 ```
 
 Features:
+- Uses GitHub CLI for authenticated access
 - Automatic OS/architecture detection
 - Checksum verification
 - Version detection and upgrade handling
 - PATH checking
 
-### 2. Direct Binary Download
+### 2. Direct Binary Download (via gh CLI)
 
-Download from: https://github.com/askscio/devdock/releases/latest
+```bash
+gh release download v0.1.0 --repo askscio/devdock --pattern "devdock-macos-arm64-v0.1.0"
+chmod +x devdock-macos-arm64-v0.1.0
+sudo mv devdock-macos-arm64-v0.1.0 /usr/local/bin/devdock
+```
 
 ### 3. Build from Source
 
 ```bash
-git clone https://github.com/askscio/devdock.git
+gh repo clone askscio/devdock
 cd devdock
 cargo install --path crates/devdock-cli
 ```
+
+### Making the Repository Public (Optional)
+
+If you want to enable simpler installation for external users:
+
+```bash
+gh repo edit askscio/devdock --visibility public
+```
+
+After making it public, users can use the simpler `install.sh` script:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/askscio/devdock/main/install.sh | bash
+```
+
+See [docs/installation-options.md](installation-options.md) for details.
 
 ## Release Checklist
 

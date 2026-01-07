@@ -25,3 +25,7 @@ Cargo.lock
 # Logs
 *.log
 
+# Release binaries (should be distributed via GitHub Releases, not committed)
+devdock-*-v*
+*.tar.gz
+
