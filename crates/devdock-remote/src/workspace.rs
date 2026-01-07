@@ -219,18 +219,15 @@ pub async fn start_remote_devdock(
         let elapsed = start.elapsed().as_secs();
         
         // First verify tmux session is still alive
-        match ssh::ssh_check(workspace, "tmux has-session -t devdock 2>/dev/null", log_file) {
-            Ok(false) => {
-                eprintln!("\n  ❌ ERROR: DevDock tmux session died while waiting for Tilt!");
-                eprintln!("\n  To debug:");
-                eprintln!("    1. SSH to workspace: coder ssh {}", workspace);
-                eprintln!("    2. Check logs: cat /tmp/devdock-start.log");
-                eprintln!("    3. Try manual start: devdock start {}", profile);
-                return Err(RemoteError::CommandFailed(
-                    "DevDock process died during startup".to_string()
-                ));
-            },
-            _ => {}
+        if let Ok(false) = ssh::ssh_check(workspace, "tmux has-session -t devdock 2>/dev/null", log_file) {
+            eprintln!("\n  ❌ ERROR: DevDock tmux session died while waiting for Tilt!");
+            eprintln!("\n  To debug:");
+            eprintln!("    1. SSH to workspace: coder ssh {}", workspace);
+            eprintln!("    2. Check logs: cat /tmp/devdock-start.log");
+            eprintln!("    3. Try manual start: devdock start {}", profile);
+            return Err(RemoteError::CommandFailed(
+                "DevDock process died during startup".to_string()
+            ));
         }
         
         // Check if Tilt is listening on port 10350 using lsof
@@ -248,7 +245,7 @@ pub async fn start_remote_devdock(
         }
         
         // Print progress every 10 seconds
-        if elapsed > 0 && elapsed % 10 == 0 {
+        if elapsed > 0 && elapsed.is_multiple_of(10) {
             println!("  Still waiting for Tilt... ({}s elapsed)", elapsed);
         }
         
