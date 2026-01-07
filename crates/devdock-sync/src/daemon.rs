@@ -181,7 +181,7 @@ impl SyncDaemon {
                 
                 // Sync modified files in small batches
                 const BATCH_SIZE: usize = 10;
-                let total_batches = (files.len() + BATCH_SIZE - 1) / BATCH_SIZE;
+                let total_batches = files.len().div_ceil(BATCH_SIZE);
                 
                 for (batch_num, chunk) in files.chunks(BATCH_SIZE).enumerate() {
                     info!("Syncing batch {}/{} ({} files)", batch_num + 1, total_batches, chunk.len());
@@ -236,12 +236,11 @@ impl SyncDaemon {
             }
             
             // In git-tracked mode, also check if file is tracked
-            if !self.full_mode {
-                if !git::should_sync_file(&self.repo_path, file, false)? {
+            if !self.full_mode
+                && !git::should_sync_file(&self.repo_path, file, false)? {
                     eprintln!("[SYNC-FILTER]   ❌ Filtered out: not git-tracked");
                     continue;
                 }
-            }
             
             eprintln!("[SYNC-FILTER]   ✅ Will sync: {:?}", relative_path);
             filtered.push(relative_path);

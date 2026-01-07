@@ -116,7 +116,7 @@ pub fn list_git_modified_files(repo_path: &Path) -> Result<Vec<PathBuf>> {
     
     // For Scio, we always use origin/master as the base branch
     let output = Command::new("git")
-        .args(&["merge-base", "origin/master", "HEAD"])
+        .args(["merge-base", "origin/master", "HEAD"])
         .current_dir(repo_path)
         .output();
     
@@ -136,7 +136,7 @@ pub fn list_git_modified_files(repo_path: &Path) -> Result<Vec<PathBuf>> {
     
     // Get changed files: modified, added, renamed
     let output = Command::new("git")
-        .args(&["diff", "--name-only", "--diff-filter=ACDMRT", &base])
+        .args(["diff", "--name-only", "--diff-filter=ACDMRT", &base])
         .current_dir(repo_path)
         .output()
         .map_err(|e| SyncError::DaemonError(format!("Failed to run git diff: {}", e)))?;
