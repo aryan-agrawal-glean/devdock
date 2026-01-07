@@ -78,8 +78,6 @@ pub fn ssh_check_with_timeout(workspace: &str, command: &str, log_file: Option<&
             match child.try_wait() {
                 Ok(Some(status)) => {
                     // Process completed
-                    let stdout = String::new();
-                    let stderr = String::new();
                     let exit_code = status.code().unwrap_or(-1);
                     let success = status.success();
                     
