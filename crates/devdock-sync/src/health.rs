@@ -65,13 +65,9 @@ impl HealthMonitor {
             return true;
         }
         
-        // Restart if sync lag is too high (> 5 minutes)
-        if let Some(lag) = self.sync_lag() {
-            if lag > Duration::from_secs(300) {
-                warn!("Sync lag too high ({:?}), should restart", lag);
-                return true;
-            }
-        }
+        // NOTE: We don't check sync lag for event-driven file watchers
+        // Sync lag check only makes sense for periodic/polling sync systems
+        // For file watchers, no changes = healthy idle state, not a failure
         
         false
     }

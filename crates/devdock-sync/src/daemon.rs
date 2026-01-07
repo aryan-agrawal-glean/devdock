@@ -97,7 +97,13 @@ impl SyncDaemon {
             // Check health
             if !self.health_monitor.is_healthy() {
                 error!("Sync daemon unhealthy, exiting");
-                eprintln!("[SYNC] Health check failed, exiting");
+                eprintln!("[SYNC] ❌ Health check failed!");
+                if let Some(lag) = self.health_monitor.sync_lag() {
+                    eprintln!("[SYNC] Time since last sync: {:?}", lag);
+                } else {
+                    eprintln!("[SYNC] No successful syncs yet");
+                }
+                eprintln!("[SYNC] Daemon exiting due to health check failure");
                 break;
             }
             
