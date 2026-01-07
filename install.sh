@@ -181,8 +181,59 @@ check_path() {
     if ! echo "$PATH" | grep -q "$INSTALL_DIR"; then
         warning "${INSTALL_DIR} is not in your PATH"
         echo "" >&2
-        echo "Add it to your shell profile:" >&2
-        echo "  export PATH=\"${INSTALL_DIR}:\$PATH\"" >&2
+        
+        # Detect shell and config file
+        local shell_config=""
+        if [ -n "$BASH_VERSION" ]; then
+            if [ -f "$HOME/.bash_profile" ]; then
+                shell_config="$HOME/.bash_profile"
+            elif [ -f "$HOME/.bashrc" ]; then
+                shell_config="$HOME/.bashrc"
+            fi
+        elif [ -n "$ZSH_VERSION" ]; then
+            shell_config="$HOME/.zshrc"
+        else
+            # Try to detect from SHELL env var
+            case "$SHELL" in
+                */zsh)
+                    shell_config="$HOME/.zshrc"
+                    ;;
+                */bash)
+                    if [ -f "$HOME/.bash_profile" ]; then
+                        shell_config="$HOME/.bash_profile"
+                    else
+                        shell_config="$HOME/.bashrc"
+                    fi
+                    ;;
+            esac
+        fi
+        
+        if [ -n "$shell_config" ]; then
+            echo "Would you like to add ${INSTALL_DIR} to your PATH automatically?" >&2
+            read -p "Update $shell_config? [y/N] " -n 1 -r
+            echo "" >&2
+            
+            if [[ $REPLY =~ ^[Yy]$ ]]; then
+                # Check if already in config (avoid duplicates)
+                if grep -q "export PATH=\"${INSTALL_DIR}:\$PATH\"" "$shell_config" 2>/dev/null; then
+                    info "PATH export already exists in $shell_config"
+                else
+                    echo "" >> "$shell_config"
+                    echo "# Added by DevDock installer" >> "$shell_config"
+                    echo "export PATH=\"${INSTALL_DIR}:\$PATH\"" >> "$shell_config"
+                    success "Updated $shell_config"
+                    echo "" >&2
+                    warning "Please restart your shell or run:"
+                    echo "  source $shell_config" >&2
+                fi
+            else
+                echo "Add it manually to your shell profile:" >&2
+                echo "  export PATH=\"${INSTALL_DIR}:\$PATH\"" >&2
+            fi
+        else
+            echo "Add it to your shell profile:" >&2
+            echo "  export PATH=\"${INSTALL_DIR}:\$PATH\"" >&2
+        fi
         echo "" >&2
     fi
 }
@@ -239,7 +290,17 @@ main() {
     if command -v devdock >/dev/null 2>&1; then
         local installed_version
         installed_version=$(devdock --version 2>/dev/null | awk '{print $2}')
+        local which_devdock
+        which_devdock=$(which devdock)
+        
         success "Installed version: ${installed_version}"
+        
+        # Check if using the correct binary location
+        if [ "$which_devdock" != "${INSTALL_DIR}/${BINARY_NAME}" ]; then
+            warning "Using devdock from: $which_devdock"
+            warning "But installed to: ${INSTALL_DIR}/${BINARY_NAME}"
+            check_path
+        fi
     else
         check_path
     fi
