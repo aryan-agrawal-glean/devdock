@@ -288,19 +288,29 @@ main() {
     
     # Verify installation
     if command -v devdock >/dev/null 2>&1; then
-        local installed_version
-        installed_version=$(devdock --version 2>/dev/null | awk '{print $2}')
         local which_devdock
         which_devdock=$(which devdock)
         
-        success "Installed version: ${installed_version}"
+        success "Installed to: ${INSTALL_DIR}/${BINARY_NAME}"
         
         # Check if using the correct binary location
         if [ "$which_devdock" != "${INSTALL_DIR}/${BINARY_NAME}" ]; then
-            warning "Using devdock from: $which_devdock"
-            warning "But installed to: ${INSTALL_DIR}/${BINARY_NAME}"
-            check_path
+            warning "Found existing devdock at: $which_devdock"
+            info "Overriding with new binary..."
+            
+            if [ -w "$(dirname "$which_devdock")" ]; then
+                cp "${INSTALL_DIR}/${BINARY_NAME}" "$which_devdock"
+                success "Replaced $which_devdock"
+            else
+                sudo cp "${INSTALL_DIR}/${BINARY_NAME}" "$which_devdock"
+                success "Replaced $which_devdock"
+            fi
         fi
+        
+        # Final verification
+        local installed_version
+        installed_version=$(devdock --version 2>/dev/null | awk '{print $2}')
+        success "Active version: ${installed_version} ($(which devdock))"
     else
         check_path
     fi
