@@ -22,36 +22,6 @@ pub struct RemoteStartConfig {
     pub verbose: bool,
 }
 
-/// Progress reporter for cleaner output.
-struct ProgressReporter {
-    current_step: usize,
-    total_steps: usize,
-}
-
-impl ProgressReporter {
-    fn new(total_steps: usize) -> Self {
-        Self {
-            current_step: 0,
-            total_steps,
-        }
-    }
-    
-    fn start_step(&mut self, emoji: &str, name: &str) {
-        self.current_step += 1;
-        print!("[{}/{}] {}  {}... ", self.current_step, self.total_steps, emoji, name);
-        use std::io::{self, Write};
-        io::stdout().flush().ok();
-    }
-    
-    fn finish_step(&self, duration_secs: u64) {
-        if duration_secs > 0 {
-            println!("{} {}s", "✓".green(), duration_secs);
-        } else {
-            println!("{}", "✓".green());
-        }
-    }
-}
-
 /// Start remote DevDock workflow.
 pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
     info!("Starting remote DevDock workflow");
@@ -114,10 +84,7 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
     logger.log(&format!("Auto-forward: {}", auto_forward))?;
     logger.log(&format!("Verbose: {}", verbose))?;
     
-    // Create progress reporter - only used in non-verbose mode
-    // Steps: 1) Config+Start, 2) Ports (optional), 3) Sync
-    let total_steps = if auto_forward { 3 } else { 2 };
-    let mut progress = ProgressReporter::new(total_steps);
+    // Progress will be shown via spinners for non-verbose mode
     
     // Display initial info (cleaner, more compact)
     println!();
@@ -331,15 +298,38 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
     logger.log(&format!("Command: devdock start {} {}", profile, services.as_ref().map(|s| format!("-s {}", s)).unwrap_or_default()))?;
     logger.log(&format!("Remote logs: coder ssh {} -- tail -f /tmp/devdock-start.log", &workspace_name))?;
     
-    // Step 1-2: Config sync and DevDock start (combined into one operation)
-    let step1_start = Instant::now();
+    // Step 1: Config sync
+    let config_start = Instant::now();
     
     let spinner1 = if !verbose {
-        Some(output::create_spinner("Config & Start"))
+        Some(output::create_spinner("Config"))
     } else {
         println!();  // Newline for substeps
         output::info("Syncing configuration files to remote...");
         None
+    };
+    
+    // Step 2: DevDock start (spinner created by callback after config completes)
+    let spinner2 = std::sync::Arc::new(std::sync::Mutex::new(None::<indicatif::ProgressBar>));
+    let spinner2_clone = spinner2.clone();
+    let devdock_start_time = std::sync::Arc::new(std::sync::Mutex::new(Instant::now()));
+    let devdock_start_clone = devdock_start_time.clone();
+    
+    let config_duration_ref = std::sync::Arc::new(std::sync::Mutex::new(config_start));
+    let config_duration_clone = config_duration_ref.clone();
+    
+    let on_config_complete = move || {
+        if !verbose {
+            let config_duration = config_duration_clone.lock().unwrap().elapsed().as_secs();
+            if let Some(s) = spinner1 {
+                s.finish_with_message(format!("Config {}", format!("✓ {}s", config_duration).green()));
+            }
+            
+            // Start spinner for DevDock startup phase
+            let s2 = output::create_spinner("Starting");
+            *spinner2_clone.lock().unwrap() = Some(s2);
+            *devdock_start_clone.lock().unwrap() = Instant::now();
+        }
     };
     
     // The actual config sync and devdock start happens inside workspace::start_remote_devdock
@@ -353,13 +343,16 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
         offset,
         Some(logger.path()),
         verbose,
+        Some(on_config_complete),
     )
     .await?;
     
-    let step1_duration = step1_start.elapsed().as_secs();
-    
-    if let Some(s) = spinner1 {
-        s.finish_with_message(format!("Config & Start {}", format!("✓ {}s", step1_duration).green()));
+    // Finish DevDock start spinner
+    if !verbose {
+        let devdock_duration = devdock_start_time.lock().unwrap().elapsed().as_secs();
+        if let Some(s) = spinner2.lock().unwrap().take() {
+            s.finish_with_message(format!("Starting {}", format!("✓ {}s", devdock_duration).green()));
+        }
     } else {
         output::success("DevDock started successfully");
     }

@@ -76,7 +76,7 @@ pub async fn provision_workspace(config: &coder::CoderWorkspaceConfig) -> Result
 
 /// Start DevDock on remote workspace with optional port forwarding.
 #[allow(clippy::too_many_arguments)]
-pub async fn start_remote_devdock(
+pub async fn start_remote_devdock<F>(
     workspace: &str,
     profile: &str,
     profile_path: &Path,
@@ -86,7 +86,11 @@ pub async fn start_remote_devdock(
     offset: u16,
     log_file: Option<&Path>,
     verbose: bool,
-) -> Result<Option<PortForwardManager>> {
+    on_config_complete: Option<F>,
+) -> Result<Option<PortForwardManager>>
+where
+    F: FnOnce(),
+{
     info!("Starting DevDock on remote workspace: {}", workspace);
     
     // Log start
@@ -113,26 +117,39 @@ pub async fn start_remote_devdock(
         println!("  ✓ Configuration synced");
     }
     
+    // Signal that config phase is complete (for progress UI)
+    if let Some(callback) = on_config_complete {
+        callback();
+    }
+    
     // 1.5. Verify gcloud authentication (both regular and ADC)
     info!("Verifying gcloud authentication on remote...");
-    print!("  Verifying gcloud auth...");
-    std::io::Write::flush(&mut std::io::stdout()).ok();
+    if verbose {
+        print!("  Verifying gcloud auth...");
+        std::io::Write::flush(&mut std::io::stdout()).ok();
+    }
     
     // Check regular gcloud auth
     let auth_ok = match ssh::ssh_exec_with_log(workspace, "gcloud auth list --filter=status:ACTIVE --format='value(account)'", log_file) {
         Ok(account) if !account.trim().is_empty() => {
-            print!(" ✓ {}", account.trim());
+            if verbose {
+                print!(" ✓ {}", account.trim());
+            }
             true
         },
         _ => {
-            print!(" ✗");
+            if verbose {
+                print!(" ✗");
+            }
             false
         }
     };
     
     // Check Application Default Credentials (required by DevDock)
-    print!(" | ADC...");
-    std::io::Write::flush(&mut std::io::stdout()).ok();
+    if verbose {
+        print!(" | ADC...");
+        std::io::Write::flush(&mut std::io::stdout()).ok();
+    }
     
     let adc_ok = match ssh::ssh_exec_with_log(workspace, "gcloud auth application-default print-access-token 2>&1", log_file) {
         Ok(output) if output.contains("invalid_grant") || output.contains("Bad Request") => {
@@ -170,21 +187,29 @@ pub async fn start_remote_devdock(
         Ok(output) if output.starts_with("ya29.") || output.starts_with("ERROR:") && !output.contains("invalid_grant") => {
             // Either valid token (ya29.*) or other error
             if output.starts_with("ya29.") {
-                println!(" ✓");
+                if verbose {
+                    println!(" ✓");
+                }
                 true
             } else {
-                println!(" ? (check manually)");
-                eprintln!("  ⚠ Warning: Could not verify ADC: {}", output.lines().next().unwrap_or(""));
+                if verbose {
+                    println!(" ? (check manually)");
+                    eprintln!("  ⚠ Warning: Could not verify ADC: {}", output.lines().next().unwrap_or(""));
+                }
                 true // Don't block if we can't verify
             }
         },
         Ok(_) => {
-            println!(" ?");
+            if verbose {
+                println!(" ?");
+            }
             true // Don't block
         },
         Err(e) => {
-            println!();
-            eprintln!("  ⚠ Warning: Could not check ADC: {}", e);
+            if verbose {
+                println!();
+                eprintln!("  ⚠ Warning: Could not check ADC: {}", e);
+            }
             true // Don't block on check failure
         }
     };
@@ -217,9 +242,11 @@ pub async fn start_remote_devdock(
     
     match ssh::ssh_exec_with_log(workspace, &start_script, log_file) {
         Ok(output) => {
-            println!("  ✓ DevDock start command executed");
+            if verbose {
+                println!("  ✓ DevDock start command executed");
+            }
             // Don't print environment variable dumps
-            if !output.trim().is_empty() && !output.trim().contains("tmux") && !output.trim().contains("declare -x") {
+            if verbose && !output.trim().is_empty() && !output.trim().contains("tmux") && !output.trim().contains("declare -x") {
                 println!("  Output: {}", output.trim());
             }
         },
