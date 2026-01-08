@@ -137,12 +137,34 @@ pub async fn start_remote_devdock(
     let adc_ok = match ssh::ssh_exec_with_log(workspace, "gcloud auth application-default print-access-token 2>&1", log_file) {
         Ok(output) if output.contains("invalid_grant") || output.contains("Bad Request") => {
             println!(" ✗ EXPIRED");
-            eprintln!("\n  ❌ ERROR: Application Default Credentials are EXPIRED!");
-            eprintln!("  DevDock WILL FAIL during platform initialization.");
-            eprintln!("\n  To fix, SSH to the workspace and run:");
-            eprintln!("    coder ssh {}", workspace);
-            eprintln!("    gcloud auth application-default login");
-            eprintln!();
+            println!();
+            println!("╭─────────────────────────────────────────────────────╮");
+            println!("│  ❌ ERROR: ADC Credentials EXPIRED                  │");
+            println!("╰─────────────────────────────────────────────────────╯");
+            println!();
+            println!("DevDock requires valid Application Default Credentials (ADC).");
+            println!("Your ADC credentials have expired and need to be refreshed.");
+            println!();
+            println!("To fix:");
+            println!("  1. SSH to workspace: coder ssh {}", workspace);
+            println!("  2. Run: gcloud auth application-default login");
+            println!("  3. Restart DevDock");
+            println!();
+            
+            // Ask user if they want to continue anyway (for debugging)
+            print!("Continue anyway? (DevDock will likely fail) [y/N] ");
+            use std::io::{self, Write};
+            io::stdout().flush().ok();
+            
+            let mut response = String::new();
+            io::stdin().read_line(&mut response).ok();
+            
+            if !response.trim().eq_ignore_ascii_case("y") {
+                return Err(RemoteError::SshError("ADC credentials expired - please refresh and try again".to_string()));
+            }
+            
+            println!("⚠️  Continuing with expired ADC (expect failures)...");
+            println!();
             false
         },
         Ok(output) if output.starts_with("ya29.") || output.starts_with("ERROR:") && !output.contains("invalid_grant") => {

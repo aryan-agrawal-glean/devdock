@@ -256,6 +256,13 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
                     spinner.finish_and_clear();
                     output::success("Workspace created");
                     logger.log("Workspace created successfully")?;
+                    
+                    // Wait for SSH to become available (new workspace needs time to initialize)
+                    if verbose {
+                        println!("  Waiting for SSH to become ready...");
+                    }
+                    std::thread::sleep(std::time::Duration::from_secs(10));
+                    logger.log("Waited 10s for SSH initialization")?;
                     logger.log(&format!("Workspace SSH ready: coder ssh {}", ws_name))?;
                     ws_name
                 },
@@ -289,6 +296,13 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
             spinner.finish_and_clear();
             output::success("Workspace created");
             logger.log("Workspace created successfully")?;
+            
+            // Wait for SSH to become available (new workspace needs time to initialize)
+            if verbose {
+                println!("  Waiting for SSH to become ready...");
+            }
+            std::thread::sleep(std::time::Duration::from_secs(10));
+            logger.log("Waited 10s for SSH initialization")?;
             logger.log(&format!("Workspace SSH ready: coder ssh {}", ws_name))?;
             ws_name
         }
