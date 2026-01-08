@@ -230,14 +230,8 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
                     std::thread::sleep(std::time::Duration::from_secs(5));
                     logger.log("Waited 5s for workspace stabilization")?;
                     
-                    // IMPORTANT: Re-sync gcloud credentials even for existing workspaces
-                    // This ensures fresh credentials after local refresh
-                    if verbose {
-                        println!("  Re-syncing gcloud credentials...");
-                    }
-                    logger.log("Re-syncing gcloud credentials to ensure freshness")?;
-                    devdock_remote::config_sync::sync_gcloud_credentials(&workspace_name, verbose)?;
-                    logger.log("Gcloud credentials re-synced")?;
+                    // Note: Gcloud credentials will be re-synced in workspace::start_remote_devdock
+                    // No need to sync them here
                     
                     workspace_name.clone()
                 },

@@ -140,6 +140,8 @@ pub fn sync_gcloud_credentials(workspace: &str, verbose: bool) -> Result<()> {
     
     // Copy files to temp directory
     info!("Staging gcloud credential files...");
+    let mut staged_files = Vec::new();
+    
     for file in &gcloud_files {
         let src = gcloud_dir.join(file);
         if src.exists() {
@@ -164,8 +166,21 @@ pub fn sync_gcloud_credentials(workspace: &str, verbose: bool) -> Result<()> {
             }
             
             debug!("Staged file: {}", file);
+            staged_files.push(file);
         }
     }
+    
+    // Verify we have the critical ADC file
+    if !gcloud_temp.join("application_default_credentials.json").exists() {
+        return Err(RemoteError::ConfigSyncError(
+            "application_default_credentials.json not found locally - run: gcloud auth application-default login".to_string()
+        ));
+    }
+    
+    if verbose {
+        println!("    → Staged {} credential files", staged_files.len());
+    }
+    info!("Staged {} gcloud files", staged_files.len());
     
     // Note: Remote directory ~/.secrets-sync is created by sync_all_config for efficiency
     
@@ -200,28 +215,49 @@ pub fn sync_gcloud_credentials(workspace: &str, verbose: bool) -> Result<()> {
         return Err(RemoteError::ConfigSyncError(format!("Failed to copy gcloud credentials: {}", stderr)));
     }
     
-    // Move to final location on remote
+    // Move to final location on remote with verification
     debug!("Moving credentials to final locations...");
     let move_script = r#"
-        # Copy to home directory for gcloud CLI
+        set -e
+        
+        # Debug: Check what was synced
+        echo "=== Files synced to staging ==="
+        ls -la ~/.secrets-sync/gcloud/ 2>&1 || echo "ERROR: No gcloud dir in staging!"
+        
+        # Copy to home directory for gcloud CLI (DON'T suppress errors)
+        echo "=== Copying to ~/.config/gcloud ==="
         mkdir -p ~/.config/gcloud
-        rsync -a ~/.secrets-sync/gcloud/ ~/.config/gcloud/ 2>/dev/null
-
+        rsync -av ~/.secrets-sync/gcloud/ ~/.config/gcloud/ 2>&1
+        
+        # Verify the critical ADC file
+        if [ ! -f ~/.config/gcloud/application_default_credentials.json ]; then
+            echo "ERROR: application_default_credentials.json not copied!"
+            exit 1
+        fi
+        
         # Also copy to /tmp/.config for services
+        echo "=== Copying to /tmp/.config/gcloud ==="
         mkdir -p /tmp/.config/gcloud/configurations
-        rsync -a ~/.secrets-sync/gcloud/ /tmp/.config/gcloud/ 2>/dev/null
+        rsync -av ~/.secrets-sync/gcloud/ /tmp/.config/gcloud/ 2>&1
 
-        # Clean up staging directory
-        rm -rf ~/.secrets-sync
-
-        # Set proper permissions (directories: 700, files: 600)
-        # Main directories writable so gcloud can create logs/
+        # Set proper permissions
         chmod 700 ~/.config/gcloud ~/.config/gcloud/configurations 2>/dev/null || true
         chmod 700 /tmp/.config/gcloud /tmp/.config/gcloud/configurations 2>/dev/null || true
+        chmod 600 ~/.config/gcloud/application_default_credentials.json 2>/dev/null || true
+        chmod 600 /tmp/.config/gcloud/application_default_credentials.json 2>/dev/null || true
         
-        # Credential files should be 600
-        find ~/.config/gcloud -type f -exec chmod 600 {} \; 2>/dev/null || true
-        find /tmp/.config/gcloud -type f -exec chmod 600 {} \; 2>/dev/null || true
+        # Verify ADC works after copy
+        echo "=== Testing ADC on remote ==="
+        if gcloud auth application-default print-access-token >/dev/null 2>&1; then
+            echo "✓ ADC is valid on remote"
+        else
+            echo "⚠ ADC test failed (will check again after project set)"
+        fi
+        
+        # Clean up staging directory
+        rm -rf ~/.secrets-sync
+        
+        echo "=== Credential sync complete ==="
     "#;
     
     let output = Command::new("coder")
@@ -232,9 +268,28 @@ pub fn sync_gcloud_credentials(workspace: &str, verbose: bool) -> Result<()> {
         .output()
         .map_err(|e| RemoteError::ConfigSyncError(format!("Failed to move credentials: {}", e)))?;
     
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    
+    // Always show debug output in verbose mode
+    if verbose {
+        println!();
+        println!("    === Credential Sync Debug ===");
+        for line in stdout.lines() {
+            println!("    {}", line);
+        }
+        if !stderr.is_empty() {
+            println!("    STDERR: {}", stderr);
+        }
+        println!("    === End Debug ===");
+        println!();
+    }
+    
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        debug!("Warning during credential move: {}", stderr);
+        return Err(RemoteError::ConfigSyncError(format!(
+            "Credential sync failed: {}\nstdout: {}\nstderr: {}",
+            output.status, stdout, stderr
+        )));
     }
     
     // Verify gcloud auth actually works (not just config exists)
