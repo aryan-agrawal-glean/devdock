@@ -134,6 +134,7 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
         println!("   • Starting DevDock: ~1 min");
         println!();
         println!("📋 Session logs: {}", logger.path().display().to_string().dimmed());
+        println!("   Monitor: tail -f {}", logger.path().display().to_string().dimmed());
         println!();
     } else {
         // Compact header
@@ -148,7 +149,7 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
             format!("ID: {}", &instance_id[..8]).dimmed()
         );
         println!();
-        println!("⏱️  Expected: ~2-3 min | Watch: {}", "devdock logs -f".cyan());
+        println!("⏱️  Expected: ~2-3 min");
         println!();
     }
     
