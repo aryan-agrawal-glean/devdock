@@ -107,9 +107,9 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
         println!();
     } else {
         // Compact header
-        println!("{}", "╭────────────────────────────────────────╮".cyan());
+        println!("{}", "╭───────────────────────────────────────────╮".cyan());
         println!("{}", format!("│  🚀 Remote DevDock: {}@{}", profile, workspace_name).cyan());
-        println!("{}", "╰────────────────────────────────────────╯".cyan());
+        println!("{}", "╰───────────────────────────────────────────╯".cyan());
         println!();
         println!(
             "{} | {} | {}",
@@ -481,7 +481,7 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
     } else {
         // Compact success output
         println!("{}", "╭────────────────────────────────────────╮".green());
-        println!("{}", format!("│  ✅ Ready in {}                      │", total_time).green());
+        println!("{}", format!("│  ✅ Ready in {}                     │", total_time).green());
         println!("{}", "╰────────────────────────────────────────╯".green());
         println!();
         println!("{} {}", "🌐 Tilt UI:".cyan(), format!("http://localhost:{}", offset + 10350).cyan().underline());
