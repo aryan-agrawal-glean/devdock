@@ -223,6 +223,22 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
                     workspace::cleanup_existing_devdock(&workspace_name, Some(logger.path()))?;
                     logger.log("Existing DevDock session cleaned up")?;
                     
+                    // Wait for cleanup to settle and SSH to stabilize
+                    if verbose {
+                        println!("  Waiting for workspace to stabilize...");
+                    }
+                    std::thread::sleep(std::time::Duration::from_secs(5));
+                    logger.log("Waited 5s for workspace stabilization")?;
+                    
+                    // IMPORTANT: Re-sync gcloud credentials even for existing workspaces
+                    // This ensures fresh credentials after local refresh
+                    if verbose {
+                        println!("  Re-syncing gcloud credentials...");
+                    }
+                    logger.log("Re-syncing gcloud credentials to ensure freshness")?;
+                    devdock_remote::config_sync::sync_gcloud_credentials(&workspace_name, verbose)?;
+                    logger.log("Gcloud credentials re-synced")?;
+                    
                     workspace_name.clone()
                 },
                 "2" => {
