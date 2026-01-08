@@ -239,7 +239,7 @@ pub fn sync_gcloud_credentials(workspace: &str, verbose: bool) -> Result<()> {
         # Also copy to /tmp/.config for services
         echo "=== Copying to /tmp/.config/gcloud ==="
         mkdir -p /tmp/.config/gcloud/configurations
-        rsync -av ~/.secrets-sync/gcloud/ /tmp/.config/gcloud/ 2>&1
+        rsync -av ~/.secrets-sync/ /tmp/.config/gcloud/ 2>&1
 
         # Set proper permissions
         chmod 700 ~/.config/gcloud ~/.config/gcloud/configurations 2>/dev/null || true
