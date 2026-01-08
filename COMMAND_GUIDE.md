@@ -1,8 +1,10 @@
 # DevDock Command Guide & Cheatsheet
 
-A comprehensive reference for all DevDock CLI commands.
+A comprehensive reference for all **implemented** DevDock CLI commands.
 
 > 💡 **Quick Tip**: For fast lookups, check the [Quick Reference](#quick-reference) section below. For detailed explanations, see the [Detailed Commands](#detailed-commands) section.
+
+> ⚠️ **Note**: This guide only includes commands that are fully implemented. Some commands defined in the CLI (like `plugin`, `service`, and `generate`) are not yet implemented and have been excluded.
 
 ---
 
@@ -34,8 +36,6 @@ devdock list                          # List all instances
   -r, --running                       # Only running instances
 
 devdock validate <profile>            # Validate profile
-devdock generate <profile>            # Generate configs
-  -o <path>                           # Output directory
 ```
 
 ### 🐋 Docker Commands
@@ -49,26 +49,10 @@ devdock docker login                  # Login to GCR
 devdock docker prune                  # Remove dangling images
 ```
 
-### 🔧 Service Management
-```bash
-devdock service enable <name>         # Enable service
-devdock service disable <name>        # Disable service
-devdock service logs <name>           # View logs
-  -f, --follow                        # Follow logs
-```
-
 ### 📝 Profile Management
 ```bash
 devdock profile list                  # List profiles
 devdock profile show <name>           # Show profile details
-devdock profile create                # Create new profile (interactive)
-```
-
-### 🔌 Plugin Management
-```bash
-devdock plugin list                   # List plugins
-devdock plugin install <name>         # Install plugin
-devdock plugin remove <name>          # Remove plugin
 ```
 
 ### 🗄️ Infrastructure - SQL
@@ -213,9 +197,7 @@ devdock report              # If issue persists
 ### Table of Contents
 - [Basic Commands](#basic-commands-1)
 - [Docker Management](#docker-management-1)
-- [Service Management](#service-management-1)
 - [Profile Management](#profile-management-1)
-- [Plugin Management](#plugin-management-1)
 - [Infrastructure Commands](#infrastructure-commands)
 - [Logging Management](#logging-management-1)
 - [Port Management](#port-management-1)
@@ -340,23 +322,6 @@ devdock validate <profile>
 
 ---
 
-### Generate Configuration
-Generate configuration files without starting DevDock.
-
-```bash
-# Generate to default location
-devdock generate <profile>
-
-# Generate to custom output directory
-devdock generate <profile> -o /path/to/output
-devdock generate <profile> --output ./configs
-```
-
-**Options:**
-- `-o, --output <path>`: Output directory for generated files
-
----
-
 ## Docker Management
 
 ### Check Docker
@@ -415,43 +380,6 @@ devdock docker prune
 
 ---
 
-## Service Management
-
-### Enable Service
-Enable a service in the current environment.
-
-```bash
-devdock service enable <service-name>
-```
-
----
-
-### Disable Service
-Disable a service in the current environment.
-
-```bash
-devdock service disable <service-name>
-```
-
----
-
-### View Service Logs
-View logs for a specific service.
-
-```bash
-# View service logs
-devdock service logs <service-name>
-
-# Follow service logs (tail -f style)
-devdock service logs <service-name> -f
-devdock service logs <service-name> --follow
-```
-
-**Options:**
-- `-f, --follow`: Follow log output in real-time
-
----
-
 ## Profile Management
 
 ### List Profiles
@@ -468,44 +396,6 @@ Display detailed information about a profile.
 
 ```bash
 devdock profile show <profile-name>
-```
-
----
-
-### Create Profile
-Create a new profile interactively.
-
-```bash
-devdock profile create
-```
-
----
-
-## Plugin Management
-
-### List Plugins
-List all installed plugins.
-
-```bash
-devdock plugin list
-```
-
----
-
-### Install Plugin
-Install a new plugin.
-
-```bash
-devdock plugin install <plugin-name>
-```
-
----
-
-### Remove Plugin
-Remove an installed plugin.
-
-```bash
-devdock plugin remove <plugin-name>
 ```
 
 ---
@@ -879,13 +769,10 @@ devdock start my-profile
 # 3. Check status
 devdock status
 
-# 4. View logs
-devdock service logs qe -f
-
-# 5. Execute commands in containers
+# 4. Execute commands in containers
 devdock exec qe "python manage.py shell"
 
-# 6. Stop when done
+# 5. Stop when done
 devdock stop
 ```
 
@@ -940,14 +827,14 @@ devdock start my-profile
 # 1. Check status
 devdock status -d
 
-# 2. Check service logs
-devdock service logs <service> -f
-
-# 3. Verify Docker is running
+# 2. Verify Docker is running
 devdock docker check
 
-# 4. View instance list
+# 3. View instance list
 devdock list
+
+# 4. Check container logs directly
+devdock exec qe "tail -f /var/log/app.log"
 
 # 5. If stuck, try cleanup and restart
 devdock cleanup
