@@ -114,8 +114,10 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
     logger.log(&format!("Auto-forward: {}", auto_forward))?;
     logger.log(&format!("Verbose: {}", verbose))?;
     
-    // Create progress reporter (4 main steps) - only used in non-verbose mode
-    let mut progress = ProgressReporter::new(4);
+    // Create progress reporter - only used in non-verbose mode
+    // Steps: 1) Config+Start, 2) Ports (optional), 3) Sync
+    let total_steps = if auto_forward { 3 } else { 2 };
+    let mut progress = ProgressReporter::new(total_steps);
     
     // Display initial info (cleaner, more compact)
     println!();
@@ -329,8 +331,12 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
     logger.log(&format!("Command: devdock start {} {}", profile, services.as_ref().map(|s| format!("-s {}", s)).unwrap_or_default()))?;
     logger.log(&format!("Remote logs: coder ssh {} -- tail -f /tmp/devdock-start.log", &workspace_name))?;
     
-    // Step 1: Config sync (timing handled internally by workspace functions)
-    progress.start_step("⚙️", "Config");
+    // Step 1-2: Config sync and DevDock start (combined into one operation)
+    let step1_start = Instant::now();
+    
+    if !verbose {
+        progress.start_step("⚙️", "Config & Start");
+    }
     
     if verbose {
         println!();  // Newline for substeps
@@ -351,16 +357,23 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
     )
     .await?;
     
+    let step1_duration = step1_start.elapsed().as_secs();
+    
     if verbose {
         output::success("DevDock started successfully");
+    } else {
+        progress.finish_step(step1_duration);
     }
     logger.log("DevDock started successfully")?;
     
-    // Note: We'll finish the progress steps after we know the duration
-    // For now, assume config+devdock took most of the time
-    
-    // Save port mappings to database if auto-forwarding
+    // Step 2: Save port mappings (if auto-forwarding)
     if let Some(mgr) = &port_mgr {
+        let step2_start = Instant::now();
+        
+        if !verbose {
+            progress.start_step("🔌", "Ports");
+        }
+        
         let mappings: Vec<_> = mgr
             .mappings
             .iter()
@@ -376,15 +389,22 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
             .collect();
         
         state.save_port_mappings(&instance_id, &mappings).await?;
+        
+        let step2_duration = step2_start.elapsed().as_secs();
+        if !verbose {
+            progress.finish_step(step2_duration);
+        }
     }
     
     // Clean up stale sync files from old instances first
     cleanup_stale_sync_files(&state).await?;
     
-    // Auto-start file sync (always enabled)
+    // Step 3 (or 2 if no ports): Auto-start file sync (always enabled)
+    let step_sync_start = Instant::now();
+    
     if !verbose {
         // Show as compact progress step
-        progress.start_step("🔄", "File sync");
+        progress.start_step("🔄", "Sync");
     } else {
         println!();
     }
@@ -403,10 +423,12 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
                 s.finish_and_clear();
             }
             
+            let step_sync_duration = step_sync_start.elapsed().as_secs();
+            
             if verbose {
                 output::success("File sync started");
             } else {
-                progress.finish_step(0);
+                progress.finish_step(step_sync_duration);
             }
             Ok(())
         }
@@ -419,7 +441,7 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
             if verbose {
                 output::warn("File sync failed (start manually: devdock sync start)");
             } else {
-                println!("{}", " ⚠️  (start manually)".yellow());
+                print!("{}", " ⚠️".yellow());
             }
             Err(e)
         }

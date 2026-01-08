@@ -369,7 +369,7 @@ pub fn start_daemon(
         .map_err(|e| SyncError::DaemonError(format!("Failed to spawn daemon process: {}", e)))?;
     
     let pid = child.id();
-    eprintln!("[SYNC] Spawned daemon process with PID: {}", pid);
+    // Debug output now goes to log file via stderr redirect, not to console
     
     // Don't wait for child - let it run independently
     // The child will write its own PID file

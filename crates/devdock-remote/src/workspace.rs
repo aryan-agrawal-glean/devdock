@@ -261,8 +261,10 @@ pub async fn start_remote_devdock(
     sleep(Duration::from_secs(5)); // Give it time to start or fail
     
     // Check if tmux session still exists (with 10s timeout)
-    print!("  Checking tmux session...");
-    std::io::Write::flush(&mut std::io::stdout()).ok();
+    if verbose {
+        print!("  Checking tmux session...");
+        std::io::Write::flush(&mut std::io::stdout()).ok();
+    }
     match ssh::ssh_check_with_timeout(workspace, "tmux has-session -t devdock 2>/dev/null", log_file, Some(10)) {
         Ok(true) => {
             if verbose {
@@ -343,13 +345,17 @@ pub async fn start_remote_devdock(
         sleep(Duration::from_secs(3));
     }
     
-    println!("\n  To view DevDock logs:");
-    println!("    coder ssh {}", workspace);
-    println!("    tmux attach -t devdock");
+    if verbose {
+        println!();
+        println!("  To view DevDock logs:");
+        println!("    coder ssh {}", workspace);
+        println!("    tmux attach -t devdock");
+    }
     
     // 4. Setup port forwarding
     if verbose {
-        println!("\n  Setting up port forwarding...");
+        println!();
+        println!("  Setting up port forwarding...");
     }
     let port_mgr = if auto_forward {
         info!("Setting up auto port forwarding...");
