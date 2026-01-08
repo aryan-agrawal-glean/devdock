@@ -334,14 +334,13 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
     // Step 1-2: Config sync and DevDock start (combined into one operation)
     let step1_start = Instant::now();
     
-    if !verbose {
-        progress.start_step("⚙️", "Config & Start");
-    }
-    
-    if verbose {
+    let spinner1 = if !verbose {
+        Some(output::create_spinner("Config & Start"))
+    } else {
         println!();  // Newline for substeps
         output::info("Syncing configuration files to remote...");
-    }
+        None
+    };
     
     // The actual config sync and devdock start happens inside workspace::start_remote_devdock
     let port_mgr = workspace::start_remote_devdock(
@@ -359,10 +358,10 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
     
     let step1_duration = step1_start.elapsed().as_secs();
     
-    if verbose {
-        output::success("DevDock started successfully");
+    if let Some(s) = spinner1 {
+        s.finish_with_message(format!("Config & Start {}", format!("✓ {}s", step1_duration).green()));
     } else {
-        progress.finish_step(step1_duration);
+        output::success("DevDock started successfully");
     }
     logger.log("DevDock started successfully")?;
     
@@ -370,9 +369,11 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
     if let Some(mgr) = &port_mgr {
         let step2_start = Instant::now();
         
-        if !verbose {
-            progress.start_step("🔌", "Ports");
-        }
+        let spinner2 = if !verbose {
+            Some(output::create_spinner("Ports"))
+        } else {
+            None
+        };
         
         let mappings: Vec<_> = mgr
             .mappings
@@ -391,8 +392,8 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
         state.save_port_mappings(&instance_id, &mappings).await?;
         
         let step2_duration = step2_start.elapsed().as_secs();
-        if !verbose {
-            progress.finish_step(step2_duration);
+        if let Some(s) = spinner2 {
+            s.finish_with_message(format!("Ports {}", format!("✓ {}s", step2_duration).green()));
         }
     }
     
@@ -402,46 +403,41 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
     // Step 3 (or 2 if no ports): Auto-start file sync (always enabled)
     let step_sync_start = Instant::now();
     
-    if !verbose {
-        // Show as compact progress step
-        progress.start_step("🔄", "Sync");
+    let spinner_sync = if !verbose {
+        Some(output::create_spinner("Sync"))
     } else {
         println!();
-    }
-    
-    let spinner = if verbose {
         Some(output::create_spinner("Starting file sync..."))
-    } else {
-        None
     };
     
     let repo_path = PathBuf::from(&worktree);
     let sync_result = match sync_daemon::start_daemon(&instance_id, &workspace_name, &repo_path, false) {
         Ok(_) => {
             state.save_sync_session(&instance_id, &workspace_name, None, false, "running").await?;
-            if let Some(s) = spinner {
-                s.finish_and_clear();
-            }
             
             let step_sync_duration = step_sync_start.elapsed().as_secs();
             
-            if verbose {
-                output::success("File sync started");
-            } else {
-                progress.finish_step(step_sync_duration);
+            if let Some(s) = spinner_sync {
+                if verbose {
+                    s.finish_with_message("File sync started ✓".green().to_string());
+                } else {
+                    s.finish_with_message(format!("Sync {}", format!("✓ {}s", step_sync_duration).green()));
+                }
             }
             Ok(())
         }
         Err(e) => {
             warn!("Failed to start file sync: {}", e);
-            if let Some(s) = spinner {
-                s.finish_and_clear();
+            if let Some(s) = spinner_sync {
+                if verbose {
+                    s.finish_with_message("File sync failed ⚠️".yellow().to_string());
+                } else {
+                    s.finish_with_message(format!("Sync {}", "⚠️ failed".yellow()));
+                }
             }
             
             if verbose {
-                output::warn("File sync failed (start manually: devdock sync start)");
-            } else {
-                print!("{}", " ⚠️".yellow());
+                output::warn("Start manually: devdock sync start");
             }
             Err(e)
         }
