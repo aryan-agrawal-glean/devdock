@@ -141,7 +141,7 @@ fn check_docker() -> Result<()> {
                  2. Docker daemon is stuck/unresponsive\n\
                  \n\
                  Try:\n\
-                 • Restart Docker: colima restart (macOS) or sudo systemctl restart docker (Linux)\n\
+                 • Restart Docker: colima start --memory 10 --cpu 4 --network-address slirp --vm-type vz (macOS) or sudo systemctl restart docker (Linux)\n\
                  • Check Docker status: docker ps\n\
                  • Kill stuck processes: pkill -9 docker"
             )
