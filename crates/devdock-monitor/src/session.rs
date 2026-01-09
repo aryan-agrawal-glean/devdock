@@ -50,11 +50,7 @@ impl SessionTiming {
     fn read_command_start_time() -> Option<u64> {
         let home = dirs::home_dir()?;
         let timing_file = home.join(TIMING_FILE);
-        fs::read_to_string(timing_file)
-            .ok()?
-            .trim()
-            .parse()
-            .ok()
+        fs::read_to_string(timing_file).ok()?.trim().parse().ok()
     }
 
     /// Mark tilt as ready (first successful tilt command).
@@ -198,4 +194,3 @@ mod tests {
         assert!(!id.is_empty());
     }
 }
-

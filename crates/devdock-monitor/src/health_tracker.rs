@@ -326,4 +326,3 @@ mod tests {
         assert_eq!(status, ResourceStatus::Healthy);
     }
 }
-

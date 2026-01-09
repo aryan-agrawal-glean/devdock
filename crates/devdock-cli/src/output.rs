@@ -104,9 +104,7 @@ pub fn notify(title: &str, message: &str) {
 #[cfg(target_os = "linux")]
 pub fn notify(title: &str, message: &str) {
     use std::process::Command;
-    let _ = Command::new("notify-send")
-        .args([title, message])
-        .output();
+    let _ = Command::new("notify-send").args([title, message]).output();
 }
 
 /// Send desktop notification (Windows - no-op for now).
@@ -114,4 +112,3 @@ pub fn notify(title: &str, message: &str) {
 pub fn notify(_title: &str, _message: &str) {
     // Windows notification support can be added later
 }
-

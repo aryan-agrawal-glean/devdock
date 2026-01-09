@@ -47,6 +47,7 @@ impl Default for TelemetryCollectorConfig {
 
 /// Tracks per-resource state for telemetry.
 #[derive(Debug, Clone, Default)]
+#[allow(dead_code)]
 struct ResourceTracker {
     first_seen: Option<DateTime<Utc>>,
     first_healthy: Option<DateTime<Utc>>,
@@ -189,7 +190,10 @@ impl TelemetryCollector {
         Ok(())
     }
 
-    async fn collect_resource_statuses(&self, resources: &[TiltResource]) -> Vec<ResourceStatusMetrics> {
+    async fn collect_resource_statuses(
+        &self,
+        resources: &[TiltResource],
+    ) -> Vec<ResourceStatusMetrics> {
         let now = Utc::now();
         let mut trackers = self.resource_trackers.write().await;
 
@@ -219,7 +223,10 @@ impl TelemetryCollector {
             .collect()
     }
 
-    async fn collect_resource_startups(&self, resources: &[TiltResource]) -> Vec<ResourceStartupMetrics> {
+    async fn collect_resource_startups(
+        &self,
+        resources: &[TiltResource],
+    ) -> Vec<ResourceStartupMetrics> {
         let trackers = self.resource_trackers.read().await;
 
         resources
@@ -255,7 +262,10 @@ impl TelemetryCollector {
             .collect()
     }
 
-    async fn check_health_transitions(&self, resources: &[TiltResource]) -> Vec<HealthTransitionEvent> {
+    async fn check_health_transitions(
+        &self,
+        resources: &[TiltResource],
+    ) -> Vec<HealthTransitionEvent> {
         let now = Utc::now();
         let mut trackers = self.resource_trackers.write().await;
         let mut transitions = Vec::new();
@@ -398,7 +408,11 @@ impl TelemetryCollector {
 
                 let total = free + active + inactive + wired;
                 let used = active + wired;
-                let pct = if total > 0 { (used as f64 / total as f64) * 100.0 } else { 0.0 };
+                let pct = if total > 0 {
+                    (used as f64 / total as f64) * 100.0
+                } else {
+                    0.0
+                };
 
                 return (0.0, used, total, pct);
             }
@@ -419,7 +433,11 @@ impl TelemetryCollector {
                 }
 
                 let used = total.saturating_sub(available);
-                let pct = if total > 0 { (used as f64 / total as f64) * 100.0 } else { 0.0 };
+                let pct = if total > 0 {
+                    (used as f64 / total as f64) * 100.0
+                } else {
+                    0.0
+                };
 
                 return (0.0, used, total, pct);
             }
@@ -455,7 +473,11 @@ impl TelemetryCollector {
                         let total = (stat.f_blocks as u64) * (stat.f_frsize as u64);
                         let free = (stat.f_bfree as u64) * (stat.f_frsize as u64);
                         let used = total - free;
-                        let pct = if total > 0 { (used as f64 / total as f64) * 100.0 } else { 0.0 };
+                        let pct = if total > 0 {
+                            (used as f64 / total as f64) * 100.0
+                        } else {
+                            0.0
+                        };
                         return (used, total, pct);
                     }
                 }
@@ -538,4 +560,3 @@ struct DockerStatsJson {
     #[serde(rename = "PIDs")]
     pids: String,
 }
-

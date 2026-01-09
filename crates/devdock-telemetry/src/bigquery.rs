@@ -94,6 +94,7 @@ struct InsertError {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct ErrorDetail {
     reason: String,
     message: String,
@@ -239,7 +240,11 @@ impl BigQueryEmitter {
             return Ok(rows.len() - error_count);
         }
 
-        info!("Successfully inserted {} rows into {}", rows.len(), table_id);
+        info!(
+            "Successfully inserted {} rows into {}",
+            rows.len(),
+            table_id
+        );
         Ok(rows.len())
     }
 }
@@ -355,4 +360,3 @@ impl TelemetryEmitter for BigQueryEmitter {
         Ok(())
     }
 }
-

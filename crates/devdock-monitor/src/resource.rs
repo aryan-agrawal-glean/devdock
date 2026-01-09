@@ -102,7 +102,9 @@ impl TiltResource {
             .map(|l| {
                 if let Some(obj) = l.as_object() {
                     // Object format: keys are the label names
-                    obj.keys().map(|k| ResourceLabel::from(k.as_str())).collect()
+                    obj.keys()
+                        .map(|k| ResourceLabel::from(k.as_str()))
+                        .collect()
                 } else if let Some(arr) = l.as_array() {
                     // Array format: values are the label names
                     arr.iter()
@@ -139,12 +141,8 @@ impl TiltResource {
             .and_then(|h| h.as_str())
             .map(String::from);
 
-        let resource_status = Self::determine_status(
-            &runtime_status,
-            &update_status,
-            &compose_health,
-            status,
-        );
+        let resource_status =
+            Self::determine_status(&runtime_status, &update_status, &compose_health, status);
 
         Some(TiltResource {
             name,
@@ -203,9 +201,8 @@ impl TiltResource {
             .get("conditions")
             .and_then(|c| c.as_array())
             .and_then(|arr| {
-                arr.iter().find(|cond| {
-                    cond.get("type").and_then(|t| t.as_str()) == Some("Ready")
-                })
+                arr.iter()
+                    .find(|cond| cond.get("type").and_then(|t| t.as_str()) == Some("Ready"))
             })
             .and_then(|cond| cond.get("status"))
             .and_then(|s| s.as_str());
@@ -229,8 +226,7 @@ impl TiltResource {
                     {
                         return ResourceStatus::Healthy;
                     }
-                } else if runtime_status.as_deref() == Some("ok")
-                    && ready_condition == Some("True")
+                } else if runtime_status.as_deref() == Some("ok") && ready_condition == Some("True")
                 {
                     return ResourceStatus::Healthy;
                 }
@@ -259,4 +255,3 @@ impl TiltResource {
         !self.is_disabled && self.labels.iter().any(|l| l.is_monitored())
     }
 }
-

@@ -77,20 +77,18 @@ impl TiltClient {
 
         let resources: Vec<TiltResource> = items
             .iter()
-            .filter_map(|item| {
-                match TiltResource::from_json(item) {
-                    Some(r) => {
-                        if r.name == "(Tiltfile)" {
-                            None
-                        } else {
-                            debug!("Parsed resource: {} -> {:?}", r.name, r.status);
-                            Some(r)
-                        }
-                    }
-                    None => {
-                        warn!("Failed to parse resource: {:?}", item.get("metadata"));
+            .filter_map(|item| match TiltResource::from_json(item) {
+                Some(r) => {
+                    if r.name == "(Tiltfile)" {
                         None
+                    } else {
+                        debug!("Parsed resource: {} -> {:?}", r.name, r.status);
+                        Some(r)
                     }
+                }
+                None => {
+                    warn!("Failed to parse resource: {:?}", item.get("metadata"));
+                    None
                 }
             })
             .collect();
@@ -127,4 +125,3 @@ mod tests {
         assert_eq!(resources[0].name, "test-service");
     }
 }
-

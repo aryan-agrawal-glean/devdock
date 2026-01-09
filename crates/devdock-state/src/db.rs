@@ -55,7 +55,7 @@ impl StateManager {
         )
         .execute(&self.pool)
         .await?;
-        
+
         // Add workspace_name column if it doesn't exist (migration for existing databases)
         let _ = sqlx::query("ALTER TABLE instances ADD COLUMN workspace_name TEXT")
             .execute(&self.pool)
@@ -198,7 +198,10 @@ impl StateManager {
     }
 
     /// Alias for get_by_workspace for compatibility
-    pub async fn get_instance_by_workspace(&self, workspace_path: &str) -> Result<Option<Instance>> {
+    pub async fn get_instance_by_workspace(
+        &self,
+        workspace_path: &str,
+    ) -> Result<Option<Instance>> {
         self.get_by_workspace(workspace_path).await
     }
 
@@ -210,18 +213,21 @@ impl StateManager {
         .fetch_all(&self.pool)
         .await?;
 
-        Ok(rows.iter().map(|r| Instance {
-            id: r.get("id"),
-            workspace_path: r.get("workspace_path"),
-            workspace_name: r.get("workspace_name"),
-            branch: r.get("branch"),
-            profile: r.get("profile"),
-            mode: r.get("mode"),
-            status: InstanceStatus::parse(r.get("status")),
-            port_base: r.get::<i64, _>("port_base") as u16,
-            created_at: r.get("created_at"),
-            updated_at: r.get("updated_at"),
-        }).collect())
+        Ok(rows
+            .iter()
+            .map(|r| Instance {
+                id: r.get("id"),
+                workspace_path: r.get("workspace_path"),
+                workspace_name: r.get("workspace_name"),
+                branch: r.get("branch"),
+                profile: r.get("profile"),
+                mode: r.get("mode"),
+                status: InstanceStatus::parse(r.get("status")),
+                port_base: r.get::<i64, _>("port_base") as u16,
+                created_at: r.get("created_at"),
+                updated_at: r.get("updated_at"),
+            })
+            .collect())
     }
 
     /// Update instance status.
@@ -230,14 +236,12 @@ impl StateManager {
             .duration_since(std::time::UNIX_EPOCH)?
             .as_secs() as i64;
 
-        sqlx::query(
-            "UPDATE instances SET status = ?, updated_at = ? WHERE id = ?"
-        )
-        .bind(status.as_str())
-        .bind(now)
-        .bind(id)
-        .execute(&self.pool)
-        .await?;
+        sqlx::query("UPDATE instances SET status = ?, updated_at = ? WHERE id = ?")
+            .bind(status.as_str())
+            .bind(now)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
 
         Ok(())
     }
@@ -297,15 +301,20 @@ impl StateManager {
         .fetch_all(&self.pool)
         .await?;
 
-        Ok(rows.into_iter().map(|r| (
-            r.get("service_name"),
-            r.get("port_type"),
-            r.get::<i64, _>("local_port") as u16,
-            r.get::<i64, _>("remote_port") as u16,
-            r.get::<Option<i64>, _>("process_pid").map(|p| p as u32),
-        )).collect())
+        Ok(rows
+            .into_iter()
+            .map(|r| {
+                (
+                    r.get("service_name"),
+                    r.get("port_type"),
+                    r.get::<i64, _>("local_port") as u16,
+                    r.get::<i64, _>("remote_port") as u16,
+                    r.get::<Option<i64>, _>("process_pid").map(|p| p as u32),
+                )
+            })
+            .collect())
     }
-    
+
     /// Save a single port mapping.
     pub async fn save_port_mapping(
         &self,
@@ -322,7 +331,7 @@ impl StateManager {
             .bind(service_name)
             .execute(&self.pool)
             .await?;
-        
+
         // Insert new mapping
         sqlx::query(
             r#"
@@ -338,10 +347,10 @@ impl StateManager {
         .bind(pid.map(|p| p as i64))
         .execute(&self.pool)
         .await?;
-        
+
         Ok(())
     }
-    
+
     /// Remove a specific port mapping.
     pub async fn remove_port_mapping(&self, devdock_id: &str, service_name: &str) -> Result<()> {
         sqlx::query("DELETE FROM port_mappings WHERE devdock_id = ? AND service_name = ?")
@@ -349,7 +358,7 @@ impl StateManager {
             .bind(service_name)
             .execute(&self.pool)
             .await?;
-        
+
         Ok(())
     }
 
@@ -395,20 +404,25 @@ impl StateManager {
     }
 
     /// Get sync session state.
-    pub async fn get_sync_session(&self, devdock_id: &str) -> Result<Option<(String, Option<u32>, bool, String)>> {
+    pub async fn get_sync_session(
+        &self,
+        devdock_id: &str,
+    ) -> Result<Option<(String, Option<u32>, bool, String)>> {
         let row = sqlx::query(
-            "SELECT workspace_name, pid, full_mode, status FROM sync_sessions WHERE devdock_id = ?"
+            "SELECT workspace_name, pid, full_mode, status FROM sync_sessions WHERE devdock_id = ?",
         )
         .bind(devdock_id)
         .fetch_optional(&self.pool)
         .await?;
 
-        Ok(row.map(|r| (
-            r.get("workspace_name"),
-            r.get::<Option<i64>, _>("pid").map(|p| p as u32),
-            r.get::<i64, _>("full_mode") != 0,
-            r.get("status"),
-        )))
+        Ok(row.map(|r| {
+            (
+                r.get("workspace_name"),
+                r.get::<Option<i64>, _>("pid").map(|p| p as u32),
+                r.get::<i64, _>("full_mode") != 0,
+                r.get("status"),
+            )
+        }))
     }
 
     /// Delete sync session.
@@ -421,4 +435,3 @@ impl StateManager {
         Ok(())
     }
 }
-

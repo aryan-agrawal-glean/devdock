@@ -20,35 +20,35 @@ impl OperationLogger {
             .ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?
             .join(".devdock")
             .join("remote");
-        
+
         std::fs::create_dir_all(&log_dir)?;
-        
+
         let timestamp = Local::now().format("%Y%m%d-%H%M%S");
         let log_path = log_dir.join(format!("devdock-remote-{}.log", timestamp));
-        
+
         let file = OpenOptions::new()
             .create(true)
             .append(true)
             .open(&log_path)?;
-        
+
         let logger = Self {
             file: Arc::new(Mutex::new(file)),
             log_path,
         };
-        
+
         logger.log_line("=== DevDock Remote Session Started ===")?;
         logger.log_line(&format!("DevDock ID: {}", devdock_id))?;
         logger.log_line(&format!("Timestamp: {}", Local::now().to_rfc3339()))?;
         logger.log_line("")?;
-        
+
         Ok(logger)
     }
-    
+
     /// Get the path to the log file.
     pub fn path(&self) -> &Path {
         &self.log_path
     }
-    
+
     /// Log a message with timestamp.
     pub fn log(&self, message: &str) -> Result<()> {
         let timestamp = Local::now().format("%H:%M:%S");
@@ -57,7 +57,7 @@ impl OperationLogger {
         file.flush()?;
         Ok(())
     }
-    
+
     /// Log a message without timestamp.
     pub fn log_line(&self, message: &str) -> Result<()> {
         let mut file = self.file.lock().unwrap();
@@ -65,14 +65,14 @@ impl OperationLogger {
         file.flush()?;
         Ok(())
     }
-    
+
     /// Log a section header.
     pub fn log_section(&self, title: &str) -> Result<()> {
         self.log_line("")?;
         self.log_line(&format!("=== {} ===", title))?;
         Ok(())
     }
-    
+
     /// Log an error.
     #[allow(dead_code)]
     pub fn log_error(&self, error: &str) -> Result<()> {
@@ -80,7 +80,7 @@ impl OperationLogger {
         self.log(error)?;
         Ok(())
     }
-    
+
     /// Log command execution.
     #[allow(dead_code)]
     pub fn log_command(&self, command: &str) -> Result<()> {
@@ -97,4 +97,3 @@ impl Clone for OperationLogger {
         }
     }
 }
-

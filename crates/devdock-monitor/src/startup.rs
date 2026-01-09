@@ -261,6 +261,7 @@ impl StartupMonitor {
         (stable_healthy, stabilizing, pending, failed)
     }
 
+    #[allow(dead_code)]
     fn get_stability_info(&self, name: &str) -> Option<StabilityInfo> {
         self.health_tracker.borrow().get_stability_info(name)
     }
@@ -283,15 +284,9 @@ impl StartupMonitor {
         print!("\r\x1B[K");
 
         if stable == total {
-            println!(
-                "\x1B[32m✓ All {}/{} resources stable\x1B[0m",
-                stable, total
-            );
+            println!("\x1B[32m✓ All {}/{} resources stable\x1B[0m", stable, total);
         } else {
-            print!(
-                "\x1B[34m[{}/{}]\x1B[0m ",
-                stable, total
-            );
+            print!("\x1B[34m[{}/{}]\x1B[0m ", stable, total);
 
             if stab > 0 {
                 print!("\x1B[36m{}◐\x1B[0m ", stab);
@@ -323,6 +318,7 @@ impl StartupMonitor {
         }
     }
 
+    #[allow(dead_code)]
     fn truncate_list(&self, items: &[String], max: usize) -> String {
         if items.len() <= max {
             items.join(", ")
@@ -428,10 +424,25 @@ impl StartupMonitor {
             );
             if !stabilizing.is_empty() || !pending.is_empty() {
                 let waiting: Vec<_> = stabilizing.iter().chain(pending.iter()).take(5).collect();
-                println!("  Waiting on: {}", waiting.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "));
+                println!(
+                    "  Waiting on: {}",
+                    waiting
+                        .iter()
+                        .map(|s| s.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
             }
             if !failed.is_empty() {
-                println!("  Failed: {}", failed.iter().take(5).cloned().collect::<Vec<_>>().join(", "));
+                println!(
+                    "  Failed: {}",
+                    failed
+                        .iter()
+                        .take(5)
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
             }
         }
 
@@ -523,4 +534,3 @@ mod tests {
         assert!(!timeout.is_success());
     }
 }
-

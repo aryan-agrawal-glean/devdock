@@ -13,8 +13,8 @@ use crate::output;
 use anyhow::{Context, Result};
 use devdock_config::gcs_storage::DynamicIniLoader;
 use devdock_config::opensearch_import::OpenSearchCopier;
-use std::path::Path;
 use devdock_config::sql_import::SqlOperationsManager;
+use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
@@ -170,10 +170,13 @@ pub async fn sql_setup(
     full_cleanup: bool,
     copy_keyval: bool,
 ) -> Result<()> {
-    output::info(&format!("Setting up SQL for project {} ({})", project, platform));
+    output::info(&format!(
+        "Setting up SQL for project {} ({})",
+        project, platform
+    ));
 
-    let devdock_root = std::env::var("DEVDOCK_ROOT")
-        .context("DEVDOCK_ROOT environment variable not set")?;
+    let devdock_root =
+        std::env::var("DEVDOCK_ROOT").context("DEVDOCK_ROOT environment variable not set")?;
     let devdock_root = PathBuf::from(&devdock_root);
 
     // Determine container name
@@ -234,7 +237,10 @@ pub async fn sql_setup(
     // Handle table comparison
     else {
         let mut prev_sorted: Vec<&str> = prev_tables.split(';').filter(|s| !s.is_empty()).collect();
-        let mut curr_sorted: Vec<&str> = tables_to_copy.split(';').filter(|s| !s.is_empty()).collect();
+        let mut curr_sorted: Vec<&str> = tables_to_copy
+            .split(';')
+            .filter(|s| !s.is_empty())
+            .collect();
         prev_sorted.sort();
         curr_sorted.sort();
 
@@ -322,7 +328,10 @@ pub async fn sql_setup(
         dump_files.sort();
 
         for dump_file in &dump_files {
-            output::info(&format!("⏩ Importing {:?}", dump_file.file_name().unwrap()));
+            output::info(&format!(
+                "⏩ Importing {:?}",
+                dump_file.file_name().unwrap()
+            ));
             docker_mysql_import(container, dump_file)?;
             output::success(&format!("✅ Imported {:?}", dump_file.file_name().unwrap()));
         }
@@ -344,16 +353,11 @@ pub async fn sql_setup(
 }
 
 /// SQL cleanup
-pub async fn sql_clean(
-    project: &str,
-    platform: &str,
-    region: &str,
-    db_tables: &str,
-) -> Result<()> {
+pub async fn sql_clean(project: &str, platform: &str, region: &str, db_tables: &str) -> Result<()> {
     output::info(&format!("Cleaning SQL for project {}", project));
 
-    let devdock_root = std::env::var("DEVDOCK_ROOT")
-        .context("DEVDOCK_ROOT environment variable not set")?;
+    let devdock_root =
+        std::env::var("DEVDOCK_ROOT").context("DEVDOCK_ROOT environment variable not set")?;
     let devdock_root = PathBuf::from(devdock_root);
 
     // Load merged config (default.ini + dynamic.ini from GCS)
@@ -398,10 +402,7 @@ pub async fn opensearch_copy(
         output::success(&format!("Copied {} documents for {}", count, index));
     }
 
-    output::success(&format!(
-        "✅ Completed copying {} index(es)",
-        results.len()
-    ));
+    output::success(&format!("✅ Completed copying {} index(es)", results.len()));
 
     Ok(())
 }
@@ -435,4 +436,3 @@ pub async fn opensearch_health() -> Result<()> {
 
     Ok(())
 }
-

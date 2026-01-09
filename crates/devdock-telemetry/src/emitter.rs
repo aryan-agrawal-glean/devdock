@@ -67,6 +67,7 @@ impl EmitResult {
 }
 
 /// A no-op emitter for testing or when telemetry is disabled.
+#[allow(dead_code)]
 pub struct NoopEmitter;
 
 #[async_trait]
@@ -93,10 +94,12 @@ impl TelemetryEmitter for NoopEmitter {
 }
 
 /// An emitter that writes to local JSON files for debugging.
+#[allow(dead_code)]
 pub struct FileEmitter {
     output_dir: std::path::PathBuf,
 }
 
+#[allow(dead_code)]
 impl FileEmitter {
     pub fn new(output_dir: impl Into<std::path::PathBuf>) -> Self {
         FileEmitter {
@@ -117,9 +120,11 @@ impl TelemetryEmitter for FileEmitter {
 
     async fn emit(&self, snapshot: &TelemetrySnapshot) -> Result<EmitResult> {
         use chrono::Utc;
-        
+
         let timestamp = Utc::now().format("%Y%m%d_%H%M%S");
-        let filename = self.output_dir.join(format!("telemetry_{}.json", timestamp));
+        let filename = self
+            .output_dir
+            .join(format!("telemetry_{}.json", timestamp));
 
         let json = serde_json::to_string_pretty(snapshot)?;
         std::fs::write(&filename, json)?;
@@ -136,4 +141,3 @@ impl TelemetryEmitter for FileEmitter {
         Ok(())
     }
 }
-

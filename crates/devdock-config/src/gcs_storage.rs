@@ -101,9 +101,9 @@ impl GcsStorage {
         let temp_name = format!("temp_{}", uuid_simple());
         let local_path = self.fetch_file(gcs_path, &temp_name).await?;
 
-        let bytes = tokio::fs::read(&local_path).await.with_context(|| {
-            format!("Failed to read fetched file: {}", local_path.display())
-        })?;
+        let bytes = tokio::fs::read(&local_path)
+            .await
+            .with_context(|| format!("Failed to read fetched file: {}", local_path.display()))?;
 
         // Clean up temp file
         let _ = tokio::fs::remove_file(&local_path).await;
@@ -329,7 +329,9 @@ impl SqlDumpFetcher {
             .map(|db| format!("{}/{}.sql", self.storage.sql_bucket(), db))
             .collect();
 
-        self.storage.fetch_files_parallel(&gcs_files, target_dir).await
+        self.storage
+            .fetch_files_parallel(&gcs_files, target_dir)
+            .await
     }
 
     /// Check if a SQL dump exists in GCS
@@ -347,11 +349,7 @@ fn uuid_simple() -> String {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default();
 
-    format!(
-        "{:x}{:x}",
-        duration.as_secs(),
-        duration.subsec_nanos()
-    )
+    format!("{:x}{:x}", duration.as_secs(), duration.subsec_nanos())
 }
 
 #[cfg(test)]
@@ -374,8 +372,3 @@ mod tests {
         assert!(!uuid2.is_empty());
     }
 }
-
-
-
-
-

@@ -63,4 +63,3 @@ pub fn get_current_git_branch() -> Result<String> {
         Ok("unknown".to_string())
     }
 }
-

@@ -21,6 +21,5 @@ mod models;
 pub use bigquery::{BigQueryConfig, BigQueryEmitter};
 pub use collector::{TelemetryCollector, TelemetryCollectorConfig};
 pub use emitter::TelemetryEmitter;
-pub use error::{TelemetryError, Result};
+pub use error::{Result, TelemetryError};
 pub use models::*;
-

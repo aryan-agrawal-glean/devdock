@@ -144,7 +144,11 @@ pub fn get_reporter_email() -> Result<String> {
 }
 
 /// Get Jira account ID for a user by their email.
-async fn get_user_account_id(client: &reqwest::Client, email: &str, token: &str) -> Result<Option<String>> {
+async fn get_user_account_id(
+    client: &reqwest::Client,
+    email: &str,
+    token: &str,
+) -> Result<Option<String>> {
     let url = format!("{}/rest/api/3/user/search", JIRA_URL);
     let auth = format!("{}:{}", JIRA_EMAIL, token);
     let encoded = base64::engine::general_purpose::STANDARD.encode(auth.as_bytes());
@@ -483,4 +487,3 @@ async fn attach_file_to_issue(
     info!("Successfully attached archive");
     Ok(())
 }
-

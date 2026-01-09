@@ -61,7 +61,8 @@ impl ProfileValidator {
 
         if current_project.is_empty() {
             return Err(Error::InvalidProfile(
-                "No gcloud project is currently set. Run: gcloud config set project <project>".to_string(),
+                "No gcloud project is currently set. Run: gcloud config set project <project>"
+                    .to_string(),
             ));
         }
 
@@ -179,4 +180,3 @@ mod tests {
         assert!(validator.validate(&profile).is_err());
     }
 }
-

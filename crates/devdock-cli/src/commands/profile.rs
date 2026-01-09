@@ -51,4 +51,3 @@ pub async fn create() -> Result<()> {
     output::warn("Profile create not yet implemented - coming soon!");
     Ok(())
 }
-

@@ -18,12 +18,12 @@ pub async fn networks() -> Result<()> {
     docker::check_docker()?;
     docker::setup_networks()?;
     output::success("✅ Docker networks are ready");
-    
+
     // List the networks
     for network in docker::DEVDOCK_NETWORKS {
         output::info(&format!("  • {}", network));
     }
-    
+
     Ok(())
 }
 
@@ -31,12 +31,12 @@ pub async fn networks() -> Result<()> {
 pub async fn pull(python_only: bool, cache: bool) -> Result<()> {
     output::info("Pulling Docker images...");
     docker::check_docker()?;
-    
+
     // Login to GCR first
     output::info("Authenticating with Google Container Registry...");
     docker::docker_login_gcr()?;
     output::success("Authenticated with GCR");
-    
+
     let images = if python_only {
         output::info("Pulling Python images only...");
         docker::PYTHON_IMAGES
@@ -44,15 +44,15 @@ pub async fn pull(python_only: bool, cache: bool) -> Result<()> {
         output::info("Pulling all required images...");
         docker::REQUIRED_IMAGES
     };
-    
+
     docker::pull_images(images, cache)?;
-    
+
     output::success(&format!("✅ Pulled {} images", images.len()));
-    
+
     if cache {
         output::info("Images have been cached to ~/.devdock/images/");
     }
-    
+
     Ok(())
 }
 
@@ -68,16 +68,14 @@ pub async fn login() -> Result<()> {
 pub async fn prune() -> Result<()> {
     output::info("Pruning dangling Docker images...");
     docker::check_docker()?;
-    
+
     let removed = docker::remove_dangling_images()?;
-    
+
     if removed > 0 {
         output::success(&format!("✅ Removed {} dangling images", removed));
     } else {
         output::info("No dangling images to remove");
     }
-    
+
     Ok(())
 }
-
-

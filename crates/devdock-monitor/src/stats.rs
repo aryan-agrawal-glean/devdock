@@ -242,8 +242,12 @@ impl StatsCollector {
                     container_id: container.id,
                     name: container.name,
                     cpu_percent: Self::parse_percent(&container.cpu_perc),
-                    memory_usage_bytes: Self::parse_size(&container.mem_usage.split('/').next().unwrap_or("0")),
-                    memory_limit_bytes: Self::parse_size(&container.mem_usage.split('/').nth(1).unwrap_or("0")),
+                    memory_usage_bytes: Self::parse_size(
+                        &container.mem_usage.split('/').next().unwrap_or("0"),
+                    ),
+                    memory_limit_bytes: Self::parse_size(
+                        &container.mem_usage.split('/').nth(1).unwrap_or("0"),
+                    ),
                     memory_percent: Self::parse_percent(&container.mem_perc),
                     pids: container.pids.parse().unwrap_or(0),
                     timestamp: Utc::now(),
@@ -308,4 +312,3 @@ pub struct DockerContainerStats {
     pub pids: u32,
     pub timestamp: DateTime<Utc>,
 }
-

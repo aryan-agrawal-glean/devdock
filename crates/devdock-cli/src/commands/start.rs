@@ -18,7 +18,7 @@ pub async fn execute(
 ) -> Result<()> {
     // Track command start time for telemetry
     let command_start_time = chrono::Utc::now();
-    
+
     output::info("Starting DevDock...");
 
     // Step 1: Load and validate profile
@@ -62,12 +62,8 @@ pub async fn execute(
         mode: "local".to_string(),
         status: InstanceStatus::Starting,
         port_base,
-        created_at: SystemTime::now()
-            .duration_since(UNIX_EPOCH)?
-            .as_secs() as i64,
-        updated_at: SystemTime::now()
-            .duration_since(UNIX_EPOCH)?
-            .as_secs() as i64,
+        created_at: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64,
+        updated_at: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64,
     };
 
     state_manager.register_instance(&instance).await?;
@@ -93,7 +89,7 @@ pub async fn execute(
 
     output::info("Starting Tilt...");
     let tilt_process = start_tilt(services)?;
-    
+
     // Track tilt up time for telemetry
     let tilt_up_time = chrono::Utc::now();
 
@@ -102,8 +98,10 @@ pub async fn execute(
     println!("  Services: https://local.glean.com:{}", port_base);
 
     if run_monitor {
-        println!("\nStarting resource monitor (timeout: {}s)...\n",
-            monitor_timeout.unwrap_or(1200));
+        println!(
+            "\nStarting resource monitor (timeout: {}s)...\n",
+            monitor_timeout.unwrap_or(1200)
+        );
     } else {
         println!("\nPress Ctrl+C to stop DevDock\n");
     }
@@ -120,7 +118,8 @@ pub async fn execute(
         profile_name,
         command_start_time,
         tilt_up_time,
-    ).await?;
+    )
+    .await?;
 
     Ok(())
 }
@@ -196,7 +195,6 @@ async fn generate_configs_rust(
     Ok(())
 }
 
-
 /// Clean up old logs
 fn cleanup_old_logs() -> Result<()> {
     output::info("Cleaning up old logs...");
@@ -214,7 +212,10 @@ fn cleanup_old_logs() -> Result<()> {
                 let dir_name = path.file_name().unwrap().to_string_lossy();
 
                 // Skip special directories
-                if matches!(dir_name.as_ref(), "images" | "auth" | "sql" | "grafana" | "bazel" | "generated" | "sync") {
+                if matches!(
+                    dir_name.as_ref(),
+                    "images" | "auth" | "sql" | "grafana" | "bazel" | "generated" | "sync"
+                ) {
                     continue;
                 }
 
@@ -285,7 +286,12 @@ fn start_tilt(services: Option<&str>) -> Result<Child> {
             cmd.arg(service.trim());
         }
         // Add helper services
-        cmd.args(["gcloud-auth", "trigger-profile-update", "current-config", "startup-monitor"]);
+        cmd.args([
+            "gcloud-auth",
+            "trigger-profile-update",
+            "current-config",
+            "startup-monitor",
+        ]);
     }
 
     // Spawn tilt process
@@ -301,7 +307,6 @@ fn start_tilt(services: Option<&str>) -> Result<Child> {
 fn find_workspace_root() -> Result<PathBuf> {
     find_workspace_root_from(&std::env::current_dir()?)
 }
-
 
 /// Find workspace root from a specific starting path
 fn find_workspace_root_from(start: &Path) -> Result<PathBuf> {
@@ -338,10 +343,10 @@ async fn wait_for_tilt(
     let instance_id = instance_id.to_string();
     let workspace_root = workspace_root.clone();
     let profile_name = profile_name.to_string();
-    
+
     // Track watch start time (when monitoring begins)
     let watch_start_time = chrono::Utc::now();
-    
+
     // Get PID before moving the process
     let tilt_pid = tilt_process.id();
 
@@ -378,7 +383,7 @@ async fn wait_for_tilt(
                             resources.len(),
                             duration_secs
                         ));
-                        
+
                         // Emit telemetry on success
                         if telemetry_enabled {
                             emit_telemetry(
@@ -397,7 +402,7 @@ async fn wait_for_tilt(
                             "Startup monitoring timed out: {} healthy, {} pending, {} failed",
                             healthy.len(), pending.len(), failed.len()
                         ));
-                        
+
                         if telemetry_enabled {
                             emit_telemetry(
                                 "timeout",
@@ -415,7 +420,7 @@ async fn wait_for_tilt(
                             "Startup monitoring failed: {} resource(s) in error state",
                             failed.len()
                         ));
-                        
+
                         if telemetry_enabled {
                             emit_telemetry(
                                 "failed",
@@ -430,7 +435,7 @@ async fn wait_for_tilt(
                     }
                     Ok(StartupResult::TiltNotRunning) => {
                         output::warn("Tilt stopped during monitoring");
-                        
+
                         if telemetry_enabled {
                             emit_telemetry(
                                 "tilt_stopped",
@@ -561,7 +566,14 @@ fn cleanup_docker_containers() -> Result<()> {
 
     // Get all devdock containers
     let output = Command::new("docker")
-        .args(["ps", "-a", "--filter", "name=devdock-", "--format", "{{.Names}}"])
+        .args([
+            "ps",
+            "-a",
+            "--filter",
+            "name=devdock-",
+            "--format",
+            "{{.Names}}",
+        ])
         .output()?;
 
     if output.status.success() {
@@ -692,7 +704,10 @@ fn cleanup_temp_files(workspace_root: &Path) -> Result<()> {
     output::info(&format!("Workspace root: {}", workspace_root.display()));
 
     let runtime_gen = workspace_root.join("devdock/runtime_generated");
-    output::info(&format!("Looking for runtime_generated at: {}", runtime_gen.display()));
+    output::info(&format!(
+        "Looking for runtime_generated at: {}",
+        runtime_gen.display()
+    ));
 
     if runtime_gen.exists() {
         output::info("Removing runtime_generated directory...");
@@ -718,8 +733,7 @@ fn cleanup_temp_files(workspace_root: &Path) -> Result<()> {
     ];
 
     for config_file in config_files {
-        if config_file.exists()
-            && std::fs::remove_file(&config_file).is_ok() {
+        if config_file.exists() && std::fs::remove_file(&config_file).is_ok() {
             cleaned_count += 1;
         }
     }
@@ -738,17 +752,19 @@ async fn emit_telemetry(
     tilt_up_time: chrono::DateTime<chrono::Utc>,
     watch_start_time: chrono::DateTime<chrono::Utc>,
 ) {
-    use devdock_telemetry::{BigQueryEmitter, BigQueryConfig, TelemetryEmitter, SessionMetrics, TelemetrySnapshot};
     use chrono::Utc;
-    
+    use devdock_telemetry::{
+        BigQueryConfig, BigQueryEmitter, SessionMetrics, TelemetryEmitter, TelemetrySnapshot,
+    };
+
     let machine_id = get_machine_id();
     let devdock_id = uuid::Uuid::new_v4().to_string();
     let now = Utc::now();
-    
+
     // Calculate timing metrics
     let tilt_bootstrap_secs = (tilt_up_time - command_start_time).num_seconds() as f64;
     let total_startup_secs = (now - command_start_time).num_seconds() as f64;
-    
+
     let session = SessionMetrics {
         devdock_id: devdock_id.clone(),
         machine_id: machine_id.clone(),
@@ -769,12 +785,12 @@ async fn emit_telemetry(
         failed_resources: failed_count as i32,
         timestamp: now,
     };
-    
+
     let snapshot = TelemetrySnapshot {
         session: Some(session),
         ..Default::default()
     };
-    
+
     // Configure BigQuery emitter
     let config = BigQueryConfig {
         project_id: "dev-sandbox-334901".to_string(),
@@ -782,25 +798,29 @@ async fn emit_telemetry(
         use_adc: true,
         ..Default::default()
     };
-    
+
     // Try to emit to BigQuery
     match BigQueryEmitter::new(config) {
-        Ok(emitter) => {
-            match emitter.emit(&snapshot).await {
-                Ok(result) => {
-                    if result.is_success() {
-                        tracing::info!("Telemetry emitted to BigQuery: status={}", status);
-                    } else {
-                        tracing::warn!("Partial telemetry emission: {} errors", result.failure_count);
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to emit telemetry to BigQuery: {}", e);
+        Ok(emitter) => match emitter.emit(&snapshot).await {
+            Ok(result) => {
+                if result.is_success() {
+                    tracing::info!("Telemetry emitted to BigQuery: status={}", status);
+                } else {
+                    tracing::warn!(
+                        "Partial telemetry emission: {} errors",
+                        result.failure_count
+                    );
                 }
             }
-        }
+            Err(e) => {
+                tracing::warn!("Failed to emit telemetry to BigQuery: {}", e);
+            }
+        },
         Err(e) => {
-            tracing::debug!("BigQuery telemetry not available: {} (this is normal for local dev)", e);
+            tracing::debug!(
+                "BigQuery telemetry not available: {} (this is normal for local dev)",
+                e
+            );
         }
     }
 }
@@ -808,7 +828,7 @@ async fn emit_telemetry(
 /// Get a stable machine identifier
 fn get_machine_id() -> String {
     use std::ffi::CStr;
-    
+
     #[cfg(unix)]
     {
         let mut name = [0i8; 256];
@@ -820,7 +840,7 @@ fn get_machine_id() -> String {
             }
         }
     }
-    
+
     // Fallback to USER env var
     std::env::var("USER").unwrap_or_else(|_| "unknown".to_string())
 }

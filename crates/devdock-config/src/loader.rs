@@ -4,7 +4,7 @@ use devdock_core::{profile::Profile, Error, Result};
 use std::path::{Path, PathBuf};
 
 /// Loads DevDock profiles from various locations.
-/// 
+///
 /// Profile resolution follows Python devdock.sh behavior:
 /// 1. user_profiles/ subdirectory (highest priority)
 /// 2. integration_tests/ subdirectory
@@ -46,9 +46,7 @@ impl ProfileLoader {
 
     /// Create a profile loader with custom search paths.
     pub fn with_paths(paths: Vec<PathBuf>) -> Self {
-        Self {
-            base_paths: paths,
-        }
+        Self { base_paths: paths }
     }
 
     /// Add a search path.
@@ -72,7 +70,11 @@ impl ProfileLoader {
     /// Load a profile from a specific path.
     pub fn load_from_path(&self, path: &Path) -> Result<Profile> {
         let content = std::fs::read_to_string(path).map_err(|e| {
-            Error::InvalidProfile(format!("Failed to read profile file {}: {}", path.display(), e))
+            Error::InvalidProfile(format!(
+                "Failed to read profile file {}: {}",
+                path.display(),
+                e
+            ))
         })?;
 
         let profile: Profile = serde_yaml::from_str(&content).map_err(|e| {
@@ -83,7 +85,7 @@ impl ProfileLoader {
     }
 
     /// Find a profile file by name.
-    /// 
+    ///
     /// Resolution priority (matches Python devdock.sh):
     /// 1. user_profiles/<name>.yaml (highest priority)
     /// 2. integration_tests/<name>.yaml
@@ -127,7 +129,7 @@ impl ProfileLoader {
         for base_path in &self.base_paths {
             // Check subdirectories and root
             let subdirs = ["user_profiles", "integration_tests", ""];
-            
+
             for subdir in &subdirs {
                 let search_path = if subdir.is_empty() {
                     base_path.clone()
@@ -173,7 +175,7 @@ impl ProfileLoader {
                 ("integration_tests", "Integration test profiles"),
                 ("", "Standard profiles"),
             ];
-            
+
             for (subdir, category) in &categories {
                 let search_path = if subdir.is_empty() {
                     base_path.clone()
@@ -268,4 +270,3 @@ services:
         assert!(profiles.contains(&"profile2".to_string()));
     }
 }
-

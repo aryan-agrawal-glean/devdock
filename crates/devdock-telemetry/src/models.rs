@@ -186,4 +186,3 @@ impl TelemetrySnapshot {
             + self.health_transitions.len()
     }
 }
-

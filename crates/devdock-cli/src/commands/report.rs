@@ -6,7 +6,7 @@ use devdock_diagnostics::BugReporter;
 /// Run the bug reporting workflow interactively.
 pub async fn report_bug() -> Result<()> {
     let reporter = BugReporter::new().interactive(true);
-    
+
     match reporter.report().await {
         Ok(ticket_key) => {
             println!("\n✅ Bug report created successfully: {}", ticket_key);
@@ -26,7 +26,7 @@ pub async fn report_bug_with_details(
     command: String,
 ) -> Result<()> {
     let reporter = BugReporter::with_details(summary, description, command).interactive(false);
-    
+
     match reporter.report().await {
         Ok(ticket_key) => {
             println!("\n✅ Bug report created successfully: {}", ticket_key);
@@ -38,4 +38,3 @@ pub async fn report_bug_with_details(
         }
     }
 }
-

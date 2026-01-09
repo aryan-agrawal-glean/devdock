@@ -27,4 +27,3 @@ pub enum TelemetryError {
     #[error("Monitor error: {0}")]
     Monitor(#[from] devdock_monitor::MonitorError),
 }
-

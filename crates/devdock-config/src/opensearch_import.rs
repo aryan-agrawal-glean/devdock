@@ -28,8 +28,8 @@ pub struct OpenSearchCopier {
 impl OpenSearchCopier {
     /// Create a new OpenSearch copier from project config
     pub async fn new(project: &str) -> Result<Self> {
-        let devdock_root = std::env::var("DEVDOCK_ROOT")
-            .context("DEVDOCK_ROOT environment variable not set")?;
+        let devdock_root =
+            std::env::var("DEVDOCK_ROOT").context("DEVDOCK_ROOT environment variable not set")?;
         let devdock_root = PathBuf::from(devdock_root);
 
         let ini_loader = DynamicIniLoader::new(project, devdock_root)?;
@@ -64,7 +64,7 @@ impl OpenSearchCopier {
     /// Check if Elasticsearch is healthy on a given port
     fn health_check(port: u16) -> bool {
         let url = format!("http://localhost:{}/", port);
-        
+
         match reqwest::blocking::get(&url) {
             Ok(resp) => resp.status().is_success(),
             Err(_) => false,
@@ -162,7 +162,10 @@ impl OpenSearchCopier {
             });
 
             client
-                .post(format!("{}/_search?scroll={}&size={}", source_url, scroll, size))
+                .post(format!(
+                    "{}/_search?scroll={}&size={}",
+                    source_url, scroll, size
+                ))
                 .header("Content-Type", "application/json")
                 .json(&body)
                 .send()?
@@ -183,10 +186,7 @@ impl OpenSearchCopier {
         // Build bulk request body
         let mut bulk_data = String::new();
         for doc in docs {
-            let id = doc
-                .get("_id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown");
+            let id = doc.get("_id").and_then(|v| v.as_str()).unwrap_or("unknown");
             let source = doc.get("_source").unwrap_or(doc);
 
             let action = serde_json::json!({
@@ -263,7 +263,8 @@ impl OpenSearchCopier {
 
             // Get next chunk
             if let Some(ref sid) = scroll_id {
-                let response = self.fetch_data_chunk(source_index, query, size, scroll, Some(sid))?;
+                let response =
+                    self.fetch_data_chunk(source_index, query, size, scroll, Some(sid))?;
 
                 scroll_id = response
                     .get("_scroll_id")
@@ -307,11 +308,12 @@ impl OpenSearchCopier {
         let tunnel = self.start_tunnel()?;
 
         // Parse query
-        let query_json: serde_json::Value = serde_json::from_str(query)
-            .unwrap_or_else(|_| serde_json::json!({"match_all": {}}));
+        let query_json: serde_json::Value =
+            serde_json::from_str(query).unwrap_or_else(|_| serde_json::json!({"match_all": {}}));
 
         // Perform chunked reindex
-        let result = self.chunked_reindex(remote_index, local_index, &query_json, 500, "2m", max_docs);
+        let result =
+            self.chunked_reindex(remote_index, local_index, &query_json, 500, "2m", max_docs);
 
         // Stop tunnel
         Self::stop_tunnel(tunnel);
@@ -350,14 +352,10 @@ mod tests {
 
     #[test]
     fn test_copier_creation() {
-        let copier = OpenSearchCopier::with_config(
-            "test-project",
-            "http://elasticsearch:9200",
-            false,
-        );
+        let copier =
+            OpenSearchCopier::with_config("test-project", "http://elasticsearch:9200", false);
         assert_eq!(copier.project, "test-project");
         assert_eq!(copier.server_url, "http://elasticsearch:9200");
         assert!(!copier.private_setup);
     }
 }
-

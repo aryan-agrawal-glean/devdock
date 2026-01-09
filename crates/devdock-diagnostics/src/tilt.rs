@@ -44,4 +44,3 @@ pub fn capture_tilt_snapshot(snapshot_dir: &Path) -> Result<Option<PathBuf>> {
         }
     }
 }
-

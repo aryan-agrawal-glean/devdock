@@ -44,14 +44,15 @@ impl BazelQueryEngine {
             }
             return Ok(());
         }
-        
+
         if !self.silent {
-            println!("      └─ Querying bazel for {} service(s): {:?}", 
+            println!(
+                "      └─ Querying bazel for {} service(s): {:?}",
                 services_with_targets.len(),
                 services_with_targets.keys().collect::<Vec<_>>()
             );
         }
-        
+
         let total_start = std::time::Instant::now();
         let mut futures = Vec::new();
 
@@ -64,8 +65,11 @@ impl BazelQueryEngine {
                 let start = std::time::Instant::now();
                 let result = engine.generate_watch_file(&name, &target).await;
                 if !engine.silent {
-                    println!("         └─ bazel cquery {} completed in {:.2}s", 
-                        name, start.elapsed().as_secs_f64());
+                    println!(
+                        "         └─ bazel cquery {} completed in {:.2}s",
+                        name,
+                        start.elapsed().as_secs_f64()
+                    );
                 }
                 result
             }));
@@ -94,10 +98,14 @@ impl BazelQueryEngine {
                 }
             }
         }
-        
+
         if !self.silent {
-            println!("      └─ Bazel queries: {} success, {} errors in {:.2}s",
-                success_count, error_count, total_start.elapsed().as_secs_f64());
+            println!(
+                "      └─ Bazel queries: {} success, {} errors in {:.2}s",
+                success_count,
+                error_count,
+                total_start.elapsed().as_secs_f64()
+            );
         }
 
         Ok(())
@@ -117,7 +125,10 @@ impl BazelQueryEngine {
 
         cmd.arg("cquery");
         cmd.arg("--output=label");
-        cmd.arg(format!("filter('^//', kind('source file', deps(set({}))))", target));
+        cmd.arg(format!(
+            "filter('^//', kind('source file', deps(set({}))))",
+            target
+        ));
         cmd.current_dir(&self.workspace_root);
 
         let output = cmd.output().await.context("Failed to run bazel cquery")?;
@@ -203,6 +214,3 @@ impl BazelQueryEngine {
         Ok(result)
     }
 }
-
-
-

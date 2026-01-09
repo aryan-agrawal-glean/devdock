@@ -62,7 +62,11 @@ impl SqlUtils {
                     let value = if get_id_only {
                         // Extract instance ID from connection name
                         // Format: project:region:instance-id
-                        full_name.split(':').next_back().unwrap_or(full_name).to_string()
+                        full_name
+                            .split(':')
+                            .next_back()
+                            .unwrap_or(full_name)
+                            .to_string()
                     } else {
                         full_name.clone()
                     };
@@ -75,7 +79,11 @@ impl SqlUtils {
                 let key = format!("{}.googlecloud.instanceName", instance_type);
                 if let Some(full_name) = config.get("sql", &key) {
                     let value = if get_id_only {
-                        full_name.split(':').next_back().unwrap_or(full_name).to_string()
+                        full_name
+                            .split(':')
+                            .next_back()
+                            .unwrap_or(full_name)
+                            .to_string()
                     } else {
                         full_name.clone()
                     };
@@ -102,7 +110,11 @@ impl SqlUtils {
         let connection_key = format!("{}.googlecloud.instanceName", instance_type);
         config.get("sql", &connection_key).map(|full_name| {
             // Extract instance ID from connection name
-            full_name.split(':').next_back().unwrap_or(full_name).to_string()
+            full_name
+                .split(':')
+                .next_back()
+                .unwrap_or(full_name)
+                .to_string()
         })
     }
 
@@ -175,10 +187,7 @@ impl SqlUtils {
         database: &str,
         gcs_uri: &str,
     ) -> Result<()> {
-        info!(
-            "Exporting {} from {} to {}",
-            database, instance_id, gcs_uri
-        );
+        info!("Exporting {} from {} to {}", database, instance_id, gcs_uri);
 
         let status = Command::new("gcloud")
             .args([
@@ -198,7 +207,11 @@ impl SqlUtils {
             .context("Failed to run gcloud sql export")?;
 
         if !status.success() {
-            anyhow::bail!("Failed to export database {} from {}", database, instance_id);
+            anyhow::bail!(
+                "Failed to export database {} from {}",
+                database,
+                instance_id
+            );
         }
 
         Ok(())
@@ -237,7 +250,11 @@ pub fn get_bastion_port_map(config: &ParsedIniConfig, use_iam_port: bool) -> Has
     all_instances.sort_by_key(|instance| get_sort_value(instance));
 
     // Assign ports
-    let start_port = if use_iam_port { IAM_PORT_START } else { PORT_START };
+    let start_port = if use_iam_port {
+        IAM_PORT_START
+    } else {
+        PORT_START
+    };
     for (i, instance) in all_instances.iter().enumerate() {
         port_map.insert(instance.clone(), start_port + i as u16);
     }
@@ -394,4 +411,3 @@ user_profile.db.instance = frontendInstance
         assert_eq!(extract_index("documentDB_5"), 5);
     }
 }
-

@@ -74,4 +74,3 @@ pub async fn execute(timeout: Option<u64>, interval: Option<u64>, no_notify: boo
         }
     }
 }
-

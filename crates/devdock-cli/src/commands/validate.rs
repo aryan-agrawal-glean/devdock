@@ -39,4 +39,3 @@ pub async fn execute(profile_name: &str) -> Result<()> {
     output::success("All validations passed");
     Ok(())
 }
-

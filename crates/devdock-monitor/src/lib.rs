@@ -20,4 +20,3 @@ pub use session::{SessionState, SessionTiming};
 pub use startup::{StartupMonitor, StartupMonitorConfig, StartupResult};
 pub use stats::{HostStats, ResourceStats, StatsCollector};
 pub use tilt::TiltClient;
-

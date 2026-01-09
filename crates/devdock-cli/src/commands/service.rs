@@ -17,4 +17,3 @@ pub async fn logs(_name: &str, _follow: bool) -> Result<()> {
     output::warn("Service logs not yet implemented - coming soon!");
     Ok(())
 }
-
