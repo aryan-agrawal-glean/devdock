@@ -39,6 +39,8 @@ pub struct TempProfileData {
     pub k8s_service_account: Option<String>,
     pub debug_mode: String,
     pub vault_key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub aws_account_id: Option<String>,
     pub services: HashMap<String, ServiceProfileEntry>,
     pub infra: HashMap<String, InfraProfileEntry>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -131,6 +133,7 @@ impl TempProfileGenerator {
             k8s_service_account: None,
             debug_mode: "False".to_string(),
             vault_key: String::new(),
+            aws_account_id: None,
             services: HashMap::new(),
             infra: HashMap::new(),
             pipelines: None,
@@ -250,12 +253,17 @@ impl TempProfileGenerator {
 
         platform.update_temp_profile(&mut temp_profile);
 
-        self.profile.project = temp_profile.project;
-        self.profile.platform = temp_profile.platform;
+        self.profile.project = temp_profile.project.clone();
+        self.profile.platform = temp_profile.platform.clone();
         self.profile.zone = temp_profile.zone;
         self.profile.region = temp_profile.region;
         self.profile.project_number = temp_profile.project_number;
         self.profile.dns_kubectl = Some(temp_profile.dns_kubectl);
+
+        // For AWS platform, set aws_account_id from project
+        if temp_profile.platform == "aws" {
+            self.profile.aws_account_id = Some(temp_profile.project);
+        }
     }
 
     /// Apply the original profile settings (pipelines, test_suite, env, vault_key)
