@@ -29,6 +29,23 @@ pub struct SqlInstanceInfo {
     pub instance_type: &'static str,
 }
 
+/// Pre-fetched metadata for remote SQL configuration
+#[derive(Debug, Clone)]
+pub struct SqlRemoteMetadata {
+    /// SQL instance map: instance_name -> connection_string
+    pub instances: HashMap<String, String>,
+    /// Whether instances have public IP enabled
+    pub use_public_ip: bool,
+    /// Whether bastion VM is available
+    pub is_bastion_available: bool,
+    /// Whether to use IAM authentication
+    pub use_iam_auth: bool,
+    /// Platform (google, aws, azure)
+    pub platform: String,
+    /// Project name
+    pub project: String,
+}
+
 /// SQL utilities for DevDock
 pub struct SqlUtils {
     project: String,
@@ -164,6 +181,62 @@ impl SqlUtils {
                 false
             }
         }
+    }
+
+    /// Fetch all remote SQL metadata needed for configuration
+    ///
+    /// This replaces the Python __init__ logic in SqlServiceDependency
+    pub async fn fetch_remote_metadata(
+        project: &str,
+        platform: &str,
+        zone: &str,
+        dynamic_ini: &ParsedIniConfig,
+    ) -> Result<SqlRemoteMetadata> {
+        let sql_utils = SqlUtils::new(project);
+
+        // 1. Get instance map from dynamic.ini
+        let instances = sql_utils.get_instance_name_map(dynamic_ini, false);
+
+        // 2. Determine platform-specific behavior
+        let (use_public_ip, is_bastion_available) = match platform {
+            "google" => {
+                // For GCP, check actual infrastructure
+                let use_public_ip = if !instances.is_empty() {
+                    sql_utils.check_public_ip(&instances).await.unwrap_or(false)
+                } else {
+                    false
+                };
+                let bastion_available = sql_utils.is_bastion_available(zone).await;
+                (use_public_ip, bastion_available)
+            }
+            "aws" | "azure" => {
+                // AWS/Azure always use their own connectivity patterns
+                (false, false)
+            }
+            _ => (false, false),
+        };
+
+        // 3. Determine IAM auth setting
+        let use_iam_auth = dynamic_ini
+            .get("sql", "useDbIAMAuth")
+            .and_then(|v| v.parse::<bool>().ok())
+            .unwrap_or(true);
+
+        // Special case: Public IP instances in test projects don't use IAM
+        let use_iam_auth = if use_public_ip && !matches!(project, "glean-apps-canary" | "scio-engineering") {
+            false
+        } else {
+            use_iam_auth
+        };
+
+        Ok(SqlRemoteMetadata {
+            instances,
+            use_public_ip,
+            is_bastion_available,
+            use_iam_auth,
+            platform: platform.to_string(),
+            project: project.to_string(),
+        })
     }
 
     /// Export SQL database to GCS

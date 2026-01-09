@@ -422,6 +422,29 @@ impl ConfigGenerator {
             generator = generator.with_dynamic_ini(ini.clone());
         }
 
+        // Pre-fetch SQL metadata if SQL is remote
+        if let Some(sql_config) = profile.infra.get("sql") {
+            if sql_config.deployment_type == devdock_core::types::DeploymentType::Remote {
+                if let Some(ref ini) = dynamic_ini {
+                    match crate::sql::SqlUtils::fetch_remote_metadata(
+                        &profile.project,
+                        &profile.platform.to_string(),
+                        platform.zone(),
+                        ini,
+                    )
+                    .await
+                    {
+                        Ok(metadata) => {
+                            generator = generator.with_sql_metadata(metadata);
+                        }
+                        Err(e) => {
+                            eprintln!("Warning: Failed to fetch SQL metadata: {}", e);
+                        }
+                    }
+                }
+            }
+        }
+
         // Apply profile-level settings (vault_key, pipelines, test_suite, env)
         generator.apply_profile_settings(profile);
 
