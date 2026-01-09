@@ -223,7 +223,7 @@ impl ConfigGenerator {
         // 2. Build dependency graph for multi-project services/infra
         let mut multi_profile = Profile {
             project: multi_project_name.to_string(),
-            platform: primary_profile.platform.clone(),
+            platform: primary_profile.platform,
             infra: multi_config.infra.clone(),
             services: multi_config.services.clone(),
             pipelines: HashMap::new(),
