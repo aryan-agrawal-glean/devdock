@@ -43,8 +43,8 @@ pub async fn execute(
 
     // Step 5: Register instance and allocate ports
     let state_manager = StateManager::new().await?;
-    let mut port_allocator = PortAllocator::new();
-    let port_base = port_allocator.allocate()?;
+    let port_allocator = PortAllocator::new(state_manager.clone()).await;
+    let port_base = port_allocator.allocate().await?;
 
     let workspace_path = std::env::current_dir()?.display().to_string();
     let branch = get_git_branch()?;

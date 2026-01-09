@@ -282,7 +282,9 @@ impl DependencyGraph {
             return Ok(ServiceConfig::default());
         }
 
-        anyhow::bail!("No config found for service: {}", service_name)
+        // Return default config for auto-resolved dependencies
+        // This matches Python behavior where missing dependencies are added with defaults
+        Ok(ServiceConfig::default())
     }
 
     /// Load a single infra config
@@ -309,18 +311,12 @@ impl DependencyGraph {
     /// Validate the dependency graph
     fn validate(&self) -> Result<()> {
         // Check for missing dependencies
-        for node in self.nodes.values() {
-            for dep in &node.config.dependencies {
-                if !self.nodes.contains_key(dep) {
-                    eprintln!(
-                        "Warning: Service '{}' depends on '{}' which is not in the profile",
-                        node.name, dep
-                    );
-                }
-            }
-        }
-
-        // Check for cycles
+        // Note: We don't warn about missing dependencies because they are automatically
+        // added by expand_dependencies() with default types (remote for services, local for infra).
+        // If a service declares a dependency that doesn't exist in the codebase, it will
+        // simply use the remote version, matching Python behavior.
+        
+        // Only check for cycles (which are actual errors)
         for name in self.nodes.keys() {
             let mut visited = HashSet::new();
             let mut stack = HashSet::new();

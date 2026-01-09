@@ -45,9 +45,24 @@ pub struct TempProfileData {
     pub test_suite: Option<HashMap<String, serde_json::Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub env: Option<HashMap<String, String>>,
+    /// Multi-project configuration (e.g., glean-apps-canary)
+    #[serde(rename = "glean_apps_canary", skip_serializing_if = "Option::is_none")]
+    pub multi_project: Option<MultiProjectProfile>,
 }
 
-#[derive(Debug, Serialize)]
+/// Nested configuration for multi-project (glean-apps-canary)
+#[derive(Debug, Clone, Serialize)]
+pub struct MultiProjectProfile {
+    pub project: String,
+    pub platform: String,
+    pub region: String,
+    pub zone: String,
+    pub project_number: String,
+    pub infra: HashMap<String, InfraProfileEntry>,
+    pub services: HashMap<String, ServiceProfileEntry>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct ServiceProfileEntry {
     #[serde(rename = "type")]
     pub service_type: String,
@@ -119,6 +134,7 @@ impl TempProfileGenerator {
             pipelines: None,
             test_suite: None,
             env: None,
+            multi_project: None,
         };
 
         Self { 
@@ -629,6 +645,16 @@ impl TempProfileGenerator {
 
         // Store in the services map
         self.profile.services.insert(hook_name.to_string(), entry);
+    }
+
+    /// Set the multi-project configuration (glean-apps-canary)
+    pub fn set_multi_project(&mut self, multi_project: MultiProjectProfile) {
+        self.profile.multi_project = Some(multi_project);
+    }
+
+    /// Add a service to the TOP-LEVEL services dict (used for multi-project services)
+    pub fn add_service(&mut self, name: &str, entry: ServiceProfileEntry) {
+        self.profile.services.insert(name.to_string(), entry);
     }
 
     /// Generate the final YAML string

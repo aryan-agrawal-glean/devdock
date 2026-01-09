@@ -6,6 +6,7 @@ use sqlx::{sqlite::SqlitePool, Row};
 use std::path::{Path, PathBuf};
 
 /// Manages DevDock state in SQLite database.
+#[derive(Clone)]
 pub struct StateManager {
     pool: SqlitePool,
 }

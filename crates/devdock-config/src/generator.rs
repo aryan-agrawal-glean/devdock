@@ -182,6 +182,155 @@ impl ConfigGenerator {
             step_start.elapsed().as_secs_f64(),
             total_start.elapsed().as_secs_f64()
         );
+
+        // 6. Handle multi-project (glean-apps-canary) if present
+        if let Some(ref multi_config) = profile.multi_project {
+            self.generate_multi_project_configs(
+                profile,
+                multi_config,
+                &devdock_ini,
+                dynamic_ini.as_ref(),
+            )
+            .await?;
+        }
+
+        Ok(())
+    }
+
+    /// Generate multi-project configurations (scio_apps.ini and nested temp_profile)
+    async fn generate_multi_project_configs(
+        &self,
+        primary_profile: &Profile,
+        multi_config: &devdock_core::profile::MultiProjectConfig,
+        _primary_ini: &str,
+        dynamic_ini: Option<&ParsedIniConfig>,
+    ) -> Result<()> {
+        println!("⏩ Generating multi-project (glean-apps-canary) configs...");
+        let step_start = std::time::Instant::now();
+
+        // The multi-project is always glean-apps-canary for now
+        let multi_project_name = "glean-apps-canary";
+        
+        // 1. Create platform for multi-project
+        let multi_platform = crate::platform::create_platform_with_multi_project(
+            "google", // Multi-project is always GCP for now
+            multi_project_name.to_string(),
+            dynamic_ini,
+            true, // multi_project flag
+        )
+        .await?;
+
+        // 2. Build dependency graph for multi-project services/infra
+        let mut multi_profile = Profile {
+            project: multi_project_name.to_string(),
+            platform: primary_profile.platform.clone(),
+            infra: multi_config.infra.clone(),
+            services: multi_config.services.clone(),
+            pipelines: HashMap::new(),
+            test_suite: HashMap::new(),
+            env: HashMap::new(),
+            ini_overrides: Vec::new(),
+            multi_project: None,
+        };
+
+        let multi_graph = DependencyGraph::build(&multi_profile, &self.workspace_root).await?;
+
+        // 3. Auto-inject SQL if not present (matches Python behavior)
+        let has_sql = multi_config.infra.contains_key("sql");
+        if !has_sql {
+            use devdock_core::types::DeploymentType;
+            use devdock_core::InfraConfig;
+            
+            multi_profile.infra.insert(
+                "sql".to_string(),
+                InfraConfig {
+                    deployment_type: DeploymentType::Remote,
+                    config: HashMap::new(),
+                },
+            );
+            
+            // Rebuild graph with SQL included
+            let multi_graph = DependencyGraph::build(&multi_profile, &self.workspace_root).await?;
+            
+            // Generate scio_apps.ini with SQL
+            self.generate_multi_project_ini(
+                &multi_profile,
+                multi_platform.as_ref(),
+                &multi_graph,
+                dynamic_ini,
+            )
+            .await?;
+        } else {
+            // Generate scio_apps.ini without auto-injecting SQL
+            self.generate_multi_project_ini(
+                &multi_profile,
+                multi_platform.as_ref(),
+                &multi_graph,
+                dynamic_ini,
+            )
+            .await?;
+        }
+
+        println!(
+            "✅ Multi-project configs generated in {:.2}s",
+            step_start.elapsed().as_secs_f64()
+        );
+        Ok(())
+    }
+
+    /// Generate scio_apps.ini for multi-project
+    async fn generate_multi_project_ini(
+        &self,
+        profile: &Profile,
+        platform: &dyn Platform,
+        graph: &DependencyGraph,
+        dynamic_ini: Option<&ParsedIniConfig>,
+    ) -> Result<()> {
+        use crate::ini_generator::IniGeneratorContext;
+
+        // Create context with multi_project=true
+        let context = IniGeneratorContext {
+            multi_project: true,
+            has_quality_pipelines: false,
+            project: profile.project.clone(),
+        };
+
+        // Create generator with context
+        let mut generator = if let Some(base) = dynamic_ini {
+            IniGenerator::with_base_config_and_context(base, context)
+        } else {
+            IniGenerator::with_context(context)
+        };
+
+        // Apply platform config
+        generator.apply_platform(platform);
+
+        // Apply all services and dependencies
+        for node in graph.nodes() {
+            // Inject USE_DEVDOCK_INI env var for all services
+            let mut node_config = node.config.clone();
+            node_config
+                .env
+                .insert("USE_DEVDOCK_INI".to_string(), "true".to_string());
+            
+            generator.apply_service(&node.name, &node_config);
+            generator.apply_dependency(node);
+        }
+
+        // Apply service-level ini_overrides from the profile
+        for service_config in profile.services.values() {
+            if !service_config.ini_overrides.is_empty() {
+                generator.apply_profile_overrides(&service_config.ini_overrides);
+            }
+        }
+
+        let scio_apps_ini = generator.generate();
+
+        // Write scio_apps.ini
+        let scio_apps_path = self.workspace_root.join("devdock/scio_apps.ini");
+        tokio::fs::write(&scio_apps_path, &scio_apps_ini).await?;
+        println!("   └─ scio_apps.ini written");
+
         Ok(())
     }
 
@@ -269,8 +418,8 @@ impl ConfigGenerator {
         let mut generator = TempProfileGenerator::new(&self.workspace_root, profile_path);
 
         // If we have dynamic.ini, pass it to the generator for namespace resolution
-        if let Some(ini) = dynamic_ini {
-            generator = generator.with_dynamic_ini(ini);
+        if let Some(ref ini) = dynamic_ini {
+            generator = generator.with_dynamic_ini(ini.clone());
         }
 
         // Apply profile-level settings (vault_key, pipelines, test_suite, env)
@@ -282,7 +431,163 @@ impl ConfigGenerator {
         // Apply all services and infra with profile data
         generator.apply_services(graph, profile, active_services);
 
+        // Handle multi-project if present
+        if let Some(ref multi_config) = profile.multi_project {
+            // 1. Add nested glean_apps_canary section (only platform + SQL)
+            let multi_profile_data = self
+                .generate_multi_project_profile(profile, multi_config, dynamic_ini.as_ref())
+                .await?;
+            generator.set_multi_project(multi_profile_data);
+
+            // 2. Add multi-project services to TOP-LEVEL services dict (Python behavior)
+            self.apply_multi_project_services_to_generator(&mut generator, multi_config, dynamic_ini.as_ref())
+                .await?;
+        }
+
         generator.generate()
+    }
+
+    /// Add multi-project services to TOP-LEVEL services dict (matches Python behavior)
+    async fn apply_multi_project_services_to_generator(
+        &self,
+        generator: &mut TempProfileGenerator,
+        multi_config: &devdock_core::profile::MultiProjectConfig,
+        _dynamic_ini: Option<&ParsedIniConfig>,
+    ) -> Result<()> {
+        use crate::profile_generator::ServiceProfileEntry;
+        
+        let multi_project_name = "glean-apps-canary";
+
+        // Build profile for multi-project to get dependency graph
+        let multi_profile = Profile {
+            project: multi_project_name.to_string(),
+            platform: devdock_core::types::Platform::Google,
+            infra: multi_config.infra.clone(),
+            services: multi_config.services.clone(),
+            pipelines: HashMap::new(),
+            test_suite: HashMap::new(),
+            env: HashMap::new(),
+            ini_overrides: Vec::new(),
+            multi_project: None,
+        };
+
+        let multi_graph = DependencyGraph::build(&multi_profile, &self.workspace_root).await?;
+
+        // Add each service to TOP-LEVEL services dict
+        for node in multi_graph.nodes() {
+            if node.component_type == crate::dependency_graph::ComponentType::Service {
+                let profile_service = multi_profile.services.get(&node.name);
+                
+                let service_type = if node.config.is_local() {
+                    "local".to_string()
+                } else {
+                    "remote".to_string()
+                };
+
+                // Get env from profile and add USE_DEVDOCK_INI
+                let mut env = profile_service
+                    .and_then(|s| {
+                        if s.env.is_empty() {
+                            None
+                        } else {
+                            Some(s.env.clone())
+                        }
+                    })
+                    .unwrap_or_default();
+                
+                env.insert("USE_DEVDOCK_INI".to_string(), "true".to_string());
+
+                let hot_reload = profile_service.and_then(|s| {
+                    s.hot_reload.as_ref().map(|hr| match hr {
+                        devdock_core::profile::HotReloadConfig::Enabled(b) => {
+                            if *b {
+                                "enable".to_string()
+                            } else {
+                                "disable".to_string()
+                            }
+                        }
+                        devdock_core::profile::HotReloadConfig::Setting(s) => s.clone(),
+                    })
+                });
+
+                let extra = profile_service
+                    .map(|s| s.config.clone())
+                    .unwrap_or_default();
+
+                generator.add_service(
+                    &node.name,
+                    ServiceProfileEntry {
+                        service_type,
+                        active: true,
+                        port: None,
+                        env: Some(env),
+                        hot_reload,
+                        script: None,
+                        service: None,
+                        depends_on_services: None,
+                        timeout: None,
+                        extra,
+                    },
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Generate nested multi-project profile data (only platform info + SQL)
+    /// Note: Services are added to TOP-LEVEL services dict in apply_multi_project_services
+    async fn generate_multi_project_profile(
+        &self,
+        _primary_profile: &Profile,
+        multi_config: &devdock_core::profile::MultiProjectConfig,
+        dynamic_ini: Option<&ParsedIniConfig>,
+    ) -> Result<crate::profile_generator::MultiProjectProfile> {
+        use crate::profile_generator::{InfraProfileEntry, MultiProjectProfile};
+        
+        let multi_project_name = "glean-apps-canary";
+
+        // Create platform for multi-project
+        let multi_platform = crate::platform::create_platform_with_multi_project(
+            "google",
+            multi_project_name.to_string(),
+            dynamic_ini,
+            true,
+        )
+        .await?;
+
+        // Only nest SQL infra under glean_apps_canary (matches Python behavior)
+        let mut infra = HashMap::new();
+        if let Some(sql_config) = multi_config.infra.get("sql") {
+            let infra_type = match sql_config.deployment_type {
+                devdock_core::types::DeploymentType::Local => "local",
+                devdock_core::types::DeploymentType::Remote => "remote",
+            }
+            .to_string();
+
+            infra.insert(
+                "sql".to_string(),
+                InfraProfileEntry {
+                    infra_type,
+                    extra: sql_config.config.clone(),
+                },
+            );
+        }
+
+        // Get platform details
+        let temp_profile = crate::platform::TempProfile::default();
+        let mut temp_profile_mut = temp_profile;
+        multi_platform.update_temp_profile(&mut temp_profile_mut);
+
+        Ok(MultiProjectProfile {
+            project: temp_profile_mut.project,
+            platform: temp_profile_mut.platform,
+            region: temp_profile_mut.region,
+            zone: temp_profile_mut.zone,
+            project_number: temp_profile_mut.project_number,
+            infra,
+            services: HashMap::new(), // Services go to TOP-LEVEL, not nested
+        })
     }
 
     /// Generate watch files for hot reload

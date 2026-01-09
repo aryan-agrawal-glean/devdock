@@ -92,11 +92,21 @@ pub struct GooglePlatform {
     region: String,
     project_number: String,
     dns_kubectl_enabled: bool,
+    multi_project: bool,
 }
 
 impl GooglePlatform {
     /// Create a new GooglePlatform with zone/region from dynamic config
     pub async fn new(project: String, dynamic_config: Option<&ParsedIniConfig>) -> Result<Self> {
+        Self::new_with_multi_project(project, dynamic_config, false).await
+    }
+
+    /// Create a new GooglePlatform with multi_project flag
+    pub async fn new_with_multi_project(
+        project: String,
+        dynamic_config: Option<&ParsedIniConfig>,
+        multi_project: bool,
+    ) -> Result<Self> {
         // Get project number
         let project_number = Self::get_project_number(&project).await?;
 
@@ -123,6 +133,7 @@ impl GooglePlatform {
             region,
             project_number,
             dns_kubectl_enabled,
+            multi_project,
         })
     }
 
@@ -402,10 +413,28 @@ pub async fn create_platform(
     project: String,
     dynamic_config: Option<&ParsedIniConfig>,
 ) -> Result<Box<dyn Platform>> {
+    create_platform_with_multi_project(platform_name, project, dynamic_config, false).await
+}
+
+/// Create platform with multi_project flag
+pub async fn create_platform_with_multi_project(
+    platform_name: &str,
+    project: String,
+    dynamic_config: Option<&ParsedIniConfig>,
+    multi_project: bool,
+) -> Result<Box<dyn Platform>> {
     match platform_name.to_lowercase().as_str() {
-        "google" | "gcp" => Ok(Box::new(GooglePlatform::new(project, dynamic_config).await?)),
-        "aws" => Ok(Box::new(AWSPlatform::new(project, dynamic_config).await?)),
-        "azure" => Ok(Box::new(AzurePlatform::new(project, dynamic_config).await?)),
+        "google" | "gcp" => Ok(Box::new(
+            GooglePlatform::new_with_multi_project(project, dynamic_config, multi_project).await?,
+        )),
+        "aws" => {
+            // AWS doesn't support multi_project yet
+            Ok(Box::new(AWSPlatform::new(project, dynamic_config).await?))
+        }
+        "azure" => {
+            // Azure doesn't support multi_project yet
+            Ok(Box::new(AzurePlatform::new(project, dynamic_config).await?))
+        }
         _ => anyhow::bail!("Unsupported platform: {}", platform_name),
     }
 }
