@@ -96,25 +96,57 @@ pub async fn execute(profile_name: &str, services: Option<&str>, _ci_mode: bool)
 
 /// Check if Docker is running
 fn check_docker() -> Result<()> {
+    use std::sync::mpsc;
+    use std::thread;
+    use std::time::Duration;
+
     output::info("Checking Docker...");
 
-    let output = Command::new("docker")
-        .arg("info")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .context("Failed to run 'docker info'")?;
+    // Run docker info with a timeout to prevent hanging
+    let (tx, rx) = mpsc::channel();
+    
+    thread::spawn(move || {
+        let result = Command::new("docker")
+            .arg("info")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        tx.send(result).ok();
+    });
 
-    if !output.success() {
-        anyhow::bail!(
-            "Docker is not running. Please start Docker and try again.\n\
-             To start Docker (macOS with colima):\n\
-             colima start --memory 10 --cpu 4 --network-address slirp --vm-type vz"
-        );
+    // Wait for result with 10 second timeout
+    match rx.recv_timeout(Duration::from_secs(10)) {
+        Ok(Ok(status)) if status.success() => {
+            output::success("Docker is running");
+            Ok(())
+        }
+        Ok(Ok(_)) => {
+            anyhow::bail!(
+                "Docker is not running. Please start Docker and try again.\n\
+                 \n\
+                 To start Docker:\n\
+                 • macOS with colima: colima start --memory 10 --cpu 4 --network-address slirp --vm-type vz\n\
+                 • Linux: sudo systemctl start docker"
+            )
+        }
+        Ok(Err(e)) => {
+            anyhow::bail!("Failed to run 'docker info': {}", e)
+        }
+        Err(_timeout) => {
+            anyhow::bail!(
+                "Docker check timed out after 10 seconds.\n\
+                 \n\
+                 This usually means:\n\
+                 1. Docker daemon is not running\n\
+                 2. Docker daemon is stuck/unresponsive\n\
+                 \n\
+                 Try:\n\
+                 • Restart Docker: colima restart (macOS) or sudo systemctl restart docker (Linux)\n\
+                 • Check Docker status: docker ps\n\
+                 • Kill stuck processes: pkill -9 docker"
+            )
+        }
     }
-
-    output::success("Docker is running");
-    Ok(())
 }
 
 /// Setup Docker networks
