@@ -470,7 +470,9 @@ impl TelemetryCollector {
                 unsafe {
                     if libc::statvfs(cpath.as_ptr(), stat.as_mut_ptr()) == 0 {
                         let stat = stat.assume_init();
+                        #[allow(clippy::unnecessary_cast)]
                         let total = (stat.f_blocks as u64) * (stat.f_frsize as u64);
+                        #[allow(clippy::unnecessary_cast)]
                         let free = (stat.f_bfree as u64) * (stat.f_frsize as u64);
                         let used = total - free;
                         let pct = if total > 0 {

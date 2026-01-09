@@ -359,6 +359,7 @@ fn find_workspace_root_from(start: &Path) -> Result<PathBuf> {
 }
 
 /// Wait for Tilt process and handle shutdown
+#[allow(clippy::too_many_arguments)]
 async fn wait_for_tilt(
     mut tilt_process: Child,
     state_manager: &StateManager,
@@ -686,7 +687,6 @@ fn cleanup_port_processes() -> Result<()> {
 
     Ok(())
 }
-
 
 /// Remove dangling Docker images (optimized batch version)
 fn cleanup_dangling_images() -> Result<()> {

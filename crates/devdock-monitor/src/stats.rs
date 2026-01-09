@@ -201,7 +201,9 @@ impl StatsCollector {
                 unsafe {
                     if libc::statvfs(cpath.as_ptr(), stat.as_mut_ptr()) == 0 {
                         let stat = stat.assume_init();
+                        #[allow(clippy::unnecessary_cast)]
                         let total = (stat.f_blocks as u64) * (stat.f_frsize as u64);
+                        #[allow(clippy::unnecessary_cast)]
                         let free = (stat.f_bfree as u64) * (stat.f_frsize as u64);
                         let used = total - free;
                         let percent = if total > 0 {
@@ -243,10 +245,10 @@ impl StatsCollector {
                     name: container.name,
                     cpu_percent: Self::parse_percent(&container.cpu_perc),
                     memory_usage_bytes: Self::parse_size(
-                        &container.mem_usage.split('/').next().unwrap_or("0"),
+                        container.mem_usage.split('/').next().unwrap_or("0"),
                     ),
                     memory_limit_bytes: Self::parse_size(
-                        &container.mem_usage.split('/').nth(1).unwrap_or("0"),
+                        container.mem_usage.split('/').nth(1).unwrap_or("0"),
                     ),
                     memory_percent: Self::parse_percent(&container.mem_perc),
                     pids: container.pids.parse().unwrap_or(0),
