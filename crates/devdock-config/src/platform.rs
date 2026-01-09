@@ -92,7 +92,6 @@ pub struct GooglePlatform {
     region: String,
     project_number: String,
     dns_kubectl_enabled: bool,
-    multi_project: bool,
 }
 
 impl GooglePlatform {
@@ -102,10 +101,11 @@ impl GooglePlatform {
     }
 
     /// Create a new GooglePlatform with multi_project flag
+    /// Note: multi_project parameter is for API compatibility but not stored/used
     pub async fn new_with_multi_project(
         project: String,
         dynamic_config: Option<&ParsedIniConfig>,
-        multi_project: bool,
+        _multi_project: bool,
     ) -> Result<Self> {
         // Get project number
         let project_number = Self::get_project_number(&project).await?;
@@ -133,7 +133,6 @@ impl GooglePlatform {
             region,
             project_number,
             dns_kubectl_enabled,
-            multi_project,
         })
     }
 
