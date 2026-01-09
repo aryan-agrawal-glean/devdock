@@ -746,7 +746,7 @@ impl TempProfileGenerator {
                     let mut cloud_sql_args = Vec::new();
                     let mut curr_port = curr_port_base;
                     
-                    for (_instance_name, connection_str) in &metadata.instances {
+                    for connection_str in metadata.instances.values() {
                         if !connection_str.is_empty() {
                             cloud_sql_args.push(format!("{}?port={}", connection_str, curr_port));
                             curr_port += 1;
