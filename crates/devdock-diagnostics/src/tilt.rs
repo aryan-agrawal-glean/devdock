@@ -9,14 +9,11 @@ use uuid::Uuid;
 /// Capture a Tilt snapshot if Tilt is running.
 pub fn capture_tilt_snapshot(snapshot_dir: &Path) -> Result<Option<PathBuf>> {
     // Check if Tilt is running
-    match crate::docker::check_tilt_running()? {
-        Some(pid) => {
-            info!("Tilt is running (PID: {}), capturing snapshot", pid);
-        }
-        None => {
-            warn!("Tilt is not running, skipping snapshot");
-            return Ok(None);
-        }
+    if let Some(pid) = crate::docker::check_tilt_running()? {
+        info!("Tilt is running (PID: {}), capturing snapshot", pid);
+    } else {
+        warn!("Tilt is not running, skipping snapshot");
+        return Ok(None);
     }
 
     // Generate snapshot filename

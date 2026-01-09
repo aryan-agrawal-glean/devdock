@@ -449,7 +449,7 @@ async fn main() {
         let devdock_id = &args[2];
         let workspace_name = &args[3];
         let repo_path = std::path::PathBuf::from(&args[4]);
-        let full_mode = args.get(5).map(|s| s == "true").unwrap_or(false);
+        let full_mode = args.get(5).is_some_and(|s| s == "true");
 
         if let Err(e) = devdock_sync::daemon::run_daemon_process(
             devdock_id,
@@ -457,7 +457,7 @@ async fn main() {
             &repo_path,
             full_mode,
         ) {
-            eprintln!("Daemon process error: {}", e);
+            eprintln!("Daemon process error: {e}");
             process::exit(1);
         }
         process::exit(0);

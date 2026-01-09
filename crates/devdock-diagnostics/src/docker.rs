@@ -36,7 +36,7 @@ pub fn get_docker_info() -> Result<DockerInfo> {
                 map
             },
         }),
-        Err(e) => Err(DiagnosticsError::SystemInfo(format!("Failed to run docker command: {}", e))),
+        Err(e) => Err(DiagnosticsError::SystemInfo(format!("Failed to run docker command: {e}"))),
     }
 }
 

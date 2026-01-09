@@ -23,7 +23,7 @@ pub fn create_report_archive(
 
     // Create archive filename
     let timestamp = Local::now().format("%Y%m%d_%H%M%S");
-    let archive_name = format!("devdock_bug_report_{}.zip", timestamp);
+    let archive_name = format!("devdock_bug_report_{timestamp}.zip");
     let archive_path = temp_dir.join(&archive_name);
 
     info!("Creating bug report archive: {:?}", archive_path);
@@ -51,7 +51,7 @@ pub fn create_report_archive(
 
     // Add configuration files
     for (filename, content) in config_files {
-        let safe_filename = filename.replace("/", "_");
+        let safe_filename = filename.replace('/', "_");
         zip.start_file(&safe_filename, options)?;
         zip.write_all(content.as_bytes())?;
     }

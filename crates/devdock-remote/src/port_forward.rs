@@ -163,10 +163,10 @@ impl PortForwardManager {
         info!("Parsing profile for port mappings: {:?}", profile_path);
 
         let contents = fs::read_to_string(profile_path)
-            .map_err(|e| RemoteError::ConfigSyncError(format!("Failed to read profile: {}", e)))?;
+            .map_err(|e| RemoteError::ConfigSyncError(format!("Failed to read profile: {e}")))?;
 
         let profile: Profile = serde_yaml::from_str(&contents)
-            .map_err(|e| RemoteError::ConfigSyncError(format!("Failed to parse profile: {}", e)))?;
+            .map_err(|e| RemoteError::ConfigSyncError(format!("Failed to parse profile: {e}")))?;
 
         let mut mappings = Vec::new();
 
@@ -241,9 +241,8 @@ impl PortForwardManager {
         info!("Starting {} port forwards", self.mappings.len());
 
         let pid_dir = Self::get_pid_dir(&self.devdock_id)?;
-        fs::create_dir_all(&pid_dir).map_err(|e| {
-            RemoteError::PortForwardError(format!("Failed to create PID dir: {}", e))
-        })?;
+        fs::create_dir_all(&pid_dir)
+            .map_err(|e| RemoteError::PortForwardError(format!("Failed to create PID dir: {e}")))?;
 
         for mapping in &mut self.mappings {
             match coder::port_forward_single(

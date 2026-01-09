@@ -92,8 +92,8 @@ impl DependencyGraph {
                 if !processed.contains(&dep) && !to_process.contains(&dep) {
                     // Check what type of component the dependency is
                     let service_path = workspace_root
-                        .join(format!("devdock/config/services/{}/devdock_config.json", dep));
-                    let infra_path = workspace_root.join(format!("devdock/config/infra/{}", dep));
+                        .join(format!("devdock/config/services/{dep}/devdock_config.json"));
+                    let infra_path = workspace_root.join(format!("devdock/config/infra/{dep}"));
 
                     if service_path.exists() {
                         // It's a service, add with default remote type
@@ -159,7 +159,7 @@ impl DependencyGraph {
     async fn find_dependencies(workspace_root: &Path, name: &str) -> Vec<String> {
         // Try service config
         let service_path =
-            workspace_root.join(format!("devdock/config/services/{}/devdock_config.json", name));
+            workspace_root.join(format!("devdock/config/services/{name}/devdock_config.json"));
 
         if service_path.exists() {
             if let Ok(content) = tokio::fs::read_to_string(&service_path).await {
@@ -224,11 +224,11 @@ impl DependencyGraph {
                         error_msg.contains("pre_setup") || error_msg.contains("post_setup");
 
                     if !is_hook_service {
-                        eprintln!("Warning: Failed to load config: {}", e);
+                        eprintln!("Warning: Failed to load config: {e}");
                     }
                 }
                 Err(e) => {
-                    eprintln!("Warning: Task failed: {}", e);
+                    eprintln!("Warning: Task failed: {e}");
                 }
             }
         }
@@ -249,7 +249,7 @@ impl DependencyGraph {
                 std::env::var("CLOUD_PLATFORM").unwrap_or_default().to_lowercase()
             )),
             workspace_root
-                .join(format!("devdock/config/services/{}/devdock_config.json", service_name)),
+                .join(format!("devdock/config/services/{service_name}/devdock_config.json")),
         ];
 
         for config_path in &config_paths {
@@ -270,7 +270,7 @@ impl DependencyGraph {
 
         // Check if Tiltfile exists - if so, return default config
         let tiltfile_path =
-            workspace_root.join(format!("devdock/config/services/{}/Tiltfile", service_name));
+            workspace_root.join(format!("devdock/config/services/{service_name}/Tiltfile"));
 
         if tiltfile_path.exists() {
             return Ok(ServiceConfig::default());
@@ -285,7 +285,7 @@ impl DependencyGraph {
     async fn load_infra_config(workspace_root: &Path, infra_name: &str) -> Result<ServiceConfig> {
         // Try to load config file if it exists, otherwise return minimal config
         let config_path =
-            workspace_root.join(format!("devdock/config/infra/{}/devdock_config.json", infra_name));
+            workspace_root.join(format!("devdock/config/infra/{infra_name}/devdock_config.json"));
 
         if config_path.exists() {
             let content = tokio::fs::read_to_string(&config_path).await?;
@@ -310,7 +310,7 @@ impl DependencyGraph {
             let mut visited = HashSet::new();
             let mut stack = HashSet::new();
             if self.has_cycle(name, &mut visited, &mut stack) {
-                anyhow::bail!("Dependency cycle detected involving: {}", name);
+                anyhow::bail!("Dependency cycle detected involving: {name}");
             }
         }
 

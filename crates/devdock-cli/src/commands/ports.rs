@@ -47,7 +47,7 @@ pub async fn list(instance: Option<String>) -> Result<()> {
             println!(
                 "  {} {}",
                 service_name.cyan(),
-                format!("http://localhost:{}", local_port).green()
+                format!("http://localhost:{local_port}").green()
             );
         }
     }
@@ -84,7 +84,7 @@ fn get_current_worktree() -> Result<String> {
     let output = Command::new("git")
         .args(["rev-parse", "--show-toplevel"])
         .output()
-        .map_err(|e| anyhow!("Failed to get git worktree: {}", e))?;
+        .map_err(|e| anyhow!("Failed to get git worktree: {e}"))?;
 
     if !output.status.success() {
         return Err(anyhow!("Not in a git repository"));
@@ -184,7 +184,7 @@ async fn forward_all_ports(
         )
         .await
         {
-            Ok(_) => {
+            Ok(()) => {
                 println!(
                     "  ✅ {}: localhost:{} → remote:{}",
                     service_name.cyan(),
@@ -219,14 +219,13 @@ async fn forward_service_port(
     let (_, local_offset, remote_port) =
         services.iter().find(|(name, _, _)| *name == service_name).ok_or_else(|| {
             anyhow!(
-                "Unknown service: {}. Available: tilt, qe, fe, opensearch, mysql, redis",
-                service_name
+                "Unknown service: {service_name}. Available: tilt, qe, fe, opensearch, mysql, redis"
             )
         })?;
 
     let local_port = port_base + local_offset;
 
-    println!("{}", format!("Forwarding {} port...", service_name).cyan());
+    println!("{}", format!("Forwarding {service_name} port...").cyan());
     start_port_forward(state, devdock_id, workspace_name, service_name, local_port, *remote_port)
         .await?;
 
@@ -258,7 +257,7 @@ async fn forward_custom_port(
     start_port_forward(state, devdock_id, workspace_name, "custom", local_port, remote_port)
         .await?;
 
-    println!("  ✅ Custom: localhost:{} → remote:{}", local_port, remote_port);
+    println!("  ✅ Custom: localhost:{local_port} → remote:{remote_port}");
     println!();
     println!("View mappings: {}", "devdock ports list".cyan());
 
@@ -281,7 +280,7 @@ async fn start_port_forward(
         .join("ports");
     std::fs::create_dir_all(&log_dir)?;
 
-    let log_file = log_dir.join(format!("{}_{}.log", devdock_id, service_name));
+    let log_file = log_dir.join(format!("{devdock_id}_{service_name}.log"));
     let log_handle = File::create(&log_file)?;
 
     // Start port forward process
@@ -289,12 +288,12 @@ async fn start_port_forward(
         .arg("port-forward")
         .arg(workspace_name)
         .arg("--tcp")
-        .arg(format!("{}:{}", local_port, remote_port))
+        .arg(format!("{local_port}:{remote_port}"))
         .stdin(Stdio::null())
         .stdout(log_handle.try_clone()?)
         .stderr(log_handle)
         .spawn()
-        .map_err(|e| anyhow!("Failed to start port forward: {}", e))?;
+        .map_err(|e| anyhow!("Failed to start port forward: {e}"))?;
 
     let pid = child.id();
 
@@ -349,15 +348,15 @@ async fn stop_service_port_forward(
     let mapping = mappings
         .iter()
         .find(|(name, _, _, _, _)| name == service_name)
-        .ok_or_else(|| anyhow!("No port forward found for service: {}", service_name))?;
+        .ok_or_else(|| anyhow!("No port forward found for service: {service_name}"))?;
 
-    println!("{}", format!("Stopping {} port forward...", service_name).cyan());
+    println!("{}", format!("Stopping {service_name} port forward...").cyan());
 
     if let Some(pid) = mapping.4 {
         if kill_process(pid) {
             println!("  ✅ Stopped: {} (PID: {})", service_name.cyan(), pid);
         } else {
-            println!("  ⚠️  Process {} not found (may have already exited)", pid);
+            println!("  ⚠️  Process {pid} not found (may have already exited)");
         }
     }
 

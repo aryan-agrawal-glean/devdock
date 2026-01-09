@@ -9,11 +9,11 @@ pub async fn report_bug() -> Result<()> {
 
     match reporter.report().await {
         Ok(ticket_key) => {
-            println!("\n✅ Bug report created successfully: {}", ticket_key);
+            println!("\n✅ Bug report created successfully: {ticket_key}");
             Ok(())
         }
         Err(e) => {
-            eprintln!("\n❌ Failed to create bug report: {}", e);
+            eprintln!("\n❌ Failed to create bug report: {e}");
             Err(e.into())
         }
     }
@@ -29,11 +29,11 @@ pub async fn report_bug_with_details(
 
     match reporter.report().await {
         Ok(ticket_key) => {
-            println!("\n✅ Bug report created successfully: {}", ticket_key);
+            println!("\n✅ Bug report created successfully: {ticket_key}");
             Ok(())
         }
         Err(e) => {
-            eprintln!("\n❌ Failed to create bug report: {}", e);
+            eprintln!("\n❌ Failed to create bug report: {e}");
             Err(e.into())
         }
     }

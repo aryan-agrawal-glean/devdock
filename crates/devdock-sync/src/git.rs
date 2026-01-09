@@ -60,7 +60,7 @@ pub fn should_sync_file_by_pattern(path: &Path) -> bool {
     // Check extension
     if let Some(ext_os) = path.extension() {
         if let Some(ext) = ext_os.to_str() {
-            let ext_with_dot = format!(".{}", ext);
+            let ext_with_dot = format!(".{ext}");
             return SYNC_EXTENSIONS.contains(&ext_with_dot.as_str());
         }
     }
@@ -149,7 +149,7 @@ pub fn list_git_modified_files(repo_path: &Path) -> Result<Vec<PathBuf>> {
         .args(["diff", "--name-only", "--diff-filter=ACDMRT", &base])
         .current_dir(repo_path)
         .output()
-        .map_err(|e| SyncError::DaemonError(format!("Failed to run git diff: {}", e)))?;
+        .map_err(|e| SyncError::DaemonError(format!("Failed to run git diff: {e}")))?;
 
     if !output.status.success() {
         eprintln!("[SYNC-GIT] git diff failed, falling back to empty list");

@@ -270,18 +270,18 @@ impl StartupMonitor {
         print!("\r\x1B[K");
 
         if stable == total {
-            println!("\x1B[32m✓ All {}/{} resources stable\x1B[0m", stable, total);
+            println!("\x1B[32m✓ All {stable}/{total} resources stable\x1B[0m");
         } else {
-            print!("\x1B[34m[{}/{}]\x1B[0m ", stable, total);
+            print!("\x1B[34m[{stable}/{total}]\x1B[0m ");
 
             if stab > 0 {
-                print!("\x1B[36m{}◐\x1B[0m ", stab);
+                print!("\x1B[36m{stab}◐\x1B[0m ");
             }
             if pend > 0 {
-                print!("\x1B[33m{}⟳\x1B[0m ", pend);
+                print!("\x1B[33m{pend}⟳\x1B[0m ");
             }
             if fail > 0 {
-                print!("\x1B[31m{}✗\x1B[0m ", fail);
+                print!("\x1B[31m{fail}✗\x1B[0m ");
             }
 
             // Show what's not stable yet
@@ -290,7 +290,7 @@ impl StartupMonitor {
                 .chain(stabilizing.iter())
                 .chain(failed.iter())
                 .take(3)
-                .map(|s| s.as_str())
+                .map(std::string::String::as_str)
                 .collect();
 
             if !not_stable.is_empty() {

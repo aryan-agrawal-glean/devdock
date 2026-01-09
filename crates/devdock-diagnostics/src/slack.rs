@@ -62,14 +62,14 @@ pub fn get_slack_bot_token() -> Result<String> {
             "--secret=GLEAN_AUTOMATION_SLACK_BOT_TOKEN",
         ])
         .output()
-        .map_err(|e| DiagnosticsError::Slack(format!("Failed to run gcloud command: {}", e)))?;
+        .map_err(|e| DiagnosticsError::Slack(format!("Failed to run gcloud command: {e}")))?;
 
     if output.status.success() {
         let token = String::from_utf8_lossy(&output.stdout).trim().to_string();
         Ok(token)
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(DiagnosticsError::Slack(format!("Failed to fetch Slack bot token: {}", stderr)))
+        Err(DiagnosticsError::Slack(format!("Failed to fetch Slack bot token: {stderr}")))
     }
 }
 
@@ -85,7 +85,7 @@ pub async fn post_to_slack(jira_key: &str, summary: &str, reporter_email: &str) 
         }
     };
 
-    let jira_url = format!("https://askscio.atlassian.net/browse/{}", jira_key);
+    let jira_url = format!("https://askscio.atlassian.net/browse/{jira_key}");
     let reporter_name = reporter_email.split('@').next().unwrap_or(reporter_email);
 
     let message = SlackMessage {
@@ -102,18 +102,18 @@ pub async fn post_to_slack(jira_key: &str, summary: &str, reporter_email: &str) 
                 fields: Some(vec![
                     SlackText {
                         text_type: "mrkdwn".to_string(),
-                        text: format!("*Issue:* <{}|{}>", jira_url, jira_key),
+                        text: format!("*Issue:* <{jira_url}|{jira_key}>"),
                     },
                     SlackText {
                         text_type: "mrkdwn".to_string(),
-                        text: format!("*Reporter:* {}", reporter_name),
+                        text: format!("*Reporter:* {reporter_name}"),
                     },
                 ]),
             },
             SlackBlock::Section {
                 text: Some(SlackText {
                     text_type: "mrkdwn".to_string(),
-                    text: format!("*Summary:* {}", summary),
+                    text: format!("*Summary:* {summary}"),
                 }),
                 fields: None,
             },
@@ -132,7 +132,7 @@ pub async fn post_to_slack(jira_key: &str, summary: &str, reporter_email: &str) 
     let client = reqwest::Client::new();
     let response = client
         .post("https://slack.com/api/chat.postMessage")
-        .header("Authorization", format!("Bearer {}", bot_token))
+        .header("Authorization", format!("Bearer {bot_token}"))
         .header("Content-Type", "application/json")
         .json(&message)
         .send()
@@ -142,8 +142,7 @@ pub async fn post_to_slack(jira_key: &str, summary: &str, reporter_email: &str) 
         let status = response.status();
         let body = response.text().await?;
         return Err(DiagnosticsError::Slack(format!(
-            "Failed to post to Slack (status {}): {}",
-            status, body
+            "Failed to post to Slack (status {status}): {body}"
         )));
     }
 
@@ -153,6 +152,6 @@ pub async fn post_to_slack(jira_key: &str, summary: &str, reporter_email: &str) 
         Ok(())
     } else {
         let error = slack_response.error.unwrap_or_else(|| "Unknown error".to_string());
-        Err(DiagnosticsError::Slack(format!("Slack API returned error: {}", error)))
+        Err(DiagnosticsError::Slack(format!("Slack API returned error: {error}")))
     }
 }

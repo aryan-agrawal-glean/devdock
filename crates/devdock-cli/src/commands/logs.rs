@@ -98,7 +98,7 @@ pub async fn enable() -> Result<()> {
     output::step(3, 4, "Loading images...");
     for image in docker::RICH_LOGGING_IMAGES {
         if !docker::load_cached_image(image)? {
-            output::info(&format!("Pulling {}...", image));
+            output::info(&format!("Pulling {image}..."));
             docker::pull_images(&[image], false)?;
         }
     }
@@ -199,10 +199,10 @@ pub async fn status() -> Result<()> {
             output.map(|o| String::from_utf8_lossy(&o.stdout).trim() == "true").unwrap_or(false);
 
         if is_running {
-            output::success(&format!("✅ {} is running: {}", name, url));
+            output::success(&format!("✅ {name} is running: {url}"));
             running += 1;
         } else {
-            output::warn(&format!("❌ {} is not running", name));
+            output::warn(&format!("❌ {name} is not running"));
         }
     }
 

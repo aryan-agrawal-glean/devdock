@@ -47,7 +47,7 @@ impl HealthMonitor {
             .arg("echo")
             .arg("test")
             .output()
-            .map_err(|e| SyncError::HealthCheckFailed(format!("SSH check failed: {}", e)))?;
+            .map_err(|e| SyncError::HealthCheckFailed(format!("SSH check failed: {e}")))?;
 
         Ok(output.status.success())
     }

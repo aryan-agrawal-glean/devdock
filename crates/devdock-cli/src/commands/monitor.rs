@@ -53,7 +53,7 @@ pub async fn execute(timeout: Option<u64>, interval: Option<u64>, no_notify: boo
                 failed.len()
             ));
             for name in &failed {
-                output::warn(&format!("  - {}", name));
+                output::warn(&format!("  - {name}"));
             }
             anyhow::bail!("Resources failed to become healthy")
         }

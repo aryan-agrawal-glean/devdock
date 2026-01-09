@@ -48,7 +48,7 @@ fn get_namespace_to_node_pool() -> HashMap<String, String> {
 /// Returns:
 /// - "elastic-node-pool-1" through "elastic-node-pool-12" on GCP
 fn get_elastic_node_pool_name_from_number(number: usize) -> String {
-    format!("elastic-node-pool-{}", number)
+    format!("elastic-node-pool-{number}")
 }
 
 /// Get namespace from node pool name
@@ -225,11 +225,11 @@ mod tests {
 
     #[test]
     fn test_opensearch_config_from_ini() {
-        let ini = r#"
+        let ini = r"
 [indexing]
 index.nodePool = elastic-node-pool-3
 index.serverUrl = http://localhost:9200
-"#;
+";
         let config = ParsedIniConfig::parse_str(ini).unwrap();
         let os_config = OpenSearchConfig::from_config(&config, false).unwrap();
 

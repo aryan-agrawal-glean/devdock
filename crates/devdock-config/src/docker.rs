@@ -77,7 +77,7 @@ pub fn setup_networks() -> Result<()> {
             let create = Command::new("docker")
                 .args(["network", "create", network])
                 .output()
-                .context(format!("Failed to create network {}", network))?;
+                .context(format!("Failed to create network {network}"))?;
 
             if !create.status.success() {
                 warn!(
@@ -104,7 +104,7 @@ pub fn get_devdock_containers() -> Result<Vec<String>> {
         let names: Vec<String> = String::from_utf8_lossy(&output.stdout)
             .lines()
             .filter(|s| !s.is_empty())
-            .map(|s| s.to_string())
+            .map(std::string::ToString::to_string)
             .collect();
         Ok(names)
     } else {
@@ -153,7 +153,7 @@ pub fn exec_container(container: &str, command: &str) -> Result<()> {
     // Map common aliases
     let actual_container = match container {
         "sql" => "devdock-mysql",
-        _ => &format!("devdock-{}", container),
+        _ => &format!("devdock-{container}"),
     };
 
     // Determine shell/command based on container
@@ -165,7 +165,7 @@ pub fn exec_container(container: &str, command: &str) -> Result<()> {
     let status = Command::new("docker")
         .args(["exec", "-it", actual_container, cmd])
         .status()
-        .context(format!("Failed to exec into container {}", actual_container))?;
+        .context(format!("Failed to exec into container {actual_container}"))?;
 
     if !status.success() {
         anyhow::bail!(
@@ -179,7 +179,7 @@ pub fn exec_container(container: &str, command: &str) -> Result<()> {
 /// Pull Docker images
 pub fn pull_images(images: &[&str], save_cache: bool) -> Result<()> {
     let home = std::env::var("HOME").unwrap_or_default();
-    let cache_dir = format!("{}/.devdock/images", home);
+    let cache_dir = format!("{home}/.devdock/images");
 
     if save_cache {
         std::fs::create_dir_all(&cache_dir)?;
@@ -191,7 +191,7 @@ pub fn pull_images(images: &[&str], save_cache: bool) -> Result<()> {
         let output = Command::new("docker")
             .args(["pull", image])
             .output()
-            .context(format!("Failed to pull image {}", image))?;
+            .context(format!("Failed to pull image {image}"))?;
 
         if !output.status.success() {
             warn!("Failed to pull {}: {}", image, String::from_utf8_lossy(&output.stderr));
@@ -201,13 +201,13 @@ pub fn pull_images(images: &[&str], save_cache: bool) -> Result<()> {
         // Save to cache if requested
         if save_cache {
             let image_name = extract_image_name(image);
-            let cache_file = format!("{}/{}.zst", cache_dir, image_name);
+            let cache_file = format!("{cache_dir}/{image_name}.zst");
 
             info!("Saving {} to cache...", image_name);
 
             // docker save | zstd > cache_file
             let save = Command::new("sh")
-                .args(["-c", &format!("docker save '{}' | zstd -f -o '{}'", image, cache_file)])
+                .args(["-c", &format!("docker save '{image}' | zstd -f -o '{cache_file}'")])
                 .output();
 
             if let Err(e) = save {
@@ -223,7 +223,7 @@ pub fn pull_images(images: &[&str], save_cache: bool) -> Result<()> {
 pub fn load_cached_image(image: &str) -> Result<bool> {
     let home = std::env::var("HOME").unwrap_or_default();
     let image_name = extract_image_name(image);
-    let cache_file = format!("{}/.devdock/images/{}.zst", home, image_name);
+    let cache_file = format!("{home}/.devdock/images/{image_name}.zst");
 
     if !std::path::Path::new(&cache_file).exists() {
         return Ok(false);
@@ -232,9 +232,9 @@ pub fn load_cached_image(image: &str) -> Result<bool> {
     info!("Loading cached image: {}", image_name);
 
     let output = Command::new("sh")
-        .args(["-c", &format!("zstd -dc '{}' | docker load", cache_file)])
+        .args(["-c", &format!("zstd -dc '{cache_file}' | docker load")])
         .output()
-        .context(format!("Failed to load cached image {}", image_name))?;
+        .context(format!("Failed to load cached image {image_name}"))?;
 
     Ok(output.status.success())
 }
@@ -252,7 +252,7 @@ pub fn cleanup_ports(ports: &[u16]) -> Result<usize> {
     let mut killed = 0;
 
     for port in ports {
-        let output = Command::new("lsof").args(["-i", &format!(":{}", port)]).output();
+        let output = Command::new("lsof").args(["-i", &format!(":{port}")]).output();
 
         if let Ok(out) = output {
             if out.status.success() {

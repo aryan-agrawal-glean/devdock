@@ -42,8 +42,7 @@ impl OpenSearchCopier {
 
         let private_setup = config
             .get("deploy", "deploy_service.private_setup")
-            .map(|s| s.to_lowercase() == "true")
-            .unwrap_or(false);
+            .is_some_and(|s| s.to_lowercase() == "true");
 
         Ok(Self { project: project.to_string(), server_url, private_setup })
     }
@@ -55,7 +54,7 @@ impl OpenSearchCopier {
 
     /// Check if Elasticsearch is healthy on a given port
     fn health_check(port: u16) -> bool {
-        let url = format!("http://localhost:{}/", port);
+        let url = format!("http://localhost:{port}/");
 
         match reqwest::blocking::get(&url) {
             Ok(resp) => resp.status().is_success(),
@@ -74,7 +73,7 @@ impl OpenSearchCopier {
             std::thread::sleep(Duration::from_secs(1));
         }
 
-        anyhow::bail!("Timeout waiting for Elasticsearch on port {}", port)
+        anyhow::bail!("Timeout waiting for Elasticsearch on port {port}")
     }
 
     /// Start SSH tunnel to remote Elasticsearch
@@ -99,7 +98,7 @@ impl OpenSearchCopier {
                 "bastion",
                 "--",
                 "-NL",
-                &format!("localhost:{}:{}", TUNNEL_PORT, host),
+                &format!("localhost:{TUNNEL_PORT}:{host}"),
             ])
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -129,7 +128,7 @@ impl OpenSearchCopier {
         scroll_id: Option<&str>,
     ) -> Result<serde_json::Value> {
         let client = reqwest::blocking::Client::new();
-        let source_url = format!("http://localhost:{}", TUNNEL_PORT);
+        let source_url = format!("http://localhost:{TUNNEL_PORT}");
 
         let response = if let Some(sid) = scroll_id {
             // Continue scroll
@@ -139,7 +138,7 @@ impl OpenSearchCopier {
             });
 
             client
-                .post(format!("{}/_search/scroll", source_url))
+                .post(format!("{source_url}/_search/scroll"))
                 .header("Content-Type", "application/json")
                 .json(&body)
                 .send()?
@@ -150,7 +149,7 @@ impl OpenSearchCopier {
             });
 
             client
-                .post(format!("{}/_search?scroll={}&size={}", source_url, scroll, size))
+                .post(format!("{source_url}/_search?scroll={scroll}&size={size}"))
                 .header("Content-Type", "application/json")
                 .json(&body)
                 .send()?
@@ -166,7 +165,7 @@ impl OpenSearchCopier {
         }
 
         let client = reqwest::blocking::Client::new();
-        let dest_url = format!("http://localhost:{}", LOCAL_ELASTICSEARCH_PORT);
+        let dest_url = format!("http://localhost:{LOCAL_ELASTICSEARCH_PORT}");
 
         // Build bulk request body
         let mut bulk_data = String::new();
@@ -189,7 +188,7 @@ impl OpenSearchCopier {
         bulk_data.push('\n');
 
         let response = client
-            .post(format!("{}/_bulk", dest_url))
+            .post(format!("{dest_url}/_bulk"))
             .header("Content-Type", "application/x-ndjson")
             .body(bulk_data)
             .send()?;

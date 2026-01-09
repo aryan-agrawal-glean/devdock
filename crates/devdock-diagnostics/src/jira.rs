@@ -111,14 +111,14 @@ pub fn get_jira_token() -> Result<String> {
             "--secret=ONCALL_USER_JIRA_TOKEN",
         ])
         .output()
-        .map_err(|e| DiagnosticsError::Jira(format!("Failed to run gcloud command: {}", e)))?;
+        .map_err(|e| DiagnosticsError::Jira(format!("Failed to run gcloud command: {e}")))?;
 
     if output.status.success() {
         let token = String::from_utf8_lossy(&output.stdout).trim().to_string();
         Ok(token)
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(DiagnosticsError::Jira(format!("Failed to fetch Jira token: {}", stderr)))
+        Err(DiagnosticsError::Jira(format!("Failed to fetch Jira token: {stderr}")))
     }
 }
 
@@ -127,7 +127,7 @@ pub fn get_reporter_email() -> Result<String> {
     let output = Command::new("gcloud")
         .args(["config", "get-value", "account"])
         .output()
-        .map_err(|e| DiagnosticsError::Jira(format!("Failed to run gcloud command: {}", e)))?;
+        .map_err(|e| DiagnosticsError::Jira(format!("Failed to run gcloud command: {e}")))?;
 
     if output.status.success() {
         let email = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -146,13 +146,13 @@ async fn get_user_account_id(
     email: &str,
     token: &str,
 ) -> Result<Option<String>> {
-    let url = format!("{}/rest/api/3/user/search", JIRA_URL);
-    let auth = format!("{}:{}", JIRA_EMAIL, token);
+    let url = format!("{JIRA_URL}/rest/api/3/user/search");
+    let auth = format!("{JIRA_EMAIL}:{token}");
     let encoded = base64::engine::general_purpose::STANDARD.encode(auth.as_bytes());
 
     let response = client
         .get(&url)
-        .header("Authorization", format!("Basic {}", encoded))
+        .header("Authorization", format!("Basic {encoded}"))
         .query(&[("query", email)])
         .send()
         .await?;
@@ -301,7 +301,7 @@ pub fn format_description(
                 attrs: None,
                 content: Some(vec![JiraText {
                     text_type: "text".to_string(),
-                    text: format!("File: {}", filename),
+                    text: format!("File: {filename}"),
                 }]),
                 text: None,
             });
@@ -352,7 +352,7 @@ pub async fn create_jira_ticket(
     let reporter_email = get_reporter_email()?;
 
     let client = reqwest::Client::new();
-    let auth = format!("{}:{}", JIRA_EMAIL, jira_token);
+    let auth = format!("{JIRA_EMAIL}:{jira_token}");
     let encoded = base64::engine::general_purpose::STANDARD.encode(auth.as_bytes());
 
     // Try to get reporter account ID
@@ -362,7 +362,7 @@ pub async fn create_jira_ticket(
     // Create issue fields
     let fields = JiraIssueFields {
         project: JiraProject { key: "EN".to_string() },
-        summary: format!("Devdock Bug Report - {}", summary),
+        summary: format!("Devdock Bug Report - {summary}"),
         description,
         issuetype: JiraIssueType { name: "Sub-task".to_string() },
         parent: JiraParent { key: PARENT_ISSUE.to_string() },
@@ -372,10 +372,10 @@ pub async fn create_jira_ticket(
     let issue_request = JiraCreateIssue { fields };
 
     // Create the issue
-    let url = format!("{}/rest/api/3/issue", JIRA_URL);
+    let url = format!("{JIRA_URL}/rest/api/3/issue");
     let response = client
         .post(&url)
-        .header("Authorization", format!("Basic {}", encoded))
+        .header("Authorization", format!("Basic {encoded}"))
         .header("Content-Type", "application/json")
         .json(&issue_request)
         .send()
@@ -385,8 +385,7 @@ pub async fn create_jira_ticket(
         let status = response.status();
         let body = response.text().await?;
         return Err(DiagnosticsError::Jira(format!(
-            "Failed to create issue (status {}): {}",
-            status, body
+            "Failed to create issue (status {status}): {body}"
         )));
     }
 
@@ -415,10 +414,10 @@ async fn attach_file_to_issue(
     let part = multipart::Part::bytes(file_content).file_name(filename.to_string());
     let form = multipart::Form::new().part("file", part);
 
-    let url = format!("{}/rest/api/3/issue/{}/attachments", JIRA_URL, issue_key);
+    let url = format!("{JIRA_URL}/rest/api/3/issue/{issue_key}/attachments");
     let response = client
         .post(&url)
-        .header("Authorization", format!("Basic {}", auth_header))
+        .header("Authorization", format!("Basic {auth_header}"))
         .header("X-Atlassian-Token", "no-check")
         .multipart(form)
         .send()
@@ -428,8 +427,7 @@ async fn attach_file_to_issue(
         let status = response.status();
         let body = response.text().await?;
         return Err(DiagnosticsError::Jira(format!(
-            "Failed to attach file (status {}): {}",
-            status, body
+            "Failed to attach file (status {status}): {body}"
         )));
     }
 

@@ -38,7 +38,7 @@ impl StateManager {
     /// Initialize database schema.
     async fn initialize(&self) -> Result<()> {
         sqlx::query(
-            r#"
+            r"
             CREATE TABLE IF NOT EXISTS instances (
                 id TEXT PRIMARY KEY,
                 workspace_path TEXT NOT NULL,
@@ -51,7 +51,7 @@ impl StateManager {
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL
             )
-            "#,
+            ",
         )
         .execute(&self.pool)
         .await?;
@@ -62,7 +62,7 @@ impl StateManager {
             .await;
 
         sqlx::query(
-            r#"
+            r"
             CREATE TABLE IF NOT EXISTS services (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 instance_id TEXT NOT NULL,
@@ -71,14 +71,14 @@ impl StateManager {
                 port INTEGER,
                 FOREIGN KEY (instance_id) REFERENCES instances(id) ON DELETE CASCADE
             )
-            "#,
+            ",
         )
         .execute(&self.pool)
         .await?;
 
         // Port mappings table for remote DevDock
         sqlx::query(
-            r#"
+            r"
             CREATE TABLE IF NOT EXISTS port_mappings (
                 devdock_id TEXT NOT NULL,
                 service_name TEXT NOT NULL,
@@ -88,14 +88,14 @@ impl StateManager {
                 process_pid INTEGER,
                 PRIMARY KEY (devdock_id, service_name, port_type)
             )
-            "#,
+            ",
         )
         .execute(&self.pool)
         .await?;
 
         // Sync sessions table for file sync
         sqlx::query(
-            r#"
+            r"
             CREATE TABLE IF NOT EXISTS sync_sessions (
                 devdock_id TEXT PRIMARY KEY,
                 workspace_name TEXT NOT NULL,
@@ -105,7 +105,7 @@ impl StateManager {
                 files_synced INTEGER DEFAULT 0,
                 status TEXT NOT NULL CHECK(status IN ('running', 'stopped', 'error'))
             )
-            "#,
+            ",
         )
         .execute(&self.pool)
         .await?;
@@ -116,10 +116,10 @@ impl StateManager {
     /// Register a new DevDock instance.
     pub async fn register_instance(&self, instance: &Instance) -> Result<()> {
         sqlx::query(
-            r#"
+            r"
             INSERT INTO instances (id, workspace_path, workspace_name, branch, profile, mode, status, port_base, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            "#,
+            ",
         )
         .bind(&instance.id)
         .bind(&instance.workspace_path)
@@ -128,7 +128,7 @@ impl StateManager {
         .bind(&instance.profile)
         .bind(&instance.mode)
         .bind(instance.status.as_str())
-        .bind(instance.port_base as i64)
+        .bind(i64::from(instance.port_base))
         .bind(instance.created_at)
         .bind(instance.updated_at)
         .execute(&self.pool)
@@ -165,11 +165,11 @@ impl StateManager {
         // Prefer Running > Starting > Stopping > Stopped > Error
         // Order by status priority, then most recently updated
         let row = sqlx::query(
-            "SELECT id, workspace_path, workspace_name, branch, profile, mode, status, port_base, created_at, updated_at 
-             FROM instances 
-             WHERE workspace_path = ? 
-             ORDER BY 
-                CASE status 
+            "SELECT id, workspace_path, workspace_name, branch, profile, mode, status, port_base, created_at, updated_at
+             FROM instances
+             WHERE workspace_path = ?
+             ORDER BY
+                CASE status
                     WHEN 'running' THEN 1
                     WHEN 'starting' THEN 2
                     WHEN 'stopping' THEN 3
@@ -267,17 +267,17 @@ impl StateManager {
         // Insert new mappings
         for (service_name, port_type, local_port, remote_port, pid) in mappings {
             sqlx::query(
-                r#"
+                r"
                 INSERT INTO port_mappings (devdock_id, service_name, port_type, local_port, remote_port, process_pid)
                 VALUES (?, ?, ?, ?, ?, ?)
-                "#,
+                ",
             )
             .bind(devdock_id)
             .bind(service_name)
             .bind(port_type)
-            .bind(*local_port as i64)
-            .bind(*remote_port as i64)
-            .bind(pid.map(|p| p as i64))
+            .bind(i64::from(*local_port))
+            .bind(i64::from(*remote_port))
+            .bind(pid.map(i64::from))
             .execute(&self.pool)
             .await?;
         }
@@ -330,17 +330,17 @@ impl StateManager {
 
         // Insert new mapping
         sqlx::query(
-            r#"
+            r"
             INSERT INTO port_mappings (devdock_id, service_name, port_type, local_port, remote_port, process_pid)
             VALUES (?, ?, ?, ?, ?, ?)
-            "#,
+            ",
         )
         .bind(devdock_id)
         .bind(service_name)
         .bind(port_type)
-        .bind(local_port as i64)
-        .bind(remote_port as i64)
-        .bind(pid.map(|p| p as i64))
+        .bind(i64::from(local_port))
+        .bind(i64::from(remote_port))
+        .bind(pid.map(i64::from))
         .execute(&self.pool)
         .await?;
 
@@ -381,15 +381,15 @@ impl StateManager {
             std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs() as i64;
 
         sqlx::query(
-            r#"
+            r"
             INSERT OR REPLACE INTO sync_sessions (devdock_id, workspace_name, pid, full_mode, last_sync_time, status)
             VALUES (?, ?, ?, ?, ?, ?)
-            "#,
+            ",
         )
         .bind(devdock_id)
         .bind(workspace_name)
-        .bind(pid.map(|p| p as i64))
-        .bind(full_mode as i64)
+        .bind(pid.map(i64::from))
+        .bind(i64::from(full_mode))
         .bind(now)
         .bind(status)
         .execute(&self.pool)

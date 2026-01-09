@@ -175,11 +175,8 @@ impl TiltResource {
             }
         }
 
-        let has_error = status_obj
-            .get("error")
-            .and_then(|e| e.as_str())
-            .map(|s| !s.is_empty())
-            .unwrap_or(false);
+        let has_error =
+            status_obj.get("error").and_then(|e| e.as_str()).is_some_and(|s| !s.is_empty());
         if has_error {
             return ResourceStatus::Failed;
         }
@@ -218,7 +215,7 @@ impl TiltResource {
                 }
             }
             Some("local") => {
-                if matches!(runtime_status.as_deref(), Some("ok") | Some("not_applicable"))
+                if matches!(runtime_status.as_deref(), Some("ok" | "not_applicable"))
                     && ready_condition == Some("True")
                 {
                     return ResourceStatus::Healthy;
@@ -236,6 +233,6 @@ impl TiltResource {
 
     /// Returns true if this resource should be monitored during startup.
     pub fn should_monitor(&self) -> bool {
-        !self.is_disabled && self.labels.iter().any(|l| l.is_monitored())
+        !self.is_disabled && self.labels.iter().any(ResourceLabel::is_monitored)
     }
 }

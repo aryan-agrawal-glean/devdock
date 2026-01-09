@@ -27,7 +27,7 @@ pub fn ssh_exec_with_log(
         .arg("--")
         .arg(command)
         .output()
-        .map_err(|e| RemoteError::SshError(format!("Failed to execute SSH command: {}", e)))?;
+        .map_err(|e| RemoteError::SshError(format!("Failed to execute SSH command: {e}")))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -36,23 +36,20 @@ pub fn ssh_exec_with_log(
     // Log to file if provided
     if let Some(log_path) = log_file {
         if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(log_path) {
-            let _ = writeln!(file, "\n=== SSH Command on {} ===", workspace);
-            let _ = writeln!(file, "Command: {}", command);
-            let _ = writeln!(file, "Exit code: {}", exit_code);
+            let _ = writeln!(file, "\n=== SSH Command on {workspace} ===");
+            let _ = writeln!(file, "Command: {command}");
+            let _ = writeln!(file, "Exit code: {exit_code}");
             if !stdout.is_empty() {
-                let _ = writeln!(file, "STDOUT:\n{}", stdout);
+                let _ = writeln!(file, "STDOUT:\n{stdout}");
             }
             if !stderr.is_empty() {
-                let _ = writeln!(file, "STDERR:\n{}", stderr);
+                let _ = writeln!(file, "STDERR:\n{stderr}");
             }
         }
     }
 
     if !output.status.success() {
-        return Err(RemoteError::SshError(format!(
-            "Command failed (exit {}): {}",
-            exit_code, stderr
-        )));
+        return Err(RemoteError::SshError(format!("Command failed (exit {exit_code}): {stderr}")));
     }
 
     debug!("SSH output: {}", stdout);
@@ -81,7 +78,7 @@ pub fn ssh_check_with_timeout(
         use std::time::Duration;
         let mut child = cmd
             .spawn()
-            .map_err(|e| RemoteError::SshError(format!("Failed to spawn SSH command: {}", e)))?;
+            .map_err(|e| RemoteError::SshError(format!("Failed to spawn SSH command: {e}")))?;
 
         let start = std::time::Instant::now();
         loop {
@@ -96,10 +93,10 @@ pub fn ssh_check_with_timeout(
                         if let Ok(mut file) =
                             OpenOptions::new().create(true).append(true).open(log_path)
                         {
-                            let _ = writeln!(file, "\n=== SSH Check on {} ===", workspace);
-                            let _ = writeln!(file, "Command: {}", command);
-                            let _ = writeln!(file, "Exit code: {}", exit_code);
-                            let _ = writeln!(file, "Success: {}", success);
+                            let _ = writeln!(file, "\n=== SSH Check on {workspace} ===");
+                            let _ = writeln!(file, "Command: {command}");
+                            let _ = writeln!(file, "Exit code: {exit_code}");
+                            let _ = writeln!(file, "Success: {success}");
                         }
                     }
 
@@ -111,16 +108,14 @@ pub fn ssh_check_with_timeout(
                         // Timeout - kill the process
                         let _ = child.kill();
                         return Err(RemoteError::SshError(format!(
-                            "SSH command timed out after {}s",
-                            timeout
+                            "SSH command timed out after {timeout}s"
                         )));
                     }
                     std::thread::sleep(Duration::from_millis(100));
                 }
                 Err(e) => {
                     return Err(RemoteError::SshError(format!(
-                        "Failed to wait for SSH command: {}",
-                        e
+                        "Failed to wait for SSH command: {e}"
                     )));
                 }
             }
@@ -129,7 +124,7 @@ pub fn ssh_check_with_timeout(
         // No timeout, use normal output()
         let out = cmd
             .output()
-            .map_err(|e| RemoteError::SshError(format!("Failed to execute SSH command: {}", e)))?;
+            .map_err(|e| RemoteError::SshError(format!("Failed to execute SSH command: {e}")))?;
         out
     };
 
@@ -141,15 +136,15 @@ pub fn ssh_check_with_timeout(
     // Log to file if provided
     if let Some(log_path) = log_file {
         if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(log_path) {
-            let _ = writeln!(file, "\n=== SSH Check on {} ===", workspace);
-            let _ = writeln!(file, "Command: {}", command);
-            let _ = writeln!(file, "Exit code: {}", exit_code);
-            let _ = writeln!(file, "Success: {}", success);
+            let _ = writeln!(file, "\n=== SSH Check on {workspace} ===");
+            let _ = writeln!(file, "Command: {command}");
+            let _ = writeln!(file, "Exit code: {exit_code}");
+            let _ = writeln!(file, "Success: {success}");
             if !stdout.is_empty() {
-                let _ = writeln!(file, "STDOUT:\n{}", stdout);
+                let _ = writeln!(file, "STDOUT:\n{stdout}");
             }
             if !stderr.is_empty() {
-                let _ = writeln!(file, "STDERR:\n{}", stderr);
+                let _ = writeln!(file, "STDERR:\n{stderr}");
             }
         }
     }
@@ -183,8 +178,7 @@ pub fn wait_for_ssh_ready(workspace: &str, timeout_secs: u64) -> Result<()> {
 
         if start.elapsed() > timeout {
             return Err(RemoteError::SshError(format!(
-                "SSH connection timeout after {} seconds",
-                timeout_secs
+                "SSH connection timeout after {timeout_secs} seconds"
             )));
         }
 

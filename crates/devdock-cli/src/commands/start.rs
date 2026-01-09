@@ -22,7 +22,7 @@ pub async fn execute(
     output::info("Starting DevDock...");
 
     // Step 1: Load and validate profile
-    output::info(&format!("Loading profile: {}", profile_name));
+    output::info(&format!("Loading profile: {profile_name}"));
     let loader = ProfileLoader::new();
     let (profile, profile_path) = loader.load_with_path(profile_name)?;
 
@@ -90,7 +90,7 @@ pub async fn execute(
 
     output::success("DevDock started!");
     println!("\n  Tilt UI: http://localhost:10350");
-    println!("  Services: https://local.glean.com:{}", port_base);
+    println!("  Services: https://local.glean.com:{port_base}");
 
     if run_monitor {
         println!(
@@ -152,7 +152,7 @@ fn check_docker() -> Result<()> {
             )
         }
         Ok(Err(e)) => {
-            anyhow::bail!("Failed to run 'docker info': {}", e)
+            anyhow::bail!("Failed to run 'docker info': {e}")
         }
         Err(_timeout) => {
             anyhow::bail!(
@@ -278,7 +278,7 @@ fn cleanup_startup_state_files() -> Result<()> {
     }
 
     if cleaned_count > 0 {
-        output::success(&format!("Cleaned {} startup state file(s)", cleaned_count));
+        output::success(&format!("Cleaned {cleaned_count} startup state file(s)"));
     }
     Ok(())
 }
@@ -466,7 +466,7 @@ async fn wait_for_tilt(
                         }
                     }
                     Err(e) => {
-                        output::warn(&format!("Monitor error: {}", e));
+                        output::warn(&format!("Monitor error: {e}"));
                     }
                 }
             }
@@ -491,7 +491,7 @@ async fn wait_for_tilt(
             // Kill Tilt process
             #[cfg(unix)]
             {
-                output::info(&format!("Terminating Tilt process: {}", tilt_pid));
+                output::info(&format!("Terminating Tilt process: {tilt_pid}"));
                 // Send SIGTERM for graceful shutdown
                 unsafe {
                     libc::kill(tilt_pid as i32, libc::SIGTERM);
@@ -534,18 +534,18 @@ async fn wait_for_tilt(
     if status.success() {
         output::success("DevDock stopped");
     } else {
-        output::warn(&format!("Tilt exited with status: {}", status));
+        output::warn(&format!("Tilt exited with status: {status}"));
                     }
                 }
                 Ok(Err(e)) => {
-                    output::warn(&format!("Tilt process error: {}", e));
+                    output::warn(&format!("Tilt process error: {e}"));
                     perform_cleanup(&instance_id, &workspace_root).await?;
                     state_manager
                         .update_status(&instance_id, InstanceStatus::Stopped)
                         .await?;
                 }
                 Err(e) => {
-                    output::warn(&format!("Failed to wait for Tilt: {}", e));
+                    output::warn(&format!("Failed to wait for Tilt: {e}"));
                     perform_cleanup(&instance_id, &workspace_root).await?;
                     state_manager
                         .update_status(&instance_id, InstanceStatus::Stopped)
@@ -639,7 +639,7 @@ fn cleanup_port_processes() -> Result<()> {
         let mut pids_to_kill = Vec::new();
 
         for port in ports {
-            let output = Command::new("lsof").args(["-i", &format!(":{}", port), "-t"]).output();
+            let output = Command::new("lsof").args(["-i", &format!(":{port}"), "-t"]).output();
 
             if let Ok(output) = output {
                 if output.status.success() {
@@ -664,7 +664,7 @@ fn cleanup_port_processes() -> Result<()> {
     }
 
     if killed > 0 {
-        output::success(&format!("Stopped {} process(es) on ports", killed));
+        output::success(&format!("Stopped {killed} process(es) on ports"));
     }
 
     Ok(())
@@ -746,12 +746,12 @@ fn cleanup_temp_files(workspace_root: &Path) -> Result<()> {
     if runtime_gen.exists() {
         output::info("Removing runtime_generated directory...");
         match std::fs::remove_dir_all(&runtime_gen) {
-            Ok(_) => {
+            Ok(()) => {
                 output::success("Removed runtime_generated directory");
                 cleaned_count += 1;
             }
             Err(e) => {
-                output::warn(&format!("Failed to remove runtime_generated: {}", e));
+                output::warn(&format!("Failed to remove runtime_generated: {e}"));
             }
         }
     } else {
@@ -772,7 +772,7 @@ fn cleanup_temp_files(workspace_root: &Path) -> Result<()> {
         }
     }
 
-    output::success(&format!("Cleaned {} file(s)/directory(s)", cleaned_count));
+    output::success(&format!("Cleaned {cleaned_count} file(s)/directory(s)"));
     Ok(())
 }
 

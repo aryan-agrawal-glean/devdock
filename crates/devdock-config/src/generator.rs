@@ -115,7 +115,7 @@ impl ConfigGenerator {
         println!("⏩ Authenticating with platform...");
         let step_start = std::time::Instant::now();
         if let Err(e) = platform.authenticate().await {
-            eprintln!("Warning: Platform authentication failed: {}", e);
+            eprintln!("Warning: Platform authentication failed: {e}");
         } else {
             println!(
                 "✅ Platform authenticated in {:.2}s (total: {:.2}s)",
@@ -174,7 +174,7 @@ impl ConfigGenerator {
         let devdock_ini = devdock_ini?;
         let temp_profile = temp_profile?;
         if let Err(e) = watch_result {
-            eprintln!("   └─ Warning: watch file generation failed: {}", e);
+            eprintln!("   └─ Warning: watch file generation failed: {e}");
         }
 
         println!(
@@ -253,7 +253,16 @@ impl ConfigGenerator {
 
         // 3. Auto-inject SQL if not present (matches Python behavior)
         let has_sql = multi_config.infra.contains_key("sql");
-        if !has_sql {
+        if has_sql {
+            // Generate scio_apps.ini without auto-injecting SQL
+            self.generate_multi_project_ini(
+                &multi_profile,
+                multi_platform.as_ref(),
+                &multi_graph,
+                dynamic_ini,
+            )
+            .await?;
+        } else {
             use devdock_core::types::DeploymentType;
             use devdock_core::InfraConfig;
 
@@ -266,15 +275,6 @@ impl ConfigGenerator {
             let multi_graph = DependencyGraph::build(&multi_profile, &self.workspace_root).await?;
 
             // Generate scio_apps.ini with SQL
-            self.generate_multi_project_ini(
-                &multi_profile,
-                multi_platform.as_ref(),
-                &multi_graph,
-                dynamic_ini,
-            )
-            .await?;
-        } else {
-            // Generate scio_apps.ini without auto-injecting SQL
             self.generate_multi_project_ini(
                 &multi_profile,
                 multi_platform.as_ref(),
@@ -360,12 +360,12 @@ impl ConfigGenerator {
                     config
                 }
                 Err(e) => {
-                    eprintln!("Warning: Failed to fetch dynamic.ini: {}", e);
+                    eprintln!("Warning: Failed to fetch dynamic.ini: {e}");
                     None
                 }
             },
             Err(e) => {
-                eprintln!("Warning: Failed to create INI loader: {}", e);
+                eprintln!("Warning: Failed to create INI loader: {e}");
                 None
             }
         }
@@ -735,17 +735,17 @@ impl ConfigGenerator {
                         std::fs::OpenOptions::new().create(true).append(true).open(path)
                     {
                         let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
-                        let _ = writeln!(file, "[{}] {}", timestamp, msg);
+                        let _ = writeln!(file, "[{timestamp}] {msg}");
                     }
                 }
             };
 
-            log(format!("Starting cquery for {} local service(s)", service_count));
+            log(format!("Starting cquery for {service_count} local service(s)"));
 
             // Use silent engine to avoid console spam
             let engine = BazelQueryEngine::new_silent(workspace_root);
             match engine.generate_watch_files(services_with_targets).await {
-                Ok(_) => {
+                Ok(()) => {
                     let msg = format!(
                         "✅ Refined watch files with cquery in {:.2}s",
                         start.elapsed().as_secs_f64()
@@ -754,7 +754,7 @@ impl ConfigGenerator {
                     // Success is silent - no console output to avoid cluttering Tilt UI
                 }
                 Err(e) => {
-                    let msg = format!("❌ Cquery refinement failed: {}", e);
+                    let msg = format!("❌ Cquery refinement failed: {e}");
                     log(msg.clone());
                     // Only print errors to console (after Tilt starts, but important to see)
                     eprintln!("\n⚠️  Background cquery failed (static patterns still active). Check ~/.devdock/background-cquery.log");

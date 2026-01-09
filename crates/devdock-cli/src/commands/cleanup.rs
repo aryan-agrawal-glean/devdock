@@ -33,11 +33,11 @@ pub async fn execute(soft: bool, clean_logs: bool) -> Result<()> {
             continue;
         }
 
-        output::info(&format!("Removing {}...", container));
+        output::info(&format!("Removing {container}..."));
         docker::remove_container(container)?;
         cleaned += 1;
     }
-    output::success(&format!("Cleaned {} containers", cleaned));
+    output::success(&format!("Cleaned {cleaned} containers"));
 
     // Step 2: Clean up generated files
     output::step(2, 6, "Cleaning generated files...");
@@ -53,7 +53,7 @@ pub async fn execute(soft: bool, clean_logs: bool) -> Result<()> {
     output::step(4, 6, "Cleaning dangling images...");
     let removed = docker::remove_dangling_images()?;
     if removed > 0 {
-        output::success(&format!("Removed {} dangling images", removed));
+        output::success(&format!("Removed {removed} dangling images"));
     } else {
         output::info("No dangling images found");
     }
@@ -62,7 +62,7 @@ pub async fn execute(soft: bool, clean_logs: bool) -> Result<()> {
     output::step(5, 6, "Cleaning up ports...");
     let killed = docker::cleanup_ports(CLEANUP_PORTS)?;
     if killed > 0 {
-        output::success(&format!("Killed {} processes on ports", killed));
+        output::success(&format!("Killed {killed} processes on ports"));
     } else {
         output::info("No processes to kill");
     }
@@ -72,13 +72,13 @@ pub async fn execute(soft: bool, clean_logs: bool) -> Result<()> {
     match clean_stale_instances().await {
         Ok(count) => {
             if count > 0 {
-                output::success(&format!("Cleaned {} stale instance record(s)", count));
+                output::success(&format!("Cleaned {count} stale instance record(s)"));
             } else {
                 output::info("No stale instances found");
             }
         }
         Err(e) => {
-            output::warn(&format!("Failed to clean instance records: {}", e));
+            output::warn(&format!("Failed to clean instance records: {e}"));
         }
     }
 
@@ -196,15 +196,15 @@ fn clean_old_logs(devdock_dir: &PathBuf) -> Result<()> {
         }
 
         // Remove log files and empty directories
-        for file in walkdir::WalkDir::new(&path).into_iter().filter_map(|e| e.ok()) {
+        for file in walkdir::WalkDir::new(&path).into_iter().filter_map(std::result::Result::ok) {
             let file_path = file.path();
-            if file_path.extension().map(|e| e == "log").unwrap_or(false) {
+            if file_path.extension().is_some_and(|e| e == "log") {
                 let _ = std::fs::remove_file(file_path);
             }
         }
 
         // Remove symlinks
-        for file in walkdir::WalkDir::new(&path).into_iter().filter_map(|e| e.ok()) {
+        for file in walkdir::WalkDir::new(&path).into_iter().filter_map(std::result::Result::ok) {
             if file.path_is_symlink() {
                 let _ = std::fs::remove_file(file.path());
             }
@@ -349,7 +349,7 @@ fn get_process_cwd(pid: i32) -> Result<String> {
         }
     }
 
-    anyhow::bail!("Could not determine cwd for process {}", pid)
+    anyhow::bail!("Could not determine cwd for process {pid}")
 }
 
 /// Get the current working directory of a process

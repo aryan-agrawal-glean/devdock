@@ -109,7 +109,7 @@ impl BugReporter {
         println!("\n{}", "💬 Posting to Slack...".yellow());
         let reporter_email = jira::get_reporter_email().unwrap_or_else(|_| "unknown".to_string());
         match slack::post_to_slack(&ticket_key, &summary, &reporter_email).await {
-            Ok(_) => println!("  {} Slack notification sent", "✓".green()),
+            Ok(()) => println!("  {} Slack notification sent", "✓".green()),
             Err(e) => warn!("  {} Slack notification failed: {}", "⚠".yellow(), e),
         }
 
@@ -119,7 +119,7 @@ impl BugReporter {
 
         println!("\n{}", "✅ Bug report successfully created!".bold().green());
         println!("\n{}", "View ticket:".bold());
-        println!("  {}", format!("https://askscio.atlassian.net/browse/{}", ticket_key).cyan());
+        println!("  {}", format!("https://askscio.atlassian.net/browse/{ticket_key}").cyan());
 
         Ok(ticket_key)
     }
@@ -131,7 +131,7 @@ impl BugReporter {
             let summary: String = Input::new()
                 .with_prompt(">")
                 .interact_text()
-                .map_err(|e| DiagnosticsError::SystemInfo(format!("Input error: {}", e)))?;
+                .map_err(|e| DiagnosticsError::SystemInfo(format!("Input error: {e}")))?;
             self.summary = Some(summary);
         }
 
@@ -141,7 +141,7 @@ impl BugReporter {
             let description: String = Input::new()
                 .with_prompt(">")
                 .interact_text()
-                .map_err(|e| DiagnosticsError::SystemInfo(format!("Input error: {}", e)))?;
+                .map_err(|e| DiagnosticsError::SystemInfo(format!("Input error: {e}")))?;
             self.description = Some(description);
         }
 
@@ -152,7 +152,7 @@ impl BugReporter {
                 .with_prompt(">")
                 .default("N/A".to_string())
                 .interact_text()
-                .map_err(|e| DiagnosticsError::SystemInfo(format!("Input error: {}", e)))?;
+                .map_err(|e| DiagnosticsError::SystemInfo(format!("Input error: {e}")))?;
             self.command = Some(command);
         }
 
@@ -165,7 +165,7 @@ impl BugReporter {
             .with_prompt("Create bug report?")
             .default(true)
             .interact()
-            .map_err(|e| DiagnosticsError::SystemInfo(format!("Input error: {}", e)))?;
+            .map_err(|e| DiagnosticsError::SystemInfo(format!("Input error: {e}")))?;
 
         if !confirmed {
             return Err(DiagnosticsError::SystemInfo("Bug report cancelled by user".to_string()));

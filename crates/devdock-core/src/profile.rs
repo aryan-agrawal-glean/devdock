@@ -171,7 +171,7 @@ mod tests {
 
     #[test]
     fn test_parse_minimal_profile() {
-        let yaml = r#"
+        let yaml = r"
 project: dev-sandbox-334901
 infra:
   sql:
@@ -179,7 +179,7 @@ infra:
 services:
   qe:
     type: local
-"#;
+";
         let profile: Profile = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(profile.project, "dev-sandbox-334901");
         assert_eq!(profile.infra.len(), 1);
@@ -208,7 +208,7 @@ services:
 
     #[test]
     fn test_parse_profile_with_test_suite_no_type() {
-        let yaml = r#"
+        let yaml = r"
 project: test-project
 services:
   qe:
@@ -220,7 +220,7 @@ test_suite:
     stable_wait_seconds: 10
     params:
       json_test_filter: test_filter
-"#;
+";
         let profile: Profile = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(profile.test_suite.len(), 1);
         let test_config = profile.test_suite.get("test_example").unwrap();
@@ -230,7 +230,7 @@ test_suite:
 
     #[test]
     fn test_parse_profile_with_test_suite_with_type() {
-        let yaml = r#"
+        let yaml = r"
 project: test-project
 services:
   qe:
@@ -240,7 +240,7 @@ test_suite:
     type: integration_test
     dependencies:
       - qe
-"#;
+";
         let profile: Profile = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(profile.test_suite.len(), 1);
         let test_config = profile.test_suite.get("test_example").unwrap();
@@ -249,7 +249,7 @@ test_suite:
 
     #[test]
     fn test_parse_profile_with_ini_overrides() {
-        let yaml = r#"
+        let yaml = r"
 project: test-project
 services:
   qe:
@@ -262,7 +262,7 @@ ini_overrides:
   - section: manifest
     key: llm_key_sku
     val: LKS_GLEAN_KEY_UNIVERSAL
-"#;
+";
         let profile: Profile = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(profile.ini_overrides.len(), 1);
         assert_eq!(profile.ini_overrides[0].section, "manifest");
@@ -274,7 +274,7 @@ ini_overrides:
 
     #[test]
     fn test_parse_profile_with_pre_setup() {
-        let yaml = r#"
+        let yaml = r"
 project: test-project
 services:
   crawler:
@@ -286,7 +286,7 @@ services:
     depends_on_services:
       - qe
     timeout: 10m
-"#;
+";
         let profile: Profile = serde_yaml::from_str(yaml).unwrap();
 
         let pre_setup = profile.services.get("pre_setup").unwrap();

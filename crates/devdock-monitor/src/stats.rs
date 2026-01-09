@@ -192,9 +192,9 @@ impl StatsCollector {
                     if libc::statvfs(cpath.as_ptr(), stat.as_mut_ptr()) == 0 {
                         let stat = stat.assume_init();
                         #[allow(clippy::unnecessary_cast)]
-                        let total = (stat.f_blocks as u64) * (stat.f_frsize as u64);
+                        let total = u64::from(stat.f_blocks) * (stat.f_frsize as u64);
                         #[allow(clippy::unnecessary_cast)]
-                        let free = (stat.f_bfree as u64) * (stat.f_frsize as u64);
+                        let free = u64::from(stat.f_bfree) * (stat.f_frsize as u64);
                         let used = total - free;
                         let percent =
                             if total > 0 { (used as f64 / total as f64) * 100.0 } else { 0.0 };

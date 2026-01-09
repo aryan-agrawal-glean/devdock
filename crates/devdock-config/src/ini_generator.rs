@@ -195,9 +195,9 @@ impl IniGenerator {
 
             // Determine host based on quality_pipelines (they run outside Docker)
             let sql_host = if self.context.has_quality_pipelines {
-                format!("localhost:{}", sql_port)
+                format!("localhost:{sql_port}")
             } else {
-                format!("host.docker.internal:{}", sql_port)
+                format!("host.docker.internal:{sql_port}")
             };
 
             // Basic config for local SQL
@@ -210,11 +210,11 @@ impl IniGenerator {
 
             for instance in instances {
                 let instance_prefix =
-                    if instance.is_empty() { String::new() } else { format!("{}.", instance) };
+                    if instance.is_empty() { String::new() } else { format!("{instance}.") };
 
-                self.config.set("sql", &format!("{}db.password", instance_prefix), "");
-                self.config.set("sql", &format!("{}db.user", instance_prefix), "root");
-                self.config.set("sql", &format!("{}db.host", instance_prefix), &sql_host);
+                self.config.set("sql", &format!("{instance_prefix}db.password"), "");
+                self.config.set("sql", &format!("{instance_prefix}db.user"), "root");
+                self.config.set("sql", &format!("{instance_prefix}db.host"), &sql_host);
             }
 
             // Set googlecloud.instanceName for frontend and backend
@@ -244,8 +244,8 @@ impl IniGenerator {
             for (instance, port) in instances {
                 self.config.set(
                     "sql",
-                    &format!("{}.db.host", instance),
-                    format!("host.docker.internal:{}", port),
+                    &format!("{instance}.db.host"),
+                    format!("host.docker.internal:{port}"),
                 );
             }
 
@@ -284,7 +284,7 @@ impl IniGenerator {
             self.config.set(
                 "indexing",
                 "server.url",
-                format!("http://host.docker.internal:{}", port),
+                format!("http://host.docker.internal:{port}"),
             );
             self.config.set("entitybuilder", "index.name", "entity-index-1");
             self.config.set("elastic_plugin", "hotswapJarPluginTag", "");
@@ -295,7 +295,7 @@ impl IniGenerator {
             self.config.set(
                 namespace,
                 "indexing.server.url",
-                format!("http://host.docker.internal:{}", port),
+                format!("http://host.docker.internal:{port}"),
             );
             self.config.set(namespace, "indexing.index.name", "index-1");
             self.config.set(namespace, "entitybuilder.index.name", "entity-index-1");
@@ -344,11 +344,11 @@ impl IniGenerator {
         let port = node.config.env.get("PORT").unwrap_or(&"7960".to_string()).clone();
 
         let glean_base_url = if node.config.is_local() {
-            format!("https://local.glean.com:{}", port)
+            format!("https://local.glean.com:{port}")
         } else {
             // For remote, would need to get from dynamic config
             // For now, use local
-            format!("https://local.glean.com:{}", port)
+            format!("https://local.glean.com:{port}")
         };
 
         self.config.set("queryapi", "baseURL", &glean_base_url);
@@ -359,11 +359,11 @@ impl IniGenerator {
     fn apply_task_push_config(&mut self, node: &ServiceNode) {
         let port = node.config.env.get("PORT").unwrap_or(&"7992".to_string()).clone();
 
-        self.config.set("task_push", "baseURL", format!("http://host.docker.internal:{}", port));
+        self.config.set("task_push", "baseURL", format!("http://host.docker.internal:{port}"));
         self.config.set(
             "task_push",
             "internalLBBaseURL",
-            format!("http://host.docker.internal:{}", port),
+            format!("http://host.docker.internal:{port}"),
         );
         self.config.set("task_push", "rabbitmq.connections", "5");
     }
@@ -374,7 +374,7 @@ impl IniGenerator {
         self.config.set(
             "task_push",
             "crawler.baseURL",
-            format!("http://host.docker.internal:{}", port),
+            format!("http://host.docker.internal:{port}"),
         );
         self.config.set("local", "taskHandler.port", "7961");
         self.config.set("chat", "fileUpload.clamAVScan.enabled", "false");
@@ -386,18 +386,14 @@ impl IniGenerator {
         self.config.set(
             "queryapi",
             "scholastic.url",
-            format!("http://host.docker.internal:{}", port),
+            format!("http://host.docker.internal:{port}"),
         );
     }
 
     fn apply_py_agents_config(&mut self, node: &ServiceNode) {
         let port = node.config.env.get("PORT").unwrap_or(&"8091".to_string()).clone();
 
-        self.config.set(
-            "queryapi",
-            "pyAgents.url",
-            format!("http://host.docker.internal:{}", port),
-        );
+        self.config.set("queryapi", "pyAgents.url", format!("http://host.docker.internal:{port}"));
     }
 
     fn apply_deployment_wizard_config(&mut self, _node: &ServiceNode) {
@@ -416,14 +412,14 @@ impl IniGenerator {
             self.config.set(
                 "queryapi",
                 "datasourceEvents.url",
-                format!("http://local.glean.com:{}", port),
+                format!("http://local.glean.com:{port}"),
             );
         } else {
             let port = node.config.env.get("PORT").unwrap_or(&"7962".to_string()).clone();
             self.config.set(
                 "queryapi",
                 "datasourceEvents.url",
-                format!("http://host.docker.internal:{}", port),
+                format!("http://host.docker.internal:{port}"),
             );
         }
     }
@@ -434,7 +430,7 @@ impl IniGenerator {
             self.config.set(
                 "code_interpreter",
                 "notebook_sandbox_host_url",
-                format!("http://local.glean.com:{}", port),
+                format!("http://local.glean.com:{port}"),
             );
             self.config.set("chat", "fileUpload.clamAVScan.enabled", "false");
         }
@@ -457,7 +453,7 @@ impl IniGenerator {
             self.config.set(
                 "deploy",
                 "computeengine.git_crawler.url",
-                format!("http://host.docker.internal:{}/git-crawler", port),
+                format!("http://host.docker.internal:{port}/git-crawler"),
             );
             self.config.set("deploy", "git_crawler.machine_type", "e2-small");
             self.config.set("git", "vmCrawler.workspaceDirectory", "/mnt/git_crawler/workspace");

@@ -51,9 +51,9 @@ impl IniConfig {
         let mut result = String::new();
 
         for (section, keys) in &self.sections {
-            result.push_str(&format!("[{}]\n", section));
+            result.push_str(&format!("[{section}]\n"));
             for (key, value) in keys {
-                result.push_str(&format!("{} = {}\n", key, value));
+                result.push_str(&format!("{key} = {value}\n"));
             }
             result.push('\n');
         }
@@ -109,7 +109,7 @@ impl GooglePlatform {
         // Python reads from config.get('google', 'primaryZone')
         let zone = dynamic_config
             .and_then(|c| c.get("google", "primaryZone"))
-            .map(|s| s.to_string())
+            .cloned()
             .unwrap_or_else(|| "us-central1-c".to_string());
 
         // Derive region from zone (remove last 2 chars: us-central1-c -> us-central1)
@@ -143,17 +143,17 @@ impl GooglePlatform {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            eprintln!("\n❌ Failed to get GCP project number for '{}'", project);
-            eprintln!("Error: {}", stderr);
+            eprintln!("\n❌ Failed to get GCP project number for '{project}'");
+            eprintln!("Error: {stderr}");
             eprintln!("\nPossible causes:");
             eprintln!("  1. Not authenticated with gcloud");
             eprintln!("     → Run: gcloud auth login");
-            eprintln!("  2. No access to project '{}'", project);
+            eprintln!("  2. No access to project '{project}'");
             eprintln!("     → Verify project exists and you have access");
             eprintln!("  3. Wrong active gcloud account");
             eprintln!("     → Run: gcloud auth list");
             eprintln!("  4. Wrong gcloud project configured");
-            eprintln!("     → Run: gcloud config set project {}", project);
+            eprintln!("     → Run: gcloud config set project {project}");
             anyhow::bail!("gcloud projects describe failed for '{}': {}", project, stderr.trim());
         }
 
@@ -224,7 +224,7 @@ impl Platform for GooglePlatform {
             if self.dns_kubectl_enabled { "enabled" } else { "disabled" }.to_string();
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "google"
     }
 
@@ -285,7 +285,7 @@ impl Platform for AWSPlatform {
         profile.dns_kubectl = "disabled".to_string();
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "aws"
     }
 
@@ -357,11 +357,11 @@ impl Platform for AzurePlatform {
         profile.dns_kubectl = "disabled".to_string();
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "azure"
     }
 
-    fn zone(&self) -> &str {
+    fn zone(&self) -> &'static str {
         ""
     }
 
@@ -398,6 +398,6 @@ pub async fn create_platform_with_multi_project(
             // Azure doesn't support multi_project yet
             Ok(Box::new(AzurePlatform::new(project, dynamic_config).await?))
         }
-        _ => anyhow::bail!("Unsupported platform: {}", platform_name),
+        _ => anyhow::bail!("Unsupported platform: {platform_name}"),
     }
 }

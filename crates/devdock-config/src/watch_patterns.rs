@@ -226,7 +226,7 @@ impl WatchPatternGenerator {
         if package.is_empty() {
             None
         } else {
-            Some(format!("{}/", package))
+            Some(format!("{package}/"))
         }
     }
 
@@ -266,7 +266,7 @@ impl WatchPatternGenerator {
         let watch_file = self
             .workspace_root
             .join("devdock/runtime_generated")
-            .join(format!("watch_file_{}.yaml", service_name));
+            .join(format!("watch_file_{service_name}.yaml"));
 
         // Ensure directory exists
         if let Some(parent) = watch_file.parent() {
@@ -300,7 +300,7 @@ impl WatchPatternGenerator {
         service_name: &str,
         target_hash: &str,
     ) -> Option<Vec<String>> {
-        let cache_file = self.cache_dir.join(format!("{}_{}.yaml", service_name, target_hash));
+        let cache_file = self.cache_dir.join(format!("{service_name}_{target_hash}.yaml"));
 
         if !cache_file.exists() {
             return None;
@@ -330,7 +330,7 @@ impl WatchPatternGenerator {
         target_hash: &str,
         patterns: &[String],
     ) -> Result<()> {
-        let cache_file = self.cache_dir.join(format!("{}_{}.yaml", service_name, target_hash));
+        let cache_file = self.cache_dir.join(format!("{service_name}_{target_hash}.yaml"));
 
         let mut map = HashMap::new();
         map.insert(service_name.to_string(), patterns.to_vec());
@@ -416,10 +416,9 @@ mod tests {
         // because go/platform/ already covers go/platform/gcp/query_endpoint/
         assert!(
             patterns.iter().any(|p| p.starts_with("go/")),
-            "Should have go patterns: {:?}",
-            patterns
+            "Should have go patterns: {patterns:?}"
         );
-        assert!(patterns.contains(&"config/".to_string()), "Should have config/: {:?}", patterns);
+        assert!(patterns.contains(&"config/".to_string()), "Should have config/: {patterns:?}");
     }
 
     #[test]

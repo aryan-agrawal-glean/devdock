@@ -70,7 +70,7 @@ pub async fn status() -> Result<()> {
         println!("  Mode: {}", if full_mode { "all files" } else { "git-tracked only" });
 
         if let Some(pid) = pid {
-            println!("  PID: {}", pid);
+            println!("  PID: {pid}");
         }
     } else {
         println!("{}", "No sync session found".yellow());

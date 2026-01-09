@@ -30,14 +30,14 @@ pub fn header(msg: &str) {
     let line = "═".repeat(60);
     println!();
     println!("{}", line.blue());
-    println!("{}", format!("  {}", msg).bold());
+    println!("{}", format!("  {msg}").bold());
     println!("{}", line.blue());
     println!();
 }
 
 /// Print a step in a multi-step process.
 pub fn step(current: usize, total: usize, msg: &str) {
-    println!("{} {} {}", format!("[{}/{}]", current, total).purple().bold(), "▶".cyan(), msg);
+    println!("{} {} {}", format!("[{current}/{total}]").purple().bold(), "▶".cyan(), msg);
 }
 
 /// Create a progress bar with time estimate.
@@ -72,7 +72,7 @@ pub fn create_spinner(message: &str) -> ProgressBar {
 /// Format elapsed time as human-readable string.
 pub fn format_elapsed(seconds: u64) -> String {
     if seconds < 60 {
-        format!("{}s", seconds)
+        format!("{seconds}s")
     } else if seconds < 3600 {
         format!("{}m {}s", seconds / 60, seconds % 60)
     } else {
@@ -87,10 +87,7 @@ pub fn notify(title: &str, message: &str) {
     let _ = Command::new("osascript")
         .args([
             "-e",
-            &format!(
-                r#"display notification "{}" with title "{}" sound name "Glass""#,
-                message, title
-            ),
+            &format!(r#"display notification "{message}" with title "{title}" sound name "Glass""#),
         ])
         .output();
 }

@@ -59,7 +59,7 @@ impl ResourceHealthHistory {
         self.observations.push_back(HealthObservation { status: status.clone(), timestamp: now });
 
         // Remove observations outside the window
-        let cutoff = now - config.window_duration;
+        let cutoff = now.checked_sub(config.window_duration).unwrap();
         while let Some(front) = self.observations.front() {
             if front.timestamp < cutoff {
                 self.observations.pop_front();
@@ -146,7 +146,7 @@ impl HealthTracker {
 
     /// Check if a resource is stably healthy.
     pub fn is_stable(&self, name: &str) -> bool {
-        self.resources.get(name).map(|h| h.is_stable(&self.config)).unwrap_or(false)
+        self.resources.get(name).is_some_and(|h| h.is_stable(&self.config))
     }
 
     /// Get the effective status for a resource (considering stability).
@@ -211,8 +211,7 @@ impl StabilityInfo {
         } else if self.consecutive_healthy > 0 {
             let time_str = self
                 .time_healthy
-                .map(|d| format!("{:.1}s", d.as_secs_f64()))
-                .unwrap_or_else(|| "0s".to_string());
+                .map_or_else(|| "0s".to_string(), |d| format!("{:.1}s", d.as_secs_f64()));
             format!("{}/{} checks, {}", self.consecutive_healthy, self.required, time_str)
         } else {
             "waiting".to_string()

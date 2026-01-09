@@ -87,8 +87,8 @@ impl ProfileLoader {
     /// 2. integration_tests/<name>.yaml
     /// 3. <name>.yaml (root profiles directory)
     fn find_profile(&self, name: &str) -> Result<PathBuf> {
-        let filename_yaml = format!("{}.yaml", name);
-        let filename_yml = format!("{}.yml", name);
+        let filename_yaml = format!("{name}.yaml");
+        let filename_yml = format!("{name}.yml");
 
         // Subdirectories to check in priority order
         let subdirs = ["user_profiles", "integration_tests", ""];
@@ -134,7 +134,7 @@ impl ProfileLoader {
                 for entry in walkdir::WalkDir::new(&search_path)
                     .max_depth(1)
                     .into_iter()
-                    .filter_map(|e| e.ok())
+                    .filter_map(std::result::Result::ok)
                 {
                     let path = entry.path();
                     if let Some(ext) = path.extension() {
@@ -177,14 +177,14 @@ impl ProfileLoader {
                 for entry in walkdir::WalkDir::new(&search_path)
                     .max_depth(1)
                     .into_iter()
-                    .filter_map(|e| e.ok())
+                    .filter_map(std::result::Result::ok)
                 {
                     let path = entry.path();
                     if let Some(ext) = path.extension() {
                         if ext == "yaml" || ext == "yml" {
                             if let Some(stem) = path.file_stem() {
                                 if let Some(name) = stem.to_str() {
-                                    profiles.push((name.to_string(), category.to_string()));
+                                    profiles.push((name.to_string(), (*category).to_string()));
                                 }
                             }
                         }
@@ -213,7 +213,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let profile_path = temp_dir.path().join("test_profile.yaml");
 
-        let profile_content = r#"
+        let profile_content = r"
 project: test-project
 platform: google
 infra:
@@ -222,7 +222,7 @@ infra:
 services:
   qe:
     type: local
-"#;
+";
         std::fs::write(&profile_path, profile_content).unwrap();
 
         let loader = ProfileLoader::with_paths(vec![temp_dir.path().to_path_buf()]);

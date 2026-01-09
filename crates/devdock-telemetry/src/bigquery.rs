@@ -5,7 +5,7 @@
 
 use crate::{
     emitter::{EmitResult, TelemetryEmitter},
-    models::*,
+    models::TelemetrySnapshot,
     Result, TelemetryError,
 };
 use async_trait::async_trait;
@@ -55,12 +55,12 @@ pub struct TableNames {
 impl TableNames {
     pub fn new(project: &str, dataset: &str) -> Self {
         TableNames {
-            session_stats: format!("{}.{}.devdock_session_stats", project, dataset),
-            resource_stats: format!("{}.{}.resource_stats", project, dataset),
-            startup_stats: format!("{}.{}.startup_stats", project, dataset),
-            host_stats: format!("{}.{}.host_stats", project, dataset),
-            docker_stats: format!("{}.{}.docker_stats", project, dataset),
-            failure_logs: format!("{}.{}.resource_failure_logs", project, dataset),
+            session_stats: format!("{project}.{dataset}.devdock_session_stats"),
+            resource_stats: format!("{project}.{dataset}.resource_stats"),
+            startup_stats: format!("{project}.{dataset}.startup_stats"),
+            host_stats: format!("{project}.{dataset}.host_stats"),
+            docker_stats: format!("{project}.{dataset}.docker_stats"),
+            failure_logs: format!("{project}.{dataset}.resource_failure_logs"),
         }
     }
 }
@@ -151,11 +151,11 @@ impl BigQueryEmitter {
             .args(["auth", "print-access-token"])
             .output()
             .await
-            .map_err(|e| TelemetryError::BigQuery(format!("Failed to get ADC token: {}", e)))?;
+            .map_err(|e| TelemetryError::BigQuery(format!("Failed to get ADC token: {e}")))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(TelemetryError::BigQuery(format!("gcloud auth failed: {}", stderr)));
+            return Err(TelemetryError::BigQuery(format!("gcloud auth failed: {stderr}")));
         }
 
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
@@ -177,7 +177,7 @@ impl BigQueryEmitter {
         let token = self.get_access_token().await?;
         let parts: Vec<&str> = table_id.split('.').collect();
         if parts.len() != 3 {
-            return Err(TelemetryError::Config(format!("Invalid table ID format: {}", table_id)));
+            return Err(TelemetryError::Config(format!("Invalid table ID format: {table_id}")));
         }
 
         let url = format!(
@@ -201,8 +201,7 @@ impl BigQueryEmitter {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
             return Err(TelemetryError::BigQuery(format!(
-                "BigQuery insert failed ({}): {}",
-                status, body
+                "BigQuery insert failed ({status}): {body}"
             )));
         }
 
@@ -223,7 +222,7 @@ impl BigQueryEmitter {
 
 #[async_trait]
 impl TelemetryEmitter for BigQueryEmitter {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "bigquery"
     }
 
@@ -247,7 +246,7 @@ impl TelemetryEmitter for BigQueryEmitter {
                 Ok(n) => success_count += n,
                 Err(e) => {
                     failure_count += 1;
-                    errors.push(format!("session_stats: {}", e));
+                    errors.push(format!("session_stats: {e}"));
                 }
             }
         }
@@ -257,7 +256,7 @@ impl TelemetryEmitter for BigQueryEmitter {
                 Ok(n) => success_count += n,
                 Err(e) => {
                     failure_count += snapshot.resource_statuses.len();
-                    errors.push(format!("resource_stats: {}", e));
+                    errors.push(format!("resource_stats: {e}"));
                 }
             }
         }
@@ -267,7 +266,7 @@ impl TelemetryEmitter for BigQueryEmitter {
                 Ok(n) => success_count += n,
                 Err(e) => {
                     failure_count += snapshot.resource_startups.len();
-                    errors.push(format!("startup_stats: {}", e));
+                    errors.push(format!("startup_stats: {e}"));
                 }
             }
         }
@@ -277,7 +276,7 @@ impl TelemetryEmitter for BigQueryEmitter {
                 Ok(n) => success_count += n,
                 Err(e) => {
                     failure_count += 1;
-                    errors.push(format!("host_stats: {}", e));
+                    errors.push(format!("host_stats: {e}"));
                 }
             }
         }
@@ -287,7 +286,7 @@ impl TelemetryEmitter for BigQueryEmitter {
                 Ok(n) => success_count += n,
                 Err(e) => {
                     failure_count += snapshot.docker.len();
-                    errors.push(format!("docker_stats: {}", e));
+                    errors.push(format!("docker_stats: {e}"));
                 }
             }
         }
@@ -297,7 +296,7 @@ impl TelemetryEmitter for BigQueryEmitter {
                 Ok(n) => success_count += n,
                 Err(e) => {
                     failure_count += snapshot.failures.len();
-                    errors.push(format!("failure_logs: {}", e));
+                    errors.push(format!("failure_logs: {e}"));
                 }
             }
         }

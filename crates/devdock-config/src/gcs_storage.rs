@@ -64,7 +64,7 @@ impl GcsStorage {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("gcloud storage cp failed: {}", stderr);
+            anyhow::bail!("gcloud storage cp failed: {stderr}");
         }
 
         Ok(local_path)
@@ -87,7 +87,7 @@ impl GcsStorage {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("gcloud storage cp failed: {}", stderr);
+            anyhow::bail!("gcloud storage cp failed: {stderr}");
         }
 
         Ok(())
@@ -159,11 +159,11 @@ impl GcsStorage {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("gcloud storage ls failed: {}", stderr);
+            anyhow::bail!("gcloud storage ls failed: {stderr}");
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        Ok(stdout.lines().map(|s| s.to_string()).collect())
+        Ok(stdout.lines().map(std::string::ToString::to_string).collect())
     }
 
     /// Check if a GCS path exists
@@ -301,7 +301,7 @@ impl SqlDumpFetcher {
     /// Fetch a SQL dump file for a database
     pub async fn fetch_sql_dump(&self, db_name: &str, target_dir: &Path) -> Result<PathBuf> {
         let gcs_path = format!("{}/{}.sql", self.storage.sql_bucket(), db_name);
-        let target_path = target_dir.join(format!("{}.sql", db_name));
+        let target_path = target_dir.join(format!("{db_name}.sql"));
 
         info!("Fetching SQL dump for {} from {}", db_name, gcs_path);
         self.storage.fetch_to_path(&gcs_path, &target_path).await?;
