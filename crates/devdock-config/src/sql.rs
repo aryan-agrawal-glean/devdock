@@ -134,7 +134,7 @@ impl SqlUtils {
             // Extract instance ID from connection string (last part after last colon)
             let instance_id = connection_string
                 .split(':')
-                .last()
+                .next_back()
                 .unwrap_or(connection_string);
             
             debug!("Checking public IP for {} ({})", instance_type, instance_id);
