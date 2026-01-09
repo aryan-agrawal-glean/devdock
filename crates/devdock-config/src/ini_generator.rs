@@ -275,7 +275,7 @@ impl IniGenerator {
 
             // Set host for remote SQL (goes through cloud-sql-proxy or bastion)
             // Order matters: frontendInstance first, then backendInstance
-            let instances = vec!["frontendInstance", "backendInstance"];
+            let instances = ["frontendInstance", "backendInstance"];
 
             for (idx, instance) in instances.iter().enumerate() {
                 let port = curr_port + idx as u16;
