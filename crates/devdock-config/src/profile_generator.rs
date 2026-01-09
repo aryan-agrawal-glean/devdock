@@ -473,6 +473,8 @@ impl TempProfileGenerator {
                 }
             } else {
                 // Remote SQL configuration
+                // Don't include copy_tables/mode/etc for remote SQL
+                extra.retain(|k, _| !matches!(k.as_str(), "copy_tables" | "mode" | "full_cleanup" | "copy_keyval" | "copy_where_queries"));
                 self.apply_remote_sql_config(&mut extra);
             }
         }
@@ -746,10 +748,14 @@ impl TempProfileGenerator {
                     let mut cloud_sql_args = Vec::new();
                     let mut curr_port = curr_port_base;
                     
-                    for connection_str in metadata.instances.values() {
-                        if !connection_str.is_empty() {
-                            cloud_sql_args.push(format!("{}?port={}", connection_str, curr_port));
-                            curr_port += 1;
+                    // Order matters: frontendInstance first, then backendInstance
+                    let ordered_instances = vec!["frontendInstance", "backendInstance"];
+                    for instance_name in ordered_instances {
+                        if let Some(connection_str) = metadata.instances.get(instance_name) {
+                            if !connection_str.is_empty() {
+                                cloud_sql_args.push(format!("{}?port={}", connection_str, curr_port));
+                                curr_port += 1;
+                            }
                         }
                     }
                     
@@ -763,16 +769,22 @@ impl TempProfileGenerator {
                     extra.insert("bastion".to_string(), serde_json::json!(true));
                     extra.insert("use_iam_auth".to_string(), serde_json::json!(metadata.use_iam_auth));
                     
-                    let instances: Vec<String> = metadata.instances.keys().cloned().collect();
-                    extra.insert("instances".to_string(), serde_json::json!(instances));
-                    
-                    // Build ports list
+                    // Order matters: frontendInstance first, then backendInstance
+                    // This must match the INI generation order
+                    let ordered_instances = ["frontendInstance", "backendInstance"];
+                    let mut instances_list = Vec::new();
                     let mut ports = Vec::new();
                     let mut curr_port = curr_port_base;
-                    for _ in &metadata.instances {
-                        ports.push(curr_port);
-                        curr_port += 1;
+                    
+                    for instance_name in &ordered_instances {
+                        if metadata.instances.contains_key(*instance_name) {
+                            instances_list.push(instance_name.to_string());
+                            ports.push(curr_port);
+                            curr_port += 1;
+                        }
                     }
+                    
+                    extra.insert("instances".to_string(), serde_json::json!(instances_list));
                     extra.insert("ports".to_string(), serde_json::json!(ports));
                     
                     // Update bastion config with port forwarding
@@ -792,8 +804,8 @@ impl TempProfileGenerator {
                                 .and_then(|v| serde_json::from_value::<Vec<Vec<u16>>>(v.clone()).ok())
                                 .unwrap_or_default();
                             
-                            // Add SQL port mappings
-                            for (i, instance_name) in metadata.instances.keys().enumerate() {
+                            // Add SQL port mappings in order
+                            for (i, instance_name) in instances_list.iter().enumerate() {
                                 let local_port = ports[i];
                                 if let Some(&remote_port) = bastion_port_map.get(instance_name) {
                                     local_to_remote.push(vec![local_port, remote_port]);
