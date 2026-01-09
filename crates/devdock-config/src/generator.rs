@@ -433,36 +433,32 @@ impl ConfigGenerator {
 
         // Handle multi-project if present
         if let Some(ref multi_config) = profile.multi_project {
+            // 1. Add nested glean_apps_canary section (only platform + SQL)
             let multi_profile_data = self
                 .generate_multi_project_profile(profile, multi_config, dynamic_ini.as_ref())
                 .await?;
             generator.set_multi_project(multi_profile_data);
+
+            // 2. Add multi-project services to TOP-LEVEL services dict (Python behavior)
+            self.apply_multi_project_services_to_generator(&mut generator, multi_config, dynamic_ini.as_ref())
+                .await?;
         }
 
         generator.generate()
     }
 
-    /// Generate nested multi-project profile data
-    async fn generate_multi_project_profile(
+    /// Add multi-project services to TOP-LEVEL services dict (matches Python behavior)
+    async fn apply_multi_project_services_to_generator(
         &self,
-        _primary_profile: &Profile,
+        generator: &mut TempProfileGenerator,
         multi_config: &devdock_core::profile::MultiProjectConfig,
         dynamic_ini: Option<&ParsedIniConfig>,
-    ) -> Result<crate::profile_generator::MultiProjectProfile> {
-        use crate::profile_generator::{InfraProfileEntry, MultiProjectProfile, ServiceProfileEntry};
+    ) -> Result<()> {
+        use crate::profile_generator::ServiceProfileEntry;
         
         let multi_project_name = "glean-apps-canary";
 
-        // Create platform for multi-project
-        let multi_platform = crate::platform::create_platform_with_multi_project(
-            "google",
-            multi_project_name.to_string(),
-            dynamic_ini,
-            true,
-        )
-        .await?;
-
-        // Build profile for multi-project
+        // Build profile for multi-project to get dependency graph
         let multi_profile = Profile {
             project: multi_project_name.to_string(),
             platform: devdock_core::types::Platform::Google,
@@ -477,8 +473,7 @@ impl ConfigGenerator {
 
         let multi_graph = DependencyGraph::build(&multi_profile, &self.workspace_root).await?;
 
-        // Convert services to ServiceProfileEntry
-        let mut services = HashMap::new();
+        // Add each service to TOP-LEVEL services dict
         for node in multi_graph.nodes() {
             if node.component_type == crate::dependency_graph::ComponentType::Service {
                 let profile_service = multi_profile.services.get(&node.name);
@@ -519,8 +514,8 @@ impl ConfigGenerator {
                     .map(|s| s.config.clone())
                     .unwrap_or_default();
 
-                services.insert(
-                    node.name.clone(),
+                generator.add_service(
+                    &node.name,
                     ServiceProfileEntry {
                         service_type,
                         active: true,
@@ -537,20 +532,44 @@ impl ConfigGenerator {
             }
         }
 
-        // Convert infra to InfraProfileEntry
+        Ok(())
+    }
+
+    /// Generate nested multi-project profile data (only platform info + SQL)
+    /// Note: Services are added to TOP-LEVEL services dict in apply_multi_project_services
+    async fn generate_multi_project_profile(
+        &self,
+        _primary_profile: &Profile,
+        multi_config: &devdock_core::profile::MultiProjectConfig,
+        dynamic_ini: Option<&ParsedIniConfig>,
+    ) -> Result<crate::profile_generator::MultiProjectProfile> {
+        use crate::profile_generator::{InfraProfileEntry, MultiProjectProfile};
+        
+        let multi_project_name = "glean-apps-canary";
+
+        // Create platform for multi-project
+        let multi_platform = crate::platform::create_platform_with_multi_project(
+            "google",
+            multi_project_name.to_string(),
+            dynamic_ini,
+            true,
+        )
+        .await?;
+
+        // Only nest SQL infra under glean_apps_canary (matches Python behavior)
         let mut infra = HashMap::new();
-        for (name, config) in &multi_profile.infra {
-            let infra_type = match config.deployment_type {
+        if let Some(sql_config) = multi_config.infra.get("sql") {
+            let infra_type = match sql_config.deployment_type {
                 devdock_core::types::DeploymentType::Local => "local",
                 devdock_core::types::DeploymentType::Remote => "remote",
             }
             .to_string();
 
             infra.insert(
-                name.clone(),
+                "sql".to_string(),
                 InfraProfileEntry {
                     infra_type,
-                    extra: config.config.clone(),
+                    extra: sql_config.config.clone(),
                 },
             );
         }
@@ -567,7 +586,7 @@ impl ConfigGenerator {
             zone: temp_profile_mut.zone,
             project_number: temp_profile_mut.project_number,
             infra,
-            services,
+            services: HashMap::new(), // Services go to TOP-LEVEL, not nested
         })
     }
 

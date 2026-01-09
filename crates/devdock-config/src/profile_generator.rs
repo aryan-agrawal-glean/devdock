@@ -652,6 +652,11 @@ impl TempProfileGenerator {
         self.profile.multi_project = Some(multi_project);
     }
 
+    /// Add a service to the TOP-LEVEL services dict (used for multi-project services)
+    pub fn add_service(&mut self, name: &str, entry: ServiceProfileEntry) {
+        self.profile.services.insert(name.to_string(), entry);
+    }
+
     /// Generate the final YAML string
     pub fn generate(self) -> Result<String> {
         serde_yaml::to_string(&self.profile)
