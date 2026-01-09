@@ -126,8 +126,17 @@ impl SqlUtils {
     /// Check if SQL instances have public IP enabled
     ///
     /// Replaces: python_scio.scripts.lib.utils.sql_util.check_if_sql_instances_have_public_IP
+    /// 
+    /// Note: instances parameter contains full connection strings (project:region:instance-id)
+    /// We extract the instance ID before calling gcloud.
     pub async fn check_public_ip(&self, instances: &HashMap<String, String>) -> Result<bool> {
-        for (instance_type, instance_id) in instances {
+        for (instance_type, connection_string) in instances {
+            // Extract instance ID from connection string (last part after last colon)
+            let instance_id = connection_string
+                .split(':')
+                .last()
+                .unwrap_or(connection_string);
+            
             debug!("Checking public IP for {} ({})", instance_type, instance_id);
 
             let output = Command::new("gcloud")
