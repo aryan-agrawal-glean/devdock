@@ -51,22 +51,11 @@ impl Default for StartupMonitorConfig {
 #[derive(Debug, Clone)]
 pub enum StartupResult {
     /// All resources became healthy.
-    Success {
-        duration_secs: u64,
-        resources: Vec<String>,
-    },
+    Success { duration_secs: u64, resources: Vec<String> },
     /// Timed out waiting for resources.
-    Timeout {
-        duration_secs: u64,
-        healthy: Vec<String>,
-        pending: Vec<String>,
-        failed: Vec<String>,
-    },
+    Timeout { duration_secs: u64, healthy: Vec<String>, pending: Vec<String>, failed: Vec<String> },
     /// One or more resources failed permanently.
-    Failed {
-        duration_secs: u64,
-        failed: Vec<String>,
-    },
+    Failed { duration_secs: u64, failed: Vec<String> },
     /// Tilt is not running.
     TiltNotRunning,
 }
@@ -138,10 +127,7 @@ impl StartupMonitor {
             if self.config.show_progress {
                 println!("\x1B[32mStartup already completed. Skipping resource check.\x1B[0m");
             }
-            return Ok(StartupResult::Success {
-                duration_secs: 0,
-                resources: vec![],
-            });
+            return Ok(StartupResult::Success { duration_secs: 0, resources: vec![] });
         }
 
         info!(
@@ -338,11 +324,7 @@ impl StartupMonitor {
             );
         }
 
-        info!(
-            "Startup complete: {} resources healthy in {:?}",
-            healthy.len(),
-            elapsed
-        );
+        info!("Startup complete: {} resources healthy in {:?}", healthy.len(), elapsed);
 
         if let Err(e) = self.session_state.mark_success() {
             warn!("Failed to write success state: {}", e);
@@ -354,10 +336,7 @@ impl StartupMonitor {
 
         self.notifier.success("DevDock startup complete...");
 
-        Ok(StartupResult::Success {
-            duration_secs: elapsed.as_secs(),
-            resources: healthy,
-        })
+        Ok(StartupResult::Success { duration_secs: elapsed.as_secs(), resources: healthy })
     }
 
     fn collect_and_log_stats(&self) {
@@ -426,33 +405,19 @@ impl StartupMonitor {
                 let waiting: Vec<_> = stabilizing.iter().chain(pending.iter()).take(5).collect();
                 println!(
                     "  Waiting on: {}",
-                    waiting
-                        .iter()
-                        .map(|s| s.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
+                    waiting.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
                 );
             }
             if !failed.is_empty() {
                 println!(
                     "  Failed: {}",
-                    failed
-                        .iter()
-                        .take(5)
-                        .cloned()
-                        .collect::<Vec<_>>()
-                        .join(", ")
+                    failed.iter().take(5).cloned().collect::<Vec<_>>().join(", ")
                 );
             }
         }
 
         let total = stable_healthy.len() + stabilizing.len() + pending.len() + failed.len();
-        warn!(
-            "Startup timeout: {}/{} stable after {:?}",
-            stable_healthy.len(),
-            total,
-            elapsed
-        );
+        warn!("Startup timeout: {}/{} stable after {:?}", stable_healthy.len(), total, elapsed);
 
         if let Err(e) = self.session_state.mark_failure() {
             warn!("Failed to write failure state: {}", e);
@@ -498,10 +463,7 @@ impl StartupMonitor {
 
         self.notifier.failure("DevDock startup failed...");
 
-        Ok(StartupResult::Failed {
-            duration_secs: elapsed.as_secs(),
-            failed,
-        })
+        Ok(StartupResult::Failed { duration_secs: elapsed.as_secs(), failed })
     }
 }
 
@@ -519,10 +481,8 @@ mod tests {
 
     #[test]
     fn test_startup_result_is_success() {
-        let success = StartupResult::Success {
-            duration_secs: 60,
-            resources: vec!["svc".to_string()],
-        };
+        let success =
+            StartupResult::Success { duration_secs: 60, resources: vec!["svc".to_string()] };
         assert!(success.is_success());
 
         let timeout = StartupResult::Timeout {

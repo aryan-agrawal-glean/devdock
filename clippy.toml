@@ -1,0 +1,16 @@
+# Clippy configuration
+# https://doc.rust-lang.org/clippy/configuration.html
+
+# MSRV for the project
+msrv = "1.74"
+
+# Cognitive complexity threshold
+cognitive-complexity-threshold = 30
+
+# Maximum number of lines in a function
+too-many-lines-threshold = 200
+
+# Allow these in tests
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+

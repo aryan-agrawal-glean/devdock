@@ -200,12 +200,10 @@ impl TelemetryCollector {
         resources
             .iter()
             .map(|r| {
-                let tracker = trackers
-                    .entry(r.name.clone())
-                    .or_insert_with(|| ResourceTracker {
-                        first_seen: Some(now),
-                        ..Default::default()
-                    });
+                let tracker = trackers.entry(r.name.clone()).or_insert_with(|| ResourceTracker {
+                    first_seen: Some(now),
+                    ..Default::default()
+                });
 
                 if tracker.first_seen.is_none() {
                     tracker.first_seen = Some(now);
@@ -273,9 +271,8 @@ impl TelemetryCollector {
         for resource in resources {
             let current_status = format!("{:?}", resource.status);
 
-            let tracker = trackers
-                .entry(resource.name.clone())
-                .or_insert_with(ResourceTracker::default);
+            let tracker =
+                trackers.entry(resource.name.clone()).or_insert_with(ResourceTracker::default);
 
             if let Some(last) = &tracker.last_status {
                 if last != &current_status {
@@ -408,11 +405,7 @@ impl TelemetryCollector {
 
                 let total = free + active + inactive + wired;
                 let used = active + wired;
-                let pct = if total > 0 {
-                    (used as f64 / total as f64) * 100.0
-                } else {
-                    0.0
-                };
+                let pct = if total > 0 { (used as f64 / total as f64) * 100.0 } else { 0.0 };
 
                 return (0.0, used, total, pct);
             }
@@ -433,11 +426,7 @@ impl TelemetryCollector {
                 }
 
                 let used = total.saturating_sub(available);
-                let pct = if total > 0 {
-                    (used as f64 / total as f64) * 100.0
-                } else {
-                    0.0
-                };
+                let pct = if total > 0 { (used as f64 / total as f64) * 100.0 } else { 0.0 };
 
                 return (0.0, used, total, pct);
             }
@@ -475,11 +464,8 @@ impl TelemetryCollector {
                         #[allow(clippy::unnecessary_cast)]
                         let free = (stat.f_bfree as u64) * (stat.f_frsize as u64);
                         let used = total - free;
-                        let pct = if total > 0 {
-                            (used as f64 / total as f64) * 100.0
-                        } else {
-                            0.0
-                        };
+                        let pct =
+                            if total > 0 { (used as f64 / total as f64) * 100.0 } else { 0.0 };
                         return (used, total, pct);
                     }
                 }

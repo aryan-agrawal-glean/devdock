@@ -87,12 +87,7 @@ fn wait_for_mysql(container: &str, timeout: Duration) -> Result<()> {
     let start = std::time::Instant::now();
     while start.elapsed() < timeout {
         let output = Command::new("docker")
-            .args([
-                "container",
-                "inspect",
-                "--format={{.State.Health.Status}}",
-                container,
-            ])
+            .args(["container", "inspect", "--format={{.State.Health.Status}}", container])
             .output()?;
 
         let status = String::from_utf8_lossy(&output.stdout);
@@ -170,21 +165,15 @@ pub async fn sql_setup(
     full_cleanup: bool,
     copy_keyval: bool,
 ) -> Result<()> {
-    output::info(&format!(
-        "Setting up SQL for project {} ({})",
-        project, platform
-    ));
+    output::info(&format!("Setting up SQL for project {} ({})", project, platform));
 
     let devdock_root =
         std::env::var("DEVDOCK_ROOT").context("DEVDOCK_ROOT environment variable not set")?;
     let devdock_root = PathBuf::from(&devdock_root);
 
     // Determine container name
-    let container = if project == "glean-apps-canary" {
-        "devdock-mysql-gac"
-    } else {
-        "devdock-mysql"
-    };
+    let container =
+        if project == "glean-apps-canary" { "devdock-mysql-gac" } else { "devdock-mysql" };
 
     // Wait for MySQL
     wait_for_mysql(container, Duration::from_secs(120))?;
@@ -237,10 +226,8 @@ pub async fn sql_setup(
     // Handle table comparison
     else {
         let mut prev_sorted: Vec<&str> = prev_tables.split(';').filter(|s| !s.is_empty()).collect();
-        let mut curr_sorted: Vec<&str> = tables_to_copy
-            .split(';')
-            .filter(|s| !s.is_empty())
-            .collect();
+        let mut curr_sorted: Vec<&str> =
+            tables_to_copy.split(';').filter(|s| !s.is_empty()).collect();
         prev_sorted.sort();
         curr_sorted.sort();
 
@@ -328,10 +315,7 @@ pub async fn sql_setup(
         dump_files.sort();
 
         for dump_file in &dump_files {
-            output::info(&format!(
-                "⏩ Importing {:?}",
-                dump_file.file_name().unwrap()
-            ));
+            output::info(&format!("⏩ Importing {:?}", dump_file.file_name().unwrap()));
             docker_mysql_import(container, dump_file)?;
             output::success(&format!("✅ Imported {:?}", dump_file.file_name().unwrap()));
         }
@@ -378,18 +362,12 @@ pub async fn opensearch_copy(
     query: &str,
     max_docs: usize,
 ) -> Result<()> {
-    output::info(&format!(
-        "Copying OpenSearch indexes for project {}: {}",
-        project, indexes
-    ));
+    output::info(&format!("Copying OpenSearch indexes for project {}: {}", project, indexes));
 
     let copier = OpenSearchCopier::new(project).await?;
 
-    let index_list: Vec<String> = indexes
-        .split(',')
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect();
+    let index_list: Vec<String> =
+        indexes.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
 
     if index_list.is_empty() {
         output::warn("No indexes specified");
@@ -412,17 +390,11 @@ pub async fn opensearch_health() -> Result<()> {
     output::info("Checking local OpenSearch health...");
 
     let client = reqwest::Client::new();
-    let response = client
-        .get("http://localhost:9200/_cluster/health")
-        .send()
-        .await?;
+    let response = client.get("http://localhost:9200/_cluster/health").send().await?;
 
     if response.status().is_success() {
         let health: serde_json::Value = response.json().await?;
-        let status = health
-            .get("status")
-            .and_then(|s| s.as_str())
-            .unwrap_or("unknown");
+        let status = health.get("status").and_then(|s| s.as_str()).unwrap_or("unknown");
 
         match status {
             "green" => output::success("OpenSearch cluster is healthy (green)"),

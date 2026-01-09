@@ -14,9 +14,7 @@ pub async fn execute(detailed: bool) -> Result<()> {
     let workspace_path = std::env::current_dir()?.display().to_string();
 
     // Try to find instance for current workspace
-    let instance = state_manager
-        .get_instance_by_workspace(&workspace_path)
-        .await?;
+    let instance = state_manager.get_instance_by_workspace(&workspace_path).await?;
 
     match instance {
         Some(instance) => {
@@ -31,10 +29,7 @@ pub async fn execute(detailed: bool) -> Result<()> {
                 .collect();
 
             if running.is_empty() {
-                println!(
-                    "\n{}",
-                    "No DevDock instance running for this workspace.".yellow()
-                );
+                println!("\n{}", "No DevDock instance running for this workspace.".yellow());
                 println!("\nTo start DevDock:");
                 println!("  devdock start <profile_name>");
             } else {
@@ -44,12 +39,7 @@ pub async fn execute(detailed: bool) -> Result<()> {
                     running.len()
                 );
                 for inst in running {
-                    println!(
-                        "  • {} ({}) - {}",
-                        &inst.id[..8],
-                        inst.branch,
-                        inst.workspace_path
-                    );
+                    println!("  • {} ({}) - {}", &inst.id[..8], inst.branch, inst.workspace_path);
                 }
             }
         }
@@ -104,14 +94,8 @@ async fn print_instance_status(
     // Always show quick access info
     println!("\n{}", "Quick Access".bold());
     println!("{}", "─".repeat(50));
-    println!(
-        "  Tilt UI:    {}",
-        format!("http://localhost:{}", instance.port_base + 10350).cyan()
-    );
-    println!(
-        "  Services:   {}",
-        format!("https://local.glean.com:{}", instance.port_base).cyan()
-    );
+    println!("  Tilt UI:    {}", format!("http://localhost:{}", instance.port_base + 10350).cyan());
+    println!("  Services:   {}", format!("https://local.glean.com:{}", instance.port_base).cyan());
 
     // Show port mappings for remote instances
     if instance.mode == "remote" {
@@ -145,10 +129,7 @@ async fn print_instance_status(
 
             table.printstd();
 
-            println!(
-                "\n  Run {} to see all port mappings",
-                "devdock ports".cyan()
-            );
+            println!("\n  Run {} to see all port mappings", "devdock ports".cyan());
         }
     }
 
@@ -189,10 +170,7 @@ async fn print_tilt_status(mode: &str, state_manager: &StateManager) -> Result<(
         // For remote mode, check Tilt on the remote workspace
         let workspace_path = std::env::current_dir()?.display().to_string();
 
-        if let Ok(Some(instance)) = state_manager
-            .get_instance_by_workspace(&workspace_path)
-            .await
-        {
+        if let Ok(Some(instance)) = state_manager.get_instance_by_workspace(&workspace_path).await {
             if let Ok(Some((workspace_name, _, _, _))) =
                 state_manager.get_sync_session(&instance.id).await
             {

@@ -39,11 +39,7 @@ pub struct Profile {
     pub ini_overrides: Vec<IniOverride>,
 
     /// Multi-project config (e.g., glean-apps-canary).
-    #[serde(
-        rename = "glean-apps-canary",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(rename = "glean-apps-canary", default, skip_serializing_if = "Option::is_none")]
     pub multi_project: Option<MultiProjectConfig>,
 }
 

@@ -37,12 +37,8 @@ pub const PYTHON_IMAGES: &[&str] =
     &["us-central1-docker.pkg.dev/scio-engineering/glean-images/devdock_python_base:latest"];
 
 /// Rich logging images (Grafana stack)
-pub const RICH_LOGGING_IMAGES: &[&str] = &[
-    "grafana/loki:latest",
-    "grafana/alloy:latest",
-    "minio/minio",
-    "grafana/grafana:latest",
-];
+pub const RICH_LOGGING_IMAGES: &[&str] =
+    &["grafana/loki:latest", "grafana/alloy:latest", "minio/minio", "grafana/grafana:latest"];
 
 /// Check if Docker daemon is running
 pub fn check_docker() -> Result<()> {
@@ -74,9 +70,7 @@ pub fn setup_networks() -> Result<()> {
 
     for network in DEVDOCK_NETWORKS {
         // Check if network exists
-        let check = Command::new("docker")
-            .args(["network", "inspect", network])
-            .output()?;
+        let check = Command::new("docker").args(["network", "inspect", network]).output()?;
 
         if !check.status.success() {
             info!("Creating Docker network: {}", network);
@@ -102,14 +96,7 @@ pub fn setup_networks() -> Result<()> {
 /// Get all devdock container names
 pub fn get_devdock_containers() -> Result<Vec<String>> {
     let output = Command::new("docker")
-        .args([
-            "ps",
-            "-a",
-            "--filter",
-            "name=devdock-",
-            "--format",
-            "{{.Names}}",
-        ])
+        .args(["ps", "-a", "--filter", "name=devdock-", "--format", "{{.Names}}"])
         .output()
         .context("Failed to list containers")?;
 
@@ -170,11 +157,7 @@ pub fn exec_container(container: &str, command: &str) -> Result<()> {
     };
 
     // Determine shell/command based on container
-    let shell = if container == "sql" || container == "mysql" {
-        "mysql"
-    } else {
-        "sh"
-    };
+    let shell = if container == "sql" || container == "mysql" { "mysql" } else { "sh" };
 
     let cmd = if command.is_empty() { shell } else { command };
 
@@ -182,10 +165,7 @@ pub fn exec_container(container: &str, command: &str) -> Result<()> {
     let status = Command::new("docker")
         .args(["exec", "-it", actual_container, cmd])
         .status()
-        .context(format!(
-            "Failed to exec into container {}",
-            actual_container
-        ))?;
+        .context(format!("Failed to exec into container {}", actual_container))?;
 
     if !status.success() {
         anyhow::bail!(
@@ -214,11 +194,7 @@ pub fn pull_images(images: &[&str], save_cache: bool) -> Result<()> {
             .context(format!("Failed to pull image {}", image))?;
 
         if !output.status.success() {
-            warn!(
-                "Failed to pull {}: {}",
-                image,
-                String::from_utf8_lossy(&output.stderr)
-            );
+            warn!("Failed to pull {}: {}", image, String::from_utf8_lossy(&output.stderr));
             continue;
         }
 
@@ -231,10 +207,7 @@ pub fn pull_images(images: &[&str], save_cache: bool) -> Result<()> {
 
             // docker save | zstd > cache_file
             let save = Command::new("sh")
-                .args([
-                    "-c",
-                    &format!("docker save '{}' | zstd -f -o '{}'", image, cache_file),
-                ])
+                .args(["-c", &format!("docker save '{}' | zstd -f -o '{}'", image, cache_file)])
                 .output();
 
             if let Err(e) = save {
@@ -271,14 +244,7 @@ pub fn load_cached_image(image: &str) -> Result<bool> {
 ///       -> "devdock_python_base"
 fn extract_image_name(image: &str) -> String {
     // Split by '/' and get the last part, then split by ':' and get the first part
-    image
-        .rsplit('/')
-        .next()
-        .unwrap_or(image)
-        .split(':')
-        .next()
-        .unwrap_or(image)
-        .to_string()
+    image.rsplit('/').next().unwrap_or(image).split(':').next().unwrap_or(image).to_string()
 }
 
 /// Cleanup ports that might be in use
@@ -286,9 +252,7 @@ pub fn cleanup_ports(ports: &[u16]) -> Result<usize> {
     let mut killed = 0;
 
     for port in ports {
-        let output = Command::new("lsof")
-            .args(["-i", &format!(":{}", port)])
-            .output();
+        let output = Command::new("lsof").args(["-i", &format!(":{}", port)]).output();
 
         if let Ok(out) = output {
             if out.status.success() {
@@ -298,9 +262,7 @@ pub fn cleanup_ports(ports: &[u16]) -> Result<usize> {
                     if let Some(pid_str) = line.split_whitespace().nth(1) {
                         if let Ok(pid) = pid_str.parse::<i32>() {
                             info!("Killing process {} on port {}", pid, port);
-                            let _ = Command::new("kill")
-                                .args(["-15", &pid.to_string()])
-                                .output();
+                            let _ = Command::new("kill").args(["-15", &pid.to_string()]).output();
                             killed += 1;
 
                             // Wait a bit then force kill if still running
@@ -330,9 +292,7 @@ pub fn docker_login_gcr() -> Result<()> {
         anyhow::bail!("Failed to get gcloud access token");
     }
 
-    let token = String::from_utf8_lossy(&token_output.stdout)
-        .trim()
-        .to_string();
+    let token = String::from_utf8_lossy(&token_output.stdout).trim().to_string();
 
     // Login to artifact registry
     let login = Command::new("docker")

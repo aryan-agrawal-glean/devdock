@@ -26,15 +26,9 @@ impl OperationLogger {
         let timestamp = Local::now().format("%Y%m%d-%H%M%S");
         let log_path = log_dir.join(format!("devdock-remote-{}.log", timestamp));
 
-        let file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&log_path)?;
+        let file = OpenOptions::new().create(true).append(true).open(&log_path)?;
 
-        let logger = Self {
-            file: Arc::new(Mutex::new(file)),
-            log_path,
-        };
+        let logger = Self { file: Arc::new(Mutex::new(file)), log_path };
 
         logger.log_line("=== DevDock Remote Session Started ===")?;
         logger.log_line(&format!("DevDock ID: {}", devdock_id))?;
@@ -91,9 +85,6 @@ impl OperationLogger {
 
 impl Clone for OperationLogger {
     fn clone(&self) -> Self {
-        Self {
-            file: Arc::clone(&self.file),
-            log_path: self.log_path.clone(),
-        }
+        Self { file: Arc::clone(&self.file), log_path: self.log_path.clone() }
     }
 }

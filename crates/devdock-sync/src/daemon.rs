@@ -55,11 +55,7 @@ impl SyncDaemon {
         // Perform initial sync
         info!(
             "Performing initial sync (mode: {})",
-            if self.full_mode {
-                "full"
-            } else {
-                "git-tracked"
-            }
+            if self.full_mode { "full" } else { "git-tracked" }
         );
         eprintln!("[SYNC] About to call initial_sync()");
         self.initial_sync()?;
@@ -93,10 +89,7 @@ impl SyncDaemon {
             }
         }
 
-        eprintln!(
-            "[SYNC] File watcher setup complete, watching {} directories",
-            watched_count
-        );
+        eprintln!("[SYNC] File watcher setup complete, watching {} directories", watched_count);
 
         // Main event loop
         info!("File sync daemon running, watching for changes...");
@@ -137,10 +130,7 @@ impl SyncDaemon {
                         // Filter files based on mode
                         let files_to_sync = self.filter_files(&files)?;
 
-                        eprintln!(
-                            "[SYNC] After filtering: {} files to sync",
-                            files_to_sync.len()
-                        );
+                        eprintln!("[SYNC] After filtering: {} files to sync", files_to_sync.len());
 
                         if !files_to_sync.is_empty() {
                             for file in files_to_sync.iter().take(5) {
@@ -242,11 +232,7 @@ impl SyncDaemon {
                             return Err(e);
                         }
                     }
-                    eprintln!(
-                        "[SYNC] After batch {}/{} sync",
-                        batch_num + 1,
-                        total_batches
-                    );
+                    eprintln!("[SYNC] After batch {}/{} sync", batch_num + 1, total_batches);
                 }
                 info!("Modified files sync completed successfully");
                 eprintln!("[SYNC] All batches completed!");
@@ -270,9 +256,7 @@ impl SyncDaemon {
         for file in files {
             // Convert absolute path to relative path
             let relative_path = if file.starts_with(&self.repo_path) {
-                file.strip_prefix(&self.repo_path)
-                    .unwrap_or(file.as_path())
-                    .to_path_buf()
+                file.strip_prefix(&self.repo_path).unwrap_or(file.as_path()).to_path_buf()
             } else {
                 file.clone()
             };
@@ -338,9 +322,7 @@ impl SyncDaemon {
 
     /// Get PID directory.
     fn get_pid_dir() -> PathBuf {
-        dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("/tmp"))
-            .join(".devdock/sync")
+        dirs::home_dir().unwrap_or_else(|| PathBuf::from("/tmp")).join(".devdock/sync")
     }
 }
 
@@ -504,11 +486,8 @@ pub fn cleanup_sync_files(devdock_id: &str) -> Result<()> {
             #[cfg(windows)]
             {
                 use std::process::Command;
-                let _ = Command::new("taskkill")
-                    .arg("/PID")
-                    .arg(pid.to_string())
-                    .arg("/F")
-                    .output();
+                let _ =
+                    Command::new("taskkill").arg("/PID").arg(pid.to_string()).arg("/F").output();
             }
         }
     }

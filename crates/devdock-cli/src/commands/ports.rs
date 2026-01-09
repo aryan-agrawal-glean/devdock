@@ -61,20 +61,11 @@ fn print_port_table(mappings: &[(String, String, u16, u16, Option<u32>)]) {
     table.set_format(*format::consts::FORMAT_BOX_CHARS);
 
     // Add header row
-    table.add_row(row![
-        "Service",
-        "Type",
-        "Local Port",
-        "Remote Port",
-        "Status"
-    ]);
+    table.add_row(row!["Service", "Type", "Local Port", "Remote Port", "Status"]);
 
     for (service_name, port_type, local_port, remote_port, pid) in mappings {
-        let status = if pid.is_some() {
-            "Active".green().to_string()
-        } else {
-            "Inactive".red().to_string()
-        };
+        let status =
+            if pid.is_some() { "Active".green().to_string() } else { "Inactive".red().to_string() };
 
         table.add_row(row![
             service_name,
@@ -116,9 +107,7 @@ pub async fn forward(all: bool, service: Option<&str>, custom: Option<&str>) -> 
     } else if let Some(custom_mapping) = custom {
         forward_custom_port(&state, &devdock_id, &workspace_name, custom_mapping).await
     } else {
-        Err(anyhow!(
-            "Please specify --all, --service <name>, or --custom <local:remote>"
-        ))
+        Err(anyhow!("Please specify --all, --service <name>, or --custom <local:remote>"))
     }
 }
 
@@ -177,10 +166,7 @@ async fn forward_all_ports(
     workspace_name: &str,
     port_base: u16,
 ) -> Result<()> {
-    println!(
-        "{}",
-        "Setting up port forwarding for all services...".cyan()
-    );
+    println!("{}", "Setting up port forwarding for all services...".cyan());
 
     let services = get_service_ports();
     let mut success_count = 0;
@@ -214,12 +200,7 @@ async fn forward_all_ports(
     }
 
     println!();
-    println!(
-        "{} {}/{} port forwards established",
-        "✅".green(),
-        success_count,
-        services.len()
-    );
+    println!("{} {}/{} port forwards established", "✅".green(), success_count, services.len());
     println!("View mappings: {}", "devdock ports list".cyan());
 
     Ok(())
@@ -235,10 +216,8 @@ async fn forward_service_port(
 ) -> Result<()> {
     let services = get_service_ports();
 
-    let (_, local_offset, remote_port) = services
-        .iter()
-        .find(|(name, _, _)| *name == service_name)
-        .ok_or_else(|| {
+    let (_, local_offset, remote_port) =
+        services.iter().find(|(name, _, _)| *name == service_name).ok_or_else(|| {
             anyhow!(
                 "Unknown service: {}. Available: tilt, qe, fe, opensearch, mysql, redis",
                 service_name
@@ -248,22 +227,10 @@ async fn forward_service_port(
     let local_port = port_base + local_offset;
 
     println!("{}", format!("Forwarding {} port...", service_name).cyan());
-    start_port_forward(
-        state,
-        devdock_id,
-        workspace_name,
-        service_name,
-        local_port,
-        *remote_port,
-    )
-    .await?;
+    start_port_forward(state, devdock_id, workspace_name, service_name, local_port, *remote_port)
+        .await?;
 
-    println!(
-        "  ✅ {}: localhost:{} → remote:{}",
-        service_name.cyan(),
-        local_port,
-        remote_port
-    );
+    println!("  ✅ {}: localhost:{} → remote:{}", service_name.cyan(), local_port, remote_port);
     println!();
     println!("View mappings: {}", "devdock ports list".cyan());
 
@@ -279,33 +246,19 @@ async fn forward_custom_port(
 ) -> Result<()> {
     let parts: Vec<&str> = mapping.split(':').collect();
     if parts.len() != 2 {
-        return Err(anyhow!(
-            "Invalid port mapping format. Use: local:remote (e.g., 8888:8888)"
-        ));
+        return Err(anyhow!("Invalid port mapping format. Use: local:remote (e.g., 8888:8888)"));
     }
 
-    let local_port: u16 = parts[0]
-        .parse()
-        .map_err(|_| anyhow!("Invalid local port: {}", parts[0]))?;
-    let remote_port: u16 = parts[1]
-        .parse()
-        .map_err(|_| anyhow!("Invalid remote port: {}", parts[1]))?;
+    let local_port: u16 =
+        parts[0].parse().map_err(|_| anyhow!("Invalid local port: {}", parts[0]))?;
+    let remote_port: u16 =
+        parts[1].parse().map_err(|_| anyhow!("Invalid remote port: {}", parts[1]))?;
 
     println!("{}", "Forwarding custom port...".cyan());
-    start_port_forward(
-        state,
-        devdock_id,
-        workspace_name,
-        "custom",
-        local_port,
-        remote_port,
-    )
-    .await?;
+    start_port_forward(state, devdock_id, workspace_name, "custom", local_port, remote_port)
+        .await?;
 
-    println!(
-        "  ✅ Custom: localhost:{} → remote:{}",
-        local_port, remote_port
-    );
+    println!("  ✅ Custom: localhost:{} → remote:{}", local_port, remote_port);
     println!();
     println!("View mappings: {}", "devdock ports list".cyan());
 
@@ -350,14 +303,7 @@ async fn start_port_forward(
 
     // Save port mapping to state
     state
-        .save_port_mapping(
-            devdock_id,
-            service_name,
-            "service",
-            local_port,
-            remote_port,
-            Some(pid),
-        )
+        .save_port_mapping(devdock_id, service_name, "service", local_port, remote_port, Some(pid))
         .await?;
 
     Ok(())
@@ -405,10 +351,7 @@ async fn stop_service_port_forward(
         .find(|(name, _, _, _, _)| name == service_name)
         .ok_or_else(|| anyhow!("No port forward found for service: {}", service_name))?;
 
-    println!(
-        "{}",
-        format!("Stopping {} port forward...", service_name).cyan()
-    );
+    println!("{}", format!("Stopping {} port forward...", service_name).cyan());
 
     if let Some(pid) = mapping.4 {
         if kill_process(pid) {

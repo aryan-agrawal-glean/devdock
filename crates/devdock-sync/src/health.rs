@@ -61,10 +61,7 @@ impl HealthMonitor {
     pub fn should_restart(&self) -> bool {
         // Restart if too many consecutive failures
         if self.failed_syncs >= self.max_failures {
-            warn!(
-                "Too many consecutive failures ({}), should restart",
-                self.failed_syncs
-            );
+            warn!("Too many consecutive failures ({}), should restart", self.failed_syncs);
             return true;
         }
 

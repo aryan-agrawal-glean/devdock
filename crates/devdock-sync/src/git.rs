@@ -88,14 +88,8 @@ pub fn list_git_tracked_files(repo_path: &Path) -> Result<Vec<PathBuf>> {
         }
     }
 
-    debug!(
-        "Found {} git-tracked files in monitored directories",
-        files.len()
-    );
-    eprintln!(
-        "[SYNC-GIT] Found {} git-tracked files to sync (after filtering)",
-        files.len()
-    );
+    debug!("Found {} git-tracked files in monitored directories", files.len());
+    eprintln!("[SYNC-GIT] Found {} git-tracked files to sync (after filtering)", files.len());
     Ok(files)
 }
 
@@ -105,11 +99,8 @@ pub fn list_all_files(repo_path: &Path) -> Result<Vec<PathBuf>> {
 
     let mut files = Vec::new();
 
-    let walker = WalkBuilder::new(repo_path)
-        .hidden(false)
-        .git_ignore(true)
-        .git_exclude(true)
-        .build();
+    let walker =
+        WalkBuilder::new(repo_path).hidden(false).git_ignore(true).git_exclude(true).build();
 
     for entry in walker.flatten() {
         if entry.path().is_file() {

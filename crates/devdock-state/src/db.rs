@@ -232,9 +232,8 @@ impl StateManager {
 
     /// Update instance status.
     pub async fn update_status(&self, id: &str, status: InstanceStatus) -> Result<()> {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)?
-            .as_secs() as i64;
+        let now =
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs() as i64;
 
         sqlx::query("UPDATE instances SET status = ?, updated_at = ? WHERE id = ?")
             .bind(status.as_str())
@@ -248,10 +247,7 @@ impl StateManager {
 
     /// Delete an instance.
     pub async fn delete_instance(&self, id: &str) -> Result<()> {
-        sqlx::query("DELETE FROM instances WHERE id = ?")
-            .bind(id)
-            .execute(&self.pool)
-            .await?;
+        sqlx::query("DELETE FROM instances WHERE id = ?").bind(id).execute(&self.pool).await?;
 
         Ok(())
     }
@@ -381,9 +377,8 @@ impl StateManager {
         full_mode: bool,
         status: &str,
     ) -> Result<()> {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)?
-            .as_secs() as i64;
+        let now =
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs() as i64;
 
         sqlx::query(
             r#"

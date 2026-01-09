@@ -43,9 +43,7 @@ pub struct StatsCollector {
 
 impl StatsCollector {
     pub fn new() -> Self {
-        StatsCollector {
-            tilt_client: TiltClient::new(),
-        }
+        StatsCollector { tilt_client: TiltClient::new() }
     }
 
     /// Collect host system statistics.
@@ -125,11 +123,7 @@ impl StatsCollector {
             let page_size = 4096u64;
             let total = (pages_free + pages_active + pages_inactive + pages_wired) * page_size;
             let used = (pages_active + pages_wired) * page_size;
-            let percent = if total > 0 {
-                (used as f64 / total as f64) * 100.0
-            } else {
-                0.0
-            };
+            let percent = if total > 0 { (used as f64 / total as f64) * 100.0 } else { 0.0 };
 
             (0.0, used, total, percent)
         } else {
@@ -160,11 +154,7 @@ impl StatsCollector {
             }
 
             let used = total.saturating_sub(available);
-            let percent = if total > 0 {
-                (used as f64 / total as f64) * 100.0
-            } else {
-                0.0
-            };
+            let percent = if total > 0 { (used as f64 / total as f64) * 100.0 } else { 0.0 };
 
             (0.0, used, total, percent)
         } else {
@@ -206,11 +196,8 @@ impl StatsCollector {
                         #[allow(clippy::unnecessary_cast)]
                         let free = (stat.f_bfree as u64) * (stat.f_frsize as u64);
                         let used = total - free;
-                        let percent = if total > 0 {
-                            (used as f64 / total as f64) * 100.0
-                        } else {
-                            0.0
-                        };
+                        let percent =
+                            if total > 0 { (used as f64 / total as f64) * 100.0 } else { 0.0 };
                         return (used, total, percent);
                     }
                 }

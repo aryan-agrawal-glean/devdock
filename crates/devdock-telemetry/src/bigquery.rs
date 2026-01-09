@@ -116,12 +116,7 @@ impl BigQueryEmitter {
             .build()
             .map_err(|e| TelemetryError::BigQuery(e.to_string()))?;
 
-        Ok(BigQueryEmitter {
-            config,
-            client,
-            tables,
-            access_token: Arc::new(RwLock::new(None)),
-        })
+        Ok(BigQueryEmitter { config, client, tables, access_token: Arc::new(RwLock::new(None)) })
     }
 
     /// Get or refresh the access token.
@@ -147,9 +142,7 @@ impl BigQueryEmitter {
         } else if let Some(key_path) = &self.config.service_account_key {
             self.fetch_sa_token(key_path).await
         } else {
-            Err(TelemetryError::Config(
-                "No authentication method configured".to_string(),
-            ))
+            Err(TelemetryError::Config("No authentication method configured".to_string()))
         }
     }
 
@@ -162,19 +155,14 @@ impl BigQueryEmitter {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(TelemetryError::BigQuery(format!(
-                "gcloud auth failed: {}",
-                stderr
-            )));
+            return Err(TelemetryError::BigQuery(format!("gcloud auth failed: {}", stderr)));
         }
 
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
     }
 
     async fn fetch_sa_token(&self, _key_path: &str) -> Result<String> {
-        Err(TelemetryError::Config(
-            "Service account key auth not yet implemented".to_string(),
-        ))
+        Err(TelemetryError::Config("Service account key auth not yet implemented".to_string()))
     }
 
     async fn insert_rows<T: Serialize + Send + Sync>(
@@ -189,10 +177,7 @@ impl BigQueryEmitter {
         let token = self.get_access_token().await?;
         let parts: Vec<&str> = table_id.split('.').collect();
         if parts.len() != 3 {
-            return Err(TelemetryError::Config(format!(
-                "Invalid table ID format: {}",
-                table_id
-            )));
+            return Err(TelemetryError::Config(format!("Invalid table ID format: {}", table_id)));
         }
 
         let url = format!(
@@ -210,13 +195,7 @@ impl BigQueryEmitter {
 
         debug!("Inserting {} rows into {}", rows.len(), table_id);
 
-        let response = self
-            .client
-            .post(&url)
-            .bearer_auth(&token)
-            .json(&request)
-            .send()
-            .await?;
+        let response = self.client.post(&url).bearer_auth(&token).json(&request).send().await?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -232,19 +211,12 @@ impl BigQueryEmitter {
         if let Some(errors) = insert_response.insert_errors {
             let error_count = errors.len();
             for err in errors.iter().take(3) {
-                warn!(
-                    "BigQuery insert error at row {}: {:?}",
-                    err.index, err.errors
-                );
+                warn!("BigQuery insert error at row {}: {:?}", err.index, err.errors);
             }
             return Ok(rows.len() - error_count);
         }
 
-        info!(
-            "Successfully inserted {} rows into {}",
-            rows.len(),
-            table_id
-        );
+        info!("Successfully inserted {} rows into {}", rows.len(), table_id);
         Ok(rows.len())
     }
 }
@@ -271,10 +243,7 @@ impl TelemetryEmitter for BigQueryEmitter {
         let mut errors = Vec::new();
 
         if let Some(session) = &snapshot.session {
-            match self
-                .insert_rows(&self.tables.session_stats, &[session])
-                .await
-            {
+            match self.insert_rows(&self.tables.session_stats, &[session]).await {
                 Ok(n) => success_count += n,
                 Err(e) => {
                     failure_count += 1;
@@ -284,10 +253,7 @@ impl TelemetryEmitter for BigQueryEmitter {
         }
 
         if !snapshot.resource_statuses.is_empty() {
-            match self
-                .insert_rows(&self.tables.resource_stats, &snapshot.resource_statuses)
-                .await
-            {
+            match self.insert_rows(&self.tables.resource_stats, &snapshot.resource_statuses).await {
                 Ok(n) => success_count += n,
                 Err(e) => {
                     failure_count += snapshot.resource_statuses.len();
@@ -297,10 +263,7 @@ impl TelemetryEmitter for BigQueryEmitter {
         }
 
         if !snapshot.resource_startups.is_empty() {
-            match self
-                .insert_rows(&self.tables.startup_stats, &snapshot.resource_startups)
-                .await
-            {
+            match self.insert_rows(&self.tables.startup_stats, &snapshot.resource_startups).await {
                 Ok(n) => success_count += n,
                 Err(e) => {
                     failure_count += snapshot.resource_startups.len();
@@ -320,10 +283,7 @@ impl TelemetryEmitter for BigQueryEmitter {
         }
 
         if !snapshot.docker.is_empty() {
-            match self
-                .insert_rows(&self.tables.docker_stats, &snapshot.docker)
-                .await
-            {
+            match self.insert_rows(&self.tables.docker_stats, &snapshot.docker).await {
                 Ok(n) => success_count += n,
                 Err(e) => {
                     failure_count += snapshot.docker.len();
@@ -333,10 +293,7 @@ impl TelemetryEmitter for BigQueryEmitter {
         }
 
         if !snapshot.failures.is_empty() {
-            match self
-                .insert_rows(&self.tables.failure_logs, &snapshot.failures)
-                .await
-            {
+            match self.insert_rows(&self.tables.failure_logs, &snapshot.failures).await {
                 Ok(n) => success_count += n,
                 Err(e) => {
                     failure_count += snapshot.failures.len();

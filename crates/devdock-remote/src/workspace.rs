@@ -302,10 +302,7 @@ where
 
     if verbose {
         println!("  ✓ DevDock command started in background");
-        println!(
-            "  To view logs: coder ssh {} -- tmux attach -t devdock",
-            workspace
-        );
+        println!("  To view logs: coder ssh {} -- tmux attach -t devdock", workspace);
     }
 
     // 3. Verify DevDock is actually running (not failed immediately)
@@ -442,10 +439,7 @@ where
         // Manual mode: only forward Tilt UI
         info!("Forwarding Tilt UI only (use --auto-forward for all services)");
         let tilt_port = offset + 10350;
-        println!(
-            "  Starting port forward: localhost:{} -> remote:10350",
-            tilt_port
-        );
+        println!("  Starting port forward: localhost:{} -> remote:10350", tilt_port);
         let _child = coder::port_forward_single(workspace, tilt_port, 10350)?;
         // Keep the child process alive - it will be cleaned up when the program exits
         std::mem::forget(_child);
@@ -498,10 +492,7 @@ pub fn wait_for_tilt_ui(port: u16, timeout_secs: u64) -> Result<()> {
         }
 
         if start.elapsed() > timeout {
-            eprintln!(
-                "\n  ❌ Timeout: Tilt UI not ready after {} seconds",
-                timeout_secs
-            );
+            eprintln!("\n  ❌ Timeout: Tilt UI not ready after {} seconds", timeout_secs);
             eprintln!("  Debug steps:");
             eprintln!("    1. SSH into workspace: coder ssh <workspace-name>");
             eprintln!("    2. Check if DevDock started: ps aux | grep devdock");

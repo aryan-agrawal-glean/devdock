@@ -58,11 +58,7 @@ pub fn create_report_archive(
 
     zip.finish()?;
 
-    info!(
-        "Created archive: {:?} ({} bytes)",
-        archive_path,
-        fs::metadata(&archive_path)?.len()
-    );
+    info!("Created archive: {:?} ({} bytes)", archive_path, fs::metadata(&archive_path)?.len());
 
     Ok(archive_path)
 }

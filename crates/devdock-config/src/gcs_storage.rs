@@ -23,10 +23,7 @@ pub struct GcsStorage {
 impl GcsStorage {
     /// Create a new GCS storage client
     pub fn new(project: &str, cache_dir: PathBuf) -> Self {
-        Self {
-            project: project.to_string(),
-            cache_dir,
-        }
+        Self { project: project.to_string(), cache_dir }
     }
 
     /// Create with default cache directory ($DEVDOCK_ROOT/cache or temp)
@@ -190,18 +187,12 @@ impl DynamicIniLoader {
     /// Create a new dynamic INI loader
     pub fn new(project: &str, devdock_root: PathBuf) -> Result<Self> {
         let storage = GcsStorage::with_default_cache(project)?;
-        Ok(Self {
-            storage,
-            devdock_root,
-        })
+        Ok(Self { storage, devdock_root })
     }
 
     /// Create with custom storage
     pub fn with_storage(storage: GcsStorage, devdock_root: PathBuf) -> Self {
-        Self {
-            storage,
-            devdock_root,
-        }
+        Self { storage, devdock_root }
     }
 
     /// Get the path to the local default.ini
@@ -324,14 +315,10 @@ impl SqlDumpFetcher {
         db_names: &[String],
         target_dir: &Path,
     ) -> Result<Vec<PathBuf>> {
-        let gcs_files: Vec<String> = db_names
-            .iter()
-            .map(|db| format!("{}/{}.sql", self.storage.sql_bucket(), db))
-            .collect();
+        let gcs_files: Vec<String> =
+            db_names.iter().map(|db| format!("{}/{}.sql", self.storage.sql_bucket(), db)).collect();
 
-        self.storage
-            .fetch_files_parallel(&gcs_files, target_dir)
-            .await
+        self.storage.fetch_files_parallel(&gcs_files, target_dir).await
     }
 
     /// Check if a SQL dump exists in GCS
@@ -345,9 +332,7 @@ impl SqlDumpFetcher {
 fn uuid_simple() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    let duration = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
+    let duration = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
 
     format!("{:x}{:x}", duration.as_secs(), duration.subsec_nanos())
 }

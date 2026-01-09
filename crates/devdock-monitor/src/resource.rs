@@ -102,15 +102,10 @@ impl TiltResource {
             .map(|l| {
                 if let Some(obj) = l.as_object() {
                     // Object format: keys are the label names
-                    obj.keys()
-                        .map(|k| ResourceLabel::from(k.as_str()))
-                        .collect()
+                    obj.keys().map(|k| ResourceLabel::from(k.as_str())).collect()
                 } else if let Some(arr) = l.as_array() {
                     // Array format: values are the label names
-                    arr.iter()
-                        .filter_map(|v| v.as_str())
-                        .map(ResourceLabel::from)
-                        .collect()
+                    arr.iter().filter_map(|v| v.as_str()).map(ResourceLabel::from).collect()
                 } else {
                     Vec::new()
                 }
@@ -119,21 +114,13 @@ impl TiltResource {
 
         let resource_type = Self::determine_resource_type(&labels);
 
-        let is_disabled = status
-            .get("disableStatus")
-            .and_then(|d| d.get("state"))
-            .and_then(|s| s.as_str())
-            == Some("Disabled");
+        let is_disabled =
+            status.get("disableStatus").and_then(|d| d.get("state")).and_then(|s| s.as_str())
+                == Some("Disabled");
 
-        let runtime_status = status
-            .get("runtimeStatus")
-            .and_then(|s| s.as_str())
-            .map(String::from);
+        let runtime_status = status.get("runtimeStatus").and_then(|s| s.as_str()).map(String::from);
 
-        let update_status = status
-            .get("updateStatus")
-            .and_then(|s| s.as_str())
-            .map(String::from);
+        let update_status = status.get("updateStatus").and_then(|s| s.as_str()).map(String::from);
 
         let compose_health = status
             .get("composeResourceInfo")
@@ -201,8 +188,7 @@ impl TiltResource {
             .get("conditions")
             .and_then(|c| c.as_array())
             .and_then(|arr| {
-                arr.iter()
-                    .find(|cond| cond.get("type").and_then(|t| t.as_str()) == Some("Ready"))
+                arr.iter().find(|cond| cond.get("type").and_then(|t| t.as_str()) == Some("Ready"))
             })
             .and_then(|cond| cond.get("status"))
             .and_then(|s| s.as_str());
@@ -232,10 +218,8 @@ impl TiltResource {
                 }
             }
             Some("local") => {
-                if matches!(
-                    runtime_status.as_deref(),
-                    Some("ok") | Some("not_applicable")
-                ) && ready_condition == Some("True")
+                if matches!(runtime_status.as_deref(), Some("ok") | Some("not_applicable"))
+                    && ready_condition == Some("True")
                 {
                     return ResourceStatus::Healthy;
                 }

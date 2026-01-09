@@ -187,15 +187,9 @@ impl ConfigGenerator {
         println!("⏩ Writing config files...");
         let step_start = std::time::Instant::now();
         tokio::try_join!(
-            tokio::fs::write(
-                self.workspace_root.join("devdock/devdock.ini"),
-                &devdock_ini
-            ),
+            tokio::fs::write(self.workspace_root.join("devdock/devdock.ini"), &devdock_ini),
             tokio::fs::write(self.workspace_root.join("config/devdock.ini"), &devdock_ini),
-            tokio::fs::write(
-                self.workspace_root.join("config/run_local.ini"),
-                &devdock_ini
-            ),
+            tokio::fs::write(self.workspace_root.join("config/run_local.ini"), &devdock_ini),
             tokio::fs::write(runtime_gen.join("temp_profile.yaml"), &temp_profile),
         )?;
 
@@ -265,10 +259,7 @@ impl ConfigGenerator {
 
             multi_profile.infra.insert(
                 "sql".to_string(),
-                InfraConfig {
-                    deployment_type: DeploymentType::Remote,
-                    config: HashMap::new(),
-                },
+                InfraConfig { deployment_type: DeploymentType::Remote, config: HashMap::new() },
             );
 
             // Rebuild graph with SQL included
@@ -331,9 +322,7 @@ impl ConfigGenerator {
         for node in graph.nodes() {
             // Inject USE_DEVDOCK_INI env var for all services
             let mut node_config = node.config.clone();
-            node_config
-                .env
-                .insert("USE_DEVDOCK_INI".to_string(), "true".to_string());
+            node_config.env.insert("USE_DEVDOCK_INI".to_string(), "true".to_string());
 
             generator.apply_service(&node.name, &node_config);
             generator.apply_dependency(node);
@@ -502,21 +491,12 @@ impl ConfigGenerator {
             if node.component_type == crate::dependency_graph::ComponentType::Service {
                 let profile_service = multi_profile.services.get(&node.name);
 
-                let service_type = if node.config.is_local() {
-                    "local".to_string()
-                } else {
-                    "remote".to_string()
-                };
+                let service_type =
+                    if node.config.is_local() { "local".to_string() } else { "remote".to_string() };
 
                 // Get env from profile and add USE_DEVDOCK_INI
                 let mut env = profile_service
-                    .and_then(|s| {
-                        if s.env.is_empty() {
-                            None
-                        } else {
-                            Some(s.env.clone())
-                        }
-                    })
+                    .and_then(|s| if s.env.is_empty() { None } else { Some(s.env.clone()) })
                     .unwrap_or_default();
 
                 env.insert("USE_DEVDOCK_INI".to_string(), "true".to_string());
@@ -534,9 +514,7 @@ impl ConfigGenerator {
                     })
                 });
 
-                let extra = profile_service
-                    .map(|s| s.config.clone())
-                    .unwrap_or_default();
+                let extra = profile_service.map(|s| s.config.clone()).unwrap_or_default();
 
                 generator.add_service(
                     &node.name,
@@ -591,10 +569,7 @@ impl ConfigGenerator {
 
             infra.insert(
                 "sql".to_string(),
-                InfraProfileEntry {
-                    infra_type,
-                    extra: sql_config.config.clone(),
-                },
+                InfraProfileEntry { infra_type, extra: sql_config.config.clone() },
             );
         }
 
@@ -700,12 +675,7 @@ impl ConfigGenerator {
                 // Must have a bazel target
                 && n.config.bazel_target.is_some()
             })
-            .filter_map(|n| {
-                n.config
-                    .bazel_target
-                    .as_ref()
-                    .map(|t| (n.name.clone(), t.clone()))
-            })
+            .filter_map(|n| n.config.bazel_target.as_ref().map(|t| (n.name.clone(), t.clone())))
             .collect();
 
         if services_with_targets.is_empty() {
@@ -738,12 +708,7 @@ impl ConfigGenerator {
                 // Must have a bazel target
                 && n.config.bazel_target.is_some()
             })
-            .filter_map(|n| {
-                n.config
-                    .bazel_target
-                    .as_ref()
-                    .map(|t| (n.name.clone(), t.clone()))
-            })
+            .filter_map(|n| n.config.bazel_target.as_ref().map(|t| (n.name.clone(), t.clone())))
             .collect();
 
         if services_with_targets.is_empty() {
@@ -766,10 +731,8 @@ impl ConfigGenerator {
             // Helper to log to file
             let log = |msg: String| {
                 if let Some(ref path) = log_file {
-                    if let Ok(mut file) = std::fs::OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open(path)
+                    if let Ok(mut file) =
+                        std::fs::OpenOptions::new().create(true).append(true).open(path)
                     {
                         let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
                         let _ = writeln!(file, "[{}] {}", timestamp, msg);
@@ -777,10 +740,7 @@ impl ConfigGenerator {
                 }
             };
 
-            log(format!(
-                "Starting cquery for {} local service(s)",
-                service_count
-            ));
+            log(format!("Starting cquery for {} local service(s)", service_count));
 
             // Use silent engine to avoid console spam
             let engine = BazelQueryEngine::new_silent(workspace_root);

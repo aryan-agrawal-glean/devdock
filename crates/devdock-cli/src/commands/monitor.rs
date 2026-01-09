@@ -28,10 +28,7 @@ pub async fn execute(timeout: Option<u64>, interval: Option<u64>, no_notify: boo
     let monitor = StartupMonitor::new(config);
 
     match monitor.run().await? {
-        StartupResult::Success {
-            duration_secs,
-            resources,
-        } => {
+        StartupResult::Success { duration_secs, resources } => {
             output::success(&format!(
                 "All {} resources healthy in {}s",
                 resources.len(),
@@ -39,12 +36,7 @@ pub async fn execute(timeout: Option<u64>, interval: Option<u64>, no_notify: boo
             ));
             Ok(())
         }
-        StartupResult::Timeout {
-            duration_secs,
-            healthy,
-            pending,
-            failed,
-        } => {
+        StartupResult::Timeout { duration_secs, healthy, pending, failed } => {
             output::warn(&format!(
                 "Timeout after {}s: {} healthy, {} pending, {} failed",
                 duration_secs,
@@ -54,10 +46,7 @@ pub async fn execute(timeout: Option<u64>, interval: Option<u64>, no_notify: boo
             ));
             anyhow::bail!("Startup monitoring timed out")
         }
-        StartupResult::Failed {
-            duration_secs,
-            failed,
-        } => {
+        StartupResult::Failed { duration_secs, failed } => {
             output::warn(&format!(
                 "Failed after {}s: {} resource(s) in error state",
                 duration_secs,

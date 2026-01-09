@@ -4,154 +4,82 @@ on:
   push:
     tags:
       - 'v*'
-  workflow_dispatch:  # Allow manual trigger
 
-permissions:
-  contents: write
+env:
+  CARGO_TERM_COLOR: always
 
 jobs:
-  build-binaries:
-    name: Build ${{ matrix.platform }}
+  build:
+    name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
     strategy:
+      fail-fast: false
       matrix:
         include:
-          - os: macos-latest
-            platform: macos-arm64
-            target: aarch64-apple-darwin
-            binary_name: devdock
-            artifact_name: devdock-macos-arm64
-          
-          - os: ubuntu-latest
-            platform: linux-x86_64
-            target: x86_64-unknown-linux-gnu
-            binary_name: devdock
-            artifact_name: devdock-linux-x86_64
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            name: devdock-linux-x86_64
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            name: devdock-linux-arm64
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            name: devdock-macos-x86_64
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            name: devdock-macos-arm64
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Install dependencies (Linux)
-        if: runner.os == 'Linux'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross-compilation tools (Linux ARM64)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: |
           sudo apt-get update
-          sudo apt-get install -y pkg-config libssl-dev
+          sudo apt-get install -y gcc-aarch64-linux-gnu
 
-      - name: Install dependencies (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          brew install openssl@3
-          echo "OPENSSL_DIR=$(brew --prefix openssl@3)" >> $GITHUB_ENV
-          echo "OPENSSL_STATIC=1" >> $GITHUB_ENV
-
-      - name: Install Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: Swatinem/rust-cache@v2
         with:
-          toolchain: stable
-          target: ${{ matrix.target }}
+          key: ${{ matrix.target }}
 
-      - name: Build binary
+      - name: Build
         run: cargo build --release --target ${{ matrix.target }}
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
 
-      - name: Package binary
+      - name: Package
         run: |
-          mkdir -p artifacts
-          tar czf artifacts/${{ matrix.artifact_name }}.tar.gz -C target/${{ matrix.target }}/release ${{ matrix.binary_name }}
+          cd target/${{ matrix.target }}/release
+          tar czvf ../../../${{ matrix.name }}-${{ github.ref_name }}.tar.gz devdock
+          cd ../../..
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact_name }}
-          path: artifacts/${{ matrix.artifact_name }}.tar.gz
+          name: ${{ matrix.name }}
+          path: ${{ matrix.name }}-${{ github.ref_name }}.tar.gz
 
-  create-release:
-    name: Create GitHub Release
-    needs: build-binaries
+  release:
+    name: Create Release
+    needs: build
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
-    
+    permissions:
+      contents: write
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Extract version
-        id: version
-        run: |
-          # Extract version from tag (refs/tags/v0.1.0 -> v0.1.0)
-          VERSION="${GITHUB_REF#refs/tags/}"
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "Version: $VERSION"
-
-      - name: Download all artifacts
+      - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
 
-      - name: Prepare release assets
-        run: |
-          mkdir -p release
-          cd artifacts
-          
-          # Extract and rename each artifact
-          for dir in */; do
-            cd "$dir"
-            tar xzf *.tar.gz
-            platform=$(basename "$dir")
-            mv devdock "../../release/${platform}-${{ steps.version.outputs.version }}"
-            cd ..
-          done
-          
-          # Generate checksums
-          cd ../release
-          shasum -a 256 * > checksums.txt
-          
-          # List files for debugging
-          ls -lh
-
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
-          files: release/*
-          generate_release_notes: true
           draft: false
-          prerelease: false
-          body: |
-            ## DevDock ${{ github.ref_name }}
-            
-            🎉 New release of DevDock!
-            
-            ### ⚡ Quick Install
-            
-            #### macOS (Apple Silicon - M1/M2/M3)
-            ```bash
-            curl -L https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/devdock-macos-arm64-${{ github.ref_name }} -o devdock
-            chmod +x devdock && sudo mv devdock /usr/local/bin/
-            ```
-            
-            #### Linux (x86_64)
-            ```bash
-            curl -L https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/devdock-linux-x86_64-${{ github.ref_name }} -o devdock
-            chmod +x devdock && sudo mv devdock /usr/local/bin/
-            ```
-            
-            ### Verify Installation
-            ```bash
-            devdock --version
-            ```
-            
-            ### 📚 Documentation
-            
-            See [README](https://github.com/${{ github.repository }}) for full documentation.
-            
-            ### 🔒 Checksums
-            
-            See `checksums.txt` for SHA256 verification.
-            
-            ---
-            
-            **Note:** Intel Mac support (x86_64) has been discontinued as macOS-13 runners are retired. Apple Silicon Macs can run x86_64 binaries via Rosetta 2 if needed, but native ARM64 is recommended.
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
+          generate_release_notes: true
+          files: artifacts/**/*.tar.gz

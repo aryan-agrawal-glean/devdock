@@ -53,11 +53,7 @@ pub async fn execute(running_only: bool) -> Result<()> {
         };
 
         // Display mode
-        let mode = if instance.mode == "remote" {
-            "Remote"
-        } else {
-            "Local"
-        };
+        let mode = if instance.mode == "remote" { "Remote" } else { "Local" };
 
         // For remote instances, show workspace_name if available, otherwise show workspace_path
         // For local instances, always show workspace_path
@@ -71,10 +67,7 @@ pub async fn execute(running_only: bool) -> Result<()> {
             } else {
                 // Fallback to path if workspace_name is missing
                 if instance.workspace_path.len() > 38 {
-                    format!(
-                        "...{}",
-                        &instance.workspace_path[instance.workspace_path.len() - 35..]
-                    )
+                    format!("...{}", &instance.workspace_path[instance.workspace_path.len() - 35..])
                 } else {
                     instance.workspace_path.clone()
                 }
@@ -82,10 +75,7 @@ pub async fn execute(running_only: bool) -> Result<()> {
         } else {
             // Local instance - show workspace path
             if instance.workspace_path.len() > 38 {
-                format!(
-                    "...{}",
-                    &instance.workspace_path[instance.workspace_path.len() - 35..]
-                )
+                format!("...{}", &instance.workspace_path[instance.workspace_path.len() - 35..])
             } else {
                 instance.workspace_path.clone()
             }
@@ -111,11 +101,7 @@ pub async fn execute(running_only: bool) -> Result<()> {
     }
 
     println!("{}", "─".repeat(110));
-    println!(
-        "Total: {} instance{}",
-        filtered.len(),
-        if filtered.len() == 1 { "" } else { "s" }
-    );
+    println!("Total: {} instance{}", filtered.len(), if filtered.len() == 1 { "" } else { "s" });
 
     // Show hint for more details
     println!("\nFor details on a specific instance:");

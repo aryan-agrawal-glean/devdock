@@ -15,22 +15,13 @@ pub async fn start(full: bool) -> Result<()> {
     let worktree = get_current_worktree()?;
 
     println!("Starting file sync...");
-    println!(
-        "  Mode: {}",
-        if full {
-            "all files"
-        } else {
-            "git-tracked only"
-        }
-    );
+    println!("  Mode: {}", if full { "all files" } else { "git-tracked only" });
 
     let repo_path = PathBuf::from(&worktree);
     let _pid = sync_daemon::start_daemon(&devdock_id, &workspace_name, &repo_path, full)?;
 
     // Update database
-    state
-        .save_sync_session(&devdock_id, &workspace_name, None, full, "running")
-        .await?;
+    state.save_sync_session(&devdock_id, &workspace_name, None, full, "running").await?;
 
     println!("{}", "✅ File sync started".green());
     println!("  Check status: {}", "devdock sync status".cyan());
@@ -49,9 +40,7 @@ pub async fn stop() -> Result<()> {
     sync_daemon::stop_daemon(&devdock_id)?;
 
     // Update database
-    state
-        .save_sync_session(&devdock_id, "", None, false, "stopped")
-        .await?;
+    state.save_sync_session(&devdock_id, "", None, false, "stopped").await?;
 
     println!("{}", "✅ File sync stopped".green());
 
@@ -78,14 +67,7 @@ pub async fn status() -> Result<()> {
                 _ => status.normal(),
             }
         );
-        println!(
-            "  Mode: {}",
-            if full_mode {
-                "all files"
-            } else {
-                "git-tracked only"
-            }
-        );
+        println!("  Mode: {}", if full_mode { "all files" } else { "git-tracked only" });
 
         if let Some(pid) = pid {
             println!("  PID: {}", pid);
@@ -109,10 +91,7 @@ async fn get_current_instance(state: &StateManager) -> Result<(String, String)> 
         .ok_or_else(|| anyhow!("No running DevDock instance found for current worktree"))?;
 
     // Get workspace name from instance (for remote instances, use coder workspace name)
-    let workspace_name = instance
-        .workspace_name
-        .clone()
-        .unwrap_or_else(|| instance.id.clone());
+    let workspace_name = instance.workspace_name.clone().unwrap_or_else(|| instance.id.clone());
 
     Ok((instance.id.clone(), workspace_name))
 }
@@ -121,9 +100,7 @@ async fn get_current_instance(state: &StateManager) -> Result<(String, String)> 
 fn get_current_worktree() -> Result<String> {
     use std::process::Command;
 
-    let output = Command::new("git")
-        .args(["rev-parse", "--show-toplevel"])
-        .output()?;
+    let output = Command::new("git").args(["rev-parse", "--show-toplevel"]).output()?;
 
     if !output.status.success() {
         return Err(anyhow!("Not in a git repository"));

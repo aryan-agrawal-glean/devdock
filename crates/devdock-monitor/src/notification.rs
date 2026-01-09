@@ -90,10 +90,7 @@ impl Notifier {
             title, message
         );
 
-        if let Err(e) = Command::new("powershell")
-            .args(["-Command", &script])
-            .output()
-        {
+        if let Err(e) = Command::new("powershell").args(["-Command", &script]).output() {
             warn!("Failed to send Windows notification: {}", e);
         }
     }

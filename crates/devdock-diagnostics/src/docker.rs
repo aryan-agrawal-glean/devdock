@@ -8,9 +8,8 @@ pub use crate::system::DockerInfo;
 
 /// Get information about running Docker containers.
 pub fn get_docker_info() -> Result<DockerInfo> {
-    let output = Command::new("docker")
-        .args(["ps", "--format", "{{.Names}}\t{{.Status}}"])
-        .output();
+    let output =
+        Command::new("docker").args(["ps", "--format", "{{.Names}}\t{{.Status}}"]).output();
 
     match output {
         Ok(output) if output.status.success() => {
@@ -37,10 +36,7 @@ pub fn get_docker_info() -> Result<DockerInfo> {
                 map
             },
         }),
-        Err(e) => Err(DiagnosticsError::SystemInfo(format!(
-            "Failed to run docker command: {}",
-            e
-        ))),
+        Err(e) => Err(DiagnosticsError::SystemInfo(format!("Failed to run docker command: {}", e))),
     }
 }
 

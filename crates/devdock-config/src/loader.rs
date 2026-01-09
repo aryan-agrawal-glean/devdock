@@ -70,11 +70,7 @@ impl ProfileLoader {
     /// Load a profile from a specific path.
     pub fn load_from_path(&self, path: &Path) -> Result<Profile> {
         let content = std::fs::read_to_string(path).map_err(|e| {
-            Error::InvalidProfile(format!(
-                "Failed to read profile file {}: {}",
-                path.display(),
-                e
-            ))
+            Error::InvalidProfile(format!("Failed to read profile file {}: {}", path.display(), e))
         })?;
 
         let profile: Profile = serde_yaml::from_str(&content).map_err(|e| {
@@ -99,11 +95,8 @@ impl ProfileLoader {
 
         for base_path in &self.base_paths {
             for subdir in &subdirs {
-                let search_path = if subdir.is_empty() {
-                    base_path.clone()
-                } else {
-                    base_path.join(subdir)
-                };
+                let search_path =
+                    if subdir.is_empty() { base_path.clone() } else { base_path.join(subdir) };
 
                 // Try .yaml extension
                 let yaml_path = search_path.join(&filename_yaml);
@@ -131,11 +124,8 @@ impl ProfileLoader {
             let subdirs = ["user_profiles", "integration_tests", ""];
 
             for subdir in &subdirs {
-                let search_path = if subdir.is_empty() {
-                    base_path.clone()
-                } else {
-                    base_path.join(subdir)
-                };
+                let search_path =
+                    if subdir.is_empty() { base_path.clone() } else { base_path.join(subdir) };
 
                 if !search_path.exists() {
                     continue;
@@ -177,11 +167,8 @@ impl ProfileLoader {
             ];
 
             for (subdir, category) in &categories {
-                let search_path = if subdir.is_empty() {
-                    base_path.clone()
-                } else {
-                    base_path.join(subdir)
-                };
+                let search_path =
+                    if subdir.is_empty() { base_path.clone() } else { base_path.join(subdir) };
 
                 if !search_path.exists() {
                     continue;

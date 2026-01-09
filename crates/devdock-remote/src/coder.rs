@@ -117,12 +117,10 @@ pub fn delete_workspace(name: &str) -> Result<()> {
 
     info!("Deleting Coder workspace: {}", name);
 
-    let output = Command::new("coder")
-        .arg("delete")
-        .arg(name)
-        .arg("--yes")
-        .output()
-        .map_err(|e| RemoteError::CommandFailed(format!("Failed to delete workspace: {}", e)))?;
+    let output =
+        Command::new("coder").arg("delete").arg(name).arg("--yes").output().map_err(|e| {
+            RemoteError::CommandFailed(format!("Failed to delete workspace: {}", e))
+        })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -168,30 +166,20 @@ pub fn get_workspace_status(name: &str) -> Result<String> {
         .map_err(|e| RemoteError::CommandFailed(format!("Failed to list workspaces: {}", e)))?;
 
     if !output.status.success() {
-        return Err(RemoteError::CommandFailed(
-            "Failed to get workspace status".to_string(),
-        ));
+        return Err(RemoteError::CommandFailed("Failed to get workspace status".to_string()));
     }
 
     // Parse JSON output and find workspace
     let stdout = String::from_utf8_lossy(&output.stdout);
     // For now, return simple status - can be enhanced with proper JSON parsing
-    Ok(if stdout.contains(name) {
-        "running"
-    } else {
-        "stopped"
-    }
-    .to_string())
+    Ok(if stdout.contains(name) { "running" } else { "stopped" }.to_string())
 }
 
 /// Start a single port forward for a workspace.
 pub fn port_forward_single(workspace: &str, local_port: u16, remote_port: u16) -> Result<Child> {
     check_coder_installed()?;
 
-    info!(
-        "Port forwarding {}:{} -> {}",
-        workspace, remote_port, local_port
-    );
+    info!("Port forwarding {}:{} -> {}", workspace, remote_port, local_port);
 
     let child = Command::new("coder")
         .arg("port-forward")
@@ -221,11 +209,7 @@ pub fn kill_port_forward(pid: u32) -> Result<()> {
     #[cfg(windows)]
     {
         use std::process::Command;
-        let _ = Command::new("taskkill")
-            .arg("/PID")
-            .arg(pid.to_string())
-            .arg("/F")
-            .output();
+        let _ = Command::new("taskkill").arg("/PID").arg(pid.to_string()).arg("/F").output();
     }
 
     Ok(())

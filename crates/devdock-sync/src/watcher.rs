@@ -27,11 +27,7 @@ impl FileWatcher {
             Config::default(),
         )?;
 
-        Ok(Self {
-            watcher,
-            rx,
-            debounce_duration: Duration::from_millis(500),
-        })
+        Ok(Self { watcher, rx, debounce_duration: Duration::from_millis(500) })
     }
 
     /// Start watching a path.

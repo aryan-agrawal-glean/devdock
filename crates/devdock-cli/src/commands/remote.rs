@@ -46,9 +46,7 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
     let branch = get_current_branch()?;
 
     // Determine workspace name and sanitize it (replace slashes and special chars)
-    let workspace_name = workspace_name
-        .or_else(|| vm.clone())
-        .unwrap_or_else(|| branch.clone());
+    let workspace_name = workspace_name.or_else(|| vm.clone()).unwrap_or_else(|| branch.clone());
     let workspace_name = sanitize_workspace_name(&workspace_name);
 
     // Find profile path
@@ -113,22 +111,13 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
         println!("   • Creating workspace: ~1-2 min");
         println!("   • Starting DevDock: ~1 min");
         println!();
-        println!(
-            "📋 Session logs: {}",
-            logger.path().display().to_string().dimmed()
-        );
-        println!(
-            "   Monitor: tail -f {}",
-            logger.path().display().to_string().dimmed()
-        );
+        println!("📋 Session logs: {}", logger.path().display().to_string().dimmed());
+        println!("   Monitor: tail -f {}", logger.path().display().to_string().dimmed());
         println!();
     } else {
         // Compact header
         println!("{}", "╭───────────────────────────────────────────╮".cyan());
-        println!(
-            "{}",
-            format!("│  🚀 Remote DevDock: {}@{}", profile, workspace_name).cyan()
-        );
+        println!("{}", format!("│  🚀 Remote DevDock: {}@{}", profile, workspace_name).cyan());
         println!("{}", "╰───────────────────────────────────────────╯".cyan());
         println!();
         println!(
@@ -154,10 +143,7 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
             existing
         } else {
             // Check if workspace already exists
-            logger.log(&format!(
-                "Checking if workspace '{}' exists...",
-                workspace_name
-            ))?;
+            logger.log(&format!("Checking if workspace '{}' exists...", workspace_name))?;
             let exists = coder::workspace_exists(&workspace_name)?;
             logger.log(&format!("Workspace exists: {}", exists))?;
 
@@ -327,10 +313,7 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
         logger.log(&format!(
             "Command: devdock start {} {}",
             profile,
-            services
-                .as_ref()
-                .map(|s| format!("-s {}", s))
-                .unwrap_or_default()
+            services.as_ref().map(|s| format!("-s {}", s)).unwrap_or_default()
         ))?;
         logger.log(&format!(
             "Remote logs: coder ssh {} -- tail -f /tmp/devdock-start.log",
@@ -407,11 +390,7 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
         if let Some(mgr) = &port_mgr {
             let step2_start = Instant::now();
 
-            let spinner2 = if !verbose {
-                Some(output::create_spinner("Ports"))
-            } else {
-                None
-            };
+            let spinner2 = if !verbose { Some(output::create_spinner("Ports")) } else { None };
 
             let mappings: Vec<_> = mgr
                 .mappings
@@ -494,9 +473,7 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
         let _ = sync_result;
 
         // Update instance status
-        state
-            .update_status(&instance_id, InstanceStatus::Running)
-            .await?;
+        state.update_status(&instance_id, InstanceStatus::Running).await?;
 
         // Calculate total time
         let total_seconds = overall_start.elapsed().as_secs();
@@ -544,24 +521,15 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
         } else {
             // Compact success output
             println!("{}", "╭────────────────────────────────────────╮".green());
-            println!(
-                "{}",
-                format!("│  ✅ Ready in {}                     │", total_time).green()
-            );
+            println!("{}", format!("│  ✅ Ready in {}                     │", total_time).green());
             println!("{}", "╰────────────────────────────────────────╯".green());
             println!();
             println!(
                 "{} {}",
                 "🌐 Tilt UI:".cyan(),
-                format!("http://localhost:{}", offset + 10350)
-                    .cyan()
-                    .underline()
+                format!("http://localhost:{}", offset + 10350).cyan().underline()
             );
-            println!(
-                "{} coder ssh {}",
-                "📁 SSH:    ".dimmed(),
-                workspace_name.dimmed()
-            );
+            println!("{} coder ssh {}", "📁 SSH:    ".dimmed(), workspace_name.dimmed());
             println!();
 
             // Show actionable next steps based on context
@@ -622,9 +590,8 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
         Err(e) => {
             // Failed - update status to Stopped
             info!("Setup failed, updating instance status to Stopped");
-            if let Err(status_err) = state
-                .update_status(&instance_id, InstanceStatus::Stopped)
-                .await
+            if let Err(status_err) =
+                state.update_status(&instance_id, InstanceStatus::Stopped).await
             {
                 warn!("Failed to update instance status: {}", status_err);
             }
@@ -645,9 +612,7 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
 fn get_current_worktree() -> Result<String> {
     use std::process::Command;
 
-    let output = Command::new("git")
-        .args(["rev-parse", "--show-toplevel"])
-        .output()?;
+    let output = Command::new("git").args(["rev-parse", "--show-toplevel"]).output()?;
 
     if !output.status.success() {
         return Err(anyhow!("Not in a git repository"));
@@ -660,9 +625,7 @@ fn get_current_worktree() -> Result<String> {
 fn get_current_branch() -> Result<String> {
     use std::process::Command;
 
-    let output = Command::new("git")
-        .args(["rev-parse", "--abbrev-ref", "HEAD"])
-        .output()?;
+    let output = Command::new("git").args(["rev-parse", "--abbrev-ref", "HEAD"]).output()?;
 
     if !output.status.success() {
         return Err(anyhow!("Failed to get branch name"));
@@ -675,16 +638,8 @@ fn get_current_branch() -> Result<String> {
 /// Replaces non-alphanumeric characters with hyphens and truncates to 32 chars.
 fn sanitize_workspace_name(name: &str) -> String {
     // Replace non-alphanumeric (except hyphens) with hyphens
-    let sanitized: String = name
-        .chars()
-        .map(|c| {
-            if c.is_alphanumeric() || c == '-' {
-                c
-            } else {
-                '-'
-            }
-        })
-        .collect();
+    let sanitized: String =
+        name.chars().map(|c| if c.is_alphanumeric() || c == '-' { c } else { '-' }).collect();
 
     // Truncate to 32 characters (Coder workspace name limit)
     sanitized.chars().take(32).collect()
@@ -705,9 +660,7 @@ fn find_profile(profile: &str) -> Result<PathBuf> {
     }
 
     // Try integration_tests
-    let test_profile = base
-        .join("integration_tests")
-        .join(format!("{}.yaml", profile));
+    let test_profile = base.join("integration_tests").join(format!("{}.yaml", profile));
     if test_profile.exists() {
         return Ok(test_profile);
     }
@@ -723,10 +676,7 @@ fn find_profile(profile: &str) -> Result<PathBuf> {
 
 /// Get current timestamp.
 fn now() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs() as i64
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64
 }
 
 /// Clean up sync files for instances that no longer exist in the database.

@@ -66,9 +66,7 @@ impl ParsedIniConfig {
 
     /// Get a value with a default
     pub fn get_or_default<'a>(&'a self, section: &str, key: &str, default: &'a str) -> &'a str {
-        self.get(section, key)
-            .map(|s| s.as_str())
-            .unwrap_or(default)
+        self.get(section, key).map(|s| s.as_str()).unwrap_or(default)
     }
 
     /// Check if a section exists
@@ -93,10 +91,7 @@ impl ParsedIniConfig {
 
     /// Set a value (for merging configs)
     pub fn set(&mut self, section: &str, key: &str, value: impl Into<String>) {
-        self.sections
-            .entry(section.to_string())
-            .or_default()
-            .insert(key.to_string(), value.into());
+        self.sections.entry(section.to_string()).or_default().insert(key.to_string(), value.into());
     }
 
     /// Merge another config into this one (other takes precedence)
@@ -192,11 +187,7 @@ pub fn parse_db_tables_query(db_tables_query: &str) -> (String, String, Option<S
 
     let db = parts.first().map(|s| s.to_string()).unwrap_or_default();
     let tables = parts.get(1).map(|s| s.to_string()).unwrap_or_default();
-    let query = if parts.len() >= 3 {
-        Some(parts[2..].join(":"))
-    } else {
-        None
-    };
+    let query = if parts.len() >= 3 { Some(parts[2..].join(":")) } else { None };
 
     (db, tables, query)
 }
@@ -238,10 +229,7 @@ discoveryEndpoints = memcached.devdock.local:11211
         assert!(config.has_section("google"));
         assert!(config.has_section("memcached"));
 
-        assert_eq!(
-            config.get("sql", "useSecretsManagerForPassword"),
-            Some(&"false".to_string())
-        );
+        assert_eq!(config.get("sql", "useSecretsManagerForPassword"), Some(&"false".to_string()));
         assert_eq!(
             config.get("google", "storage.configbucket"),
             Some(&"config-glean-prod".to_string())
@@ -311,10 +299,7 @@ key3 = new_value
         base.merge(&override_config);
 
         assert_eq!(base.get("section1", "key1"), Some(&"value1".to_string()));
-        assert_eq!(
-            base.get("section1", "key2"),
-            Some(&"overridden".to_string())
-        );
+        assert_eq!(base.get("section1", "key2"), Some(&"overridden".to_string()));
         assert_eq!(base.get("section1", "key3"), Some(&"new_value".to_string()));
     }
 

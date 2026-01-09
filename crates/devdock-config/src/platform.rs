@@ -40,10 +40,7 @@ impl IniConfig {
     }
 
     pub fn set(&mut self, section: &str, key: &str, value: impl Into<String>) {
-        self.sections
-            .entry(section.to_string())
-            .or_default()
-            .insert(key.to_string(), value.into());
+        self.sections.entry(section.to_string()).or_default().insert(key.to_string(), value.into());
     }
 
     pub fn get(&self, section: &str, key: &str) -> Option<&String> {
@@ -125,13 +122,7 @@ impl GooglePlatform {
         // Check if DNS kubectl should be enabled
         let dns_kubectl_enabled = Self::should_use_dns_kubectl(&project);
 
-        Ok(Self {
-            project,
-            zone,
-            region,
-            project_number,
-            dns_kubectl_enabled,
-        })
+        Ok(Self { project, zone, region, project_number, dns_kubectl_enabled })
     }
 
     /// Check if DNS-based kubectl should be enabled
@@ -145,13 +136,7 @@ impl GooglePlatform {
 
     async fn get_project_number(project: &str) -> Result<String> {
         let output = Command::new("gcloud")
-            .args([
-                "projects",
-                "describe",
-                project,
-                "--format",
-                "value(projectNumber)",
-            ])
+            .args(["projects", "describe", project, "--format", "value(projectNumber)"])
             .output()
             .await
             .context("Failed to execute gcloud command - is gcloud installed and in PATH?")?;
@@ -169,11 +154,7 @@ impl GooglePlatform {
             eprintln!("     → Run: gcloud auth list");
             eprintln!("  4. Wrong gcloud project configured");
             eprintln!("     → Run: gcloud config set project {}", project);
-            anyhow::bail!(
-                "gcloud projects describe failed for '{}': {}",
-                project,
-                stderr.trim()
-            );
+            anyhow::bail!("gcloud projects describe failed for '{}': {}", project, stderr.trim());
         }
 
         Ok(String::from_utf8(output.stdout)?.trim().to_string())
@@ -190,10 +171,7 @@ impl Platform for GooglePlatform {
             .status()
             .await
             .context("Failed to switch gcloud project")?;
-        println!(
-            "      └─ gcloud set project: {:.2}s",
-            step_start.elapsed().as_secs_f64()
-        );
+        println!("      └─ gcloud set project: {:.2}s", step_start.elapsed().as_secs_f64());
 
         // Get cluster credentials
         let cluster = if self.project.contains("apps") || self.project.contains("canary") {
@@ -203,14 +181,8 @@ impl Platform for GooglePlatform {
         };
 
         if self.project != "scio-engineering" {
-            let mut args = vec![
-                "container",
-                "clusters",
-                "get-credentials",
-                cluster,
-                "--zone",
-                &self.zone,
-            ];
+            let mut args =
+                vec!["container", "clusters", "get-credentials", cluster, "--zone", &self.zone];
 
             // Add DNS endpoint flag if enabled
             if self.dns_kubectl_enabled {
@@ -237,11 +209,7 @@ impl Platform for GooglePlatform {
     }
 
     fn update_devdock_config(&self, config: &mut IniConfig) {
-        config.set(
-            "google",
-            "storage.configbucket",
-            format!("config-{}", self.project),
-        );
+        config.set("google", "storage.configbucket", format!("config-{}", self.project));
         config.set("google", "apps.useCentralApp", "false");
         config.set("google", "docbuilderRequest.enabled", "true");
     }
@@ -252,12 +220,8 @@ impl Platform for GooglePlatform {
         profile.zone = self.zone.clone();
         profile.region = self.region.clone();
         profile.project_number = self.project_number.clone();
-        profile.dns_kubectl = if self.dns_kubectl_enabled {
-            "enabled"
-        } else {
-            "disabled"
-        }
-        .to_string();
+        profile.dns_kubectl =
+            if self.dns_kubectl_enabled { "enabled" } else { "disabled" }.to_string();
     }
 
     fn name(&self) -> &str {
@@ -299,14 +263,7 @@ impl Platform for AWSPlatform {
     async fn authenticate(&self) -> Result<()> {
         // Update kubeconfig for EKS
         let status = Command::new("aws")
-            .args([
-                "eks",
-                "update-kubeconfig",
-                "--name",
-                "glean-cluster",
-                "--region",
-                &self.region,
-            ])
+            .args(["eks", "update-kubeconfig", "--name", "glean-cluster", "--region", &self.region])
             .status()
             .await?;
 
@@ -362,11 +319,7 @@ impl AzurePlatform {
             String::new()
         };
 
-        Ok(Self {
-            project,
-            subscription_id,
-            region: "uswest2".to_string(),
-        })
+        Ok(Self { project, subscription_id, region: "uswest2".to_string() })
     }
 }
 

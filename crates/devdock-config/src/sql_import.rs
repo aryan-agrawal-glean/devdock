@@ -61,11 +61,8 @@ pub struct GoogleSqlManager {
 
 impl GoogleSqlManager {
     pub fn new(project: &str, region: &str, config: ParsedIniConfig) -> Self {
-        let sql_container = if project == "glean-apps-canary" {
-            SQL_CONTAINER_GAC
-        } else {
-            SQL_CONTAINER
-        };
+        let sql_container =
+            if project == "glean-apps-canary" { SQL_CONTAINER_GAC } else { SQL_CONTAINER };
 
         Self {
             project: project.to_string(),
@@ -84,18 +81,9 @@ impl GoogleSqlManager {
 
     /// Get password from Secret Manager (for public IP connections)
     fn get_sql_password(&self, secret_name: &str) -> Result<String> {
-        println!(
-            "     🔑 Fetching password from Secret Manager: {}",
-            secret_name
-        );
+        println!("     🔑 Fetching password from Secret Manager: {}", secret_name);
         let output = Command::new("gcloud")
-            .args([
-                "secrets",
-                "versions",
-                "access",
-                "latest",
-                &format!("--secret={}", secret_name),
-            ])
+            .args(["secrets", "versions", "access", "latest", &format!("--secret={}", secret_name)])
             .output()
             .context("Failed to get secret")?;
 
@@ -118,13 +106,7 @@ impl GoogleSqlManager {
 
         // Note: NOT using --auto-iam-authn here, we use devdock_user with password
         let child = Command::new("cloud-sql-proxy")
-            .args([
-                &connection_name,
-                "-p",
-                &port.to_string(),
-                "--address",
-                "0.0.0.0",
-            ])
+            .args([&connection_name, "-p", &port.to_string(), "--address", "0.0.0.0"])
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
@@ -157,10 +139,7 @@ impl GoogleSqlManager {
             _ => 13311,
         };
 
-        println!(
-            "     📡 Tunneling localhost:{} -> bastion:127.0.0.1:{}",
-            local_port, remote_port
-        );
+        println!("     📡 Tunneling localhost:{} -> bastion:127.0.0.1:{}", local_port, remote_port);
 
         let child = Command::new("gcloud")
             .args([
@@ -194,9 +173,7 @@ impl GoogleSqlManager {
         let start = std::time::Instant::now();
 
         while start.elapsed() < timeout {
-            let output = Command::new("lsof")
-                .args(["-i", &format!(":{}", port)])
-                .output();
+            let output = Command::new("lsof").args(["-i", &format!(":{}", port)]).output();
 
             if let Ok(out) = output {
                 if out.status.success() && !out.stdout.is_empty() {
@@ -293,10 +270,7 @@ impl GoogleSqlManager {
         std::fs::write(output_path, &output.stdout).context("Failed to write SQL dump")?;
 
         let size = output.stdout.len();
-        println!(
-            "     ✅ Exported {} ({} bytes) to {:?}",
-            db_name, size, output_path
-        );
+        println!("     ✅ Exported {} ({} bytes) to {:?}", db_name, size, output_path);
         Ok(())
     }
 }
@@ -341,8 +315,7 @@ impl SqlPlatformManager for GoogleSqlManager {
         .unwrap_or(false);
 
         // Store the public IP status for import_data to use
-        self.is_public_ip
-            .store(has_public, std::sync::atomic::Ordering::Relaxed);
+        self.is_public_ip.store(has_public, std::sync::atomic::Ordering::Relaxed);
 
         if has_public {
             println!("     🌐 Instance has public IP - using Cloud SQL Proxy + devdock_user");
@@ -381,10 +354,7 @@ pub struct AwsSqlManager {
 
 impl AwsSqlManager {
     pub fn new(project: &str, region: &str) -> Self {
-        Self {
-            project: project.to_string(),
-            region: region.to_string(),
-        }
+        Self { project: project.to_string(), region: region.to_string() }
     }
 
     /// Get bastion instance ID
@@ -406,10 +376,7 @@ impl AwsSqlManager {
             .context("Failed to get bastion instance")?;
 
         if !output.status.success() {
-            anyhow::bail!(
-                "Failed to get bastion: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
+            anyhow::bail!("Failed to get bastion: {}", String::from_utf8_lossy(&output.stderr));
         }
 
         Ok(String::from_utf8(output.stdout)?.trim().to_string())
@@ -418,9 +385,7 @@ impl AwsSqlManager {
     /// Get SQL endpoint from config
     pub fn get_sql_endpoint(&self, config: &ParsedIniConfig, db_name: &str) -> Option<String> {
         let instance_type = config.get("sql", &format!("{}.db.instance", db_name))?;
-        config
-            .get("sql", &format!("{}.aws.instanceEndpoint", instance_type))
-            .cloned()
+        config.get("sql", &format!("{}.aws.instanceEndpoint", instance_type)).cloned()
     }
 }
 
@@ -519,10 +484,7 @@ impl SqlPlatformManager for AwsSqlManager {
         let output = cmd.output().context("Failed to run mysqldump")?;
 
         if !output.status.success() {
-            anyhow::bail!(
-                "mysqldump failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
+            anyhow::bail!("mysqldump failed: {}", String::from_utf8_lossy(&output.stderr));
         }
 
         std::fs::write(output_path, &output.stdout)?;
@@ -547,11 +509,8 @@ pub struct SqlOperationsManager {
 
 impl SqlOperationsManager {
     pub fn new(project: &str, platform: &str, region: &str, config: ParsedIniConfig) -> Self {
-        let sql_container = if project == "glean-apps-canary" {
-            SQL_CONTAINER_GAC
-        } else {
-            SQL_CONTAINER
-        };
+        let sql_container =
+            if project == "glean-apps-canary" { SQL_CONTAINER_GAC } else { SQL_CONTAINER };
 
         Self {
             project: project.to_string(),
@@ -568,11 +527,7 @@ impl SqlOperationsManager {
 
         let db = parts.first().map(|s| s.to_string()).unwrap_or_default();
         let tables = parts.get(1).map(|s| s.to_string()).unwrap_or_default();
-        let query = if parts.len() >= 3 {
-            Some(parts[2..].join(":"))
-        } else {
-            None
-        };
+        let query = if parts.len() >= 3 { Some(parts[2..].join(":")) } else { None };
 
         (db, tables, query)
     }
@@ -582,30 +537,15 @@ impl SqlOperationsManager {
         if db_tables.is_empty() {
             // Get all databases and clean non-system ones
             let output = Command::new("docker")
-                .args([
-                    "exec",
-                    &self.sql_container,
-                    "mysql",
-                    "-u",
-                    "root",
-                    "-e",
-                    "SHOW DATABASES;",
-                ])
+                .args(["exec", &self.sql_container, "mysql", "-u", "root", "-e", "SHOW DATABASES;"])
                 .output()?;
 
             let databases = String::from_utf8_lossy(&output.stdout);
-            let system_dbs = [
-                "information_schema",
-                "mysql",
-                "performance_schema",
-                "sys",
-                "Database",
-            ];
+            let system_dbs =
+                ["information_schema", "mysql", "performance_schema", "sys", "Database"];
 
-            let to_drop: Vec<&str> = databases
-                .lines()
-                .filter(|db| !db.is_empty() && !system_dbs.contains(db))
-                .collect();
+            let to_drop: Vec<&str> =
+                databases.lines().filter(|db| !db.is_empty() && !system_dbs.contains(db)).collect();
 
             for db in to_drop {
                 info!("Dropping database: {}", db);
@@ -665,38 +605,29 @@ impl SqlOperationsManager {
     /// Fast export from GCS bucket (pre-exported dumps)
     pub async fn fast_export(&self, db: &str, target_dir: &Path) -> Result<()> {
         let storage = GcsStorage::with_default_cache(&self.project)?;
-        let gcs_path = format!(
-            "{}/{}.sql",
-            SQL_BUCKET_PATTERN.replace("{project}", &self.project),
-            db
-        );
+        let gcs_path =
+            format!("{}/{}.sql", SQL_BUCKET_PATTERN.replace("{project}", &self.project), db);
         let target_path = target_dir.join(format!("{}.sql", db));
 
         println!("     📥 Downloading: {}", gcs_path);
         println!("     📁 Target: {:?}", target_path);
 
-        storage
-            .fetch_to_path(&gcs_path, &target_path)
-            .await
-            .with_context(|| {
-                format!(
-                    "Failed to download from GCS. Check:\n\
+        storage.fetch_to_path(&gcs_path, &target_path).await.with_context(|| {
+            format!(
+                "Failed to download from GCS. Check:\n\
                  1. GCS bucket exists: gs://sql-{}/devdock/\n\
                  2. File exists: {}.sql\n\
                  3. You have read permissions",
-                    self.project, db
-                )
-            })?;
+                self.project, db
+            )
+        })?;
 
         Ok(())
     }
 
     /// Fast export multiple DBs in parallel
     pub async fn fast_export_parallel(&self, dbs: &[String], target_dir: &Path) -> Result<()> {
-        let futures: Vec<_> = dbs
-            .iter()
-            .map(|db| self.fast_export(db, target_dir))
-            .collect();
+        let futures: Vec<_> = dbs.iter().map(|db| self.fast_export(db, target_dir)).collect();
 
         futures::future::try_join_all(futures).await?;
         Ok(())
@@ -723,10 +654,7 @@ impl SqlOperationsManager {
 
         // Debug: show what we're checking
         println!("  📊 Export check for '{}':", db_tables_query);
-        println!(
-            "     - db: '{}', tables: '{}', query: {:?}",
-            db, tables, query
-        );
+        println!("     - db: '{}', tables: '{}', query: {:?}", db, tables, query);
         println!(
             "     - mode: '{}', platform: '{}', project: '{}'",
             mode, self.platform, self.project
@@ -754,10 +682,7 @@ impl SqlOperationsManager {
         } else if let Some(ref where_clause) = query {
             // Query-based export requires proxy connection + mysqldump
             // This matches Python's behavior: setup proxy, clean local data, mysqldump with --where
-            println!(
-                "  🔍 QUERY-BASED EXPORT: {} (via mysqldump with --where)",
-                db
-            );
+            println!("  🔍 QUERY-BASED EXPORT: {} (via mysqldump with --where)", db);
             println!("     WHERE clause: {}", where_clause);
 
             self.export_via_proxy_mysqldump(&db, &tables, where_clause, target_dir)?;
@@ -771,8 +696,7 @@ impl SqlOperationsManager {
                 mode_ok, project_ok, db_ok
             );
 
-            self.export_via_gcloud_sql_export(&db, &tables, target_dir)
-                .await?;
+            self.export_via_gcloud_sql_export(&db, &tables, target_dir).await?;
             println!("  ✅ Slow export complete for {}", db);
         }
 
@@ -886,10 +810,7 @@ impl SqlOperationsManager {
 
     /// Delete temp GCS directory
     async fn delete_gcs_temp(&self, gcs_dir: &str) -> Result<()> {
-        let _ = TokioCommand::new("gcloud")
-            .args(["storage", "rm", "-r", gcs_dir])
-            .output()
-            .await;
+        let _ = TokioCommand::new("gcloud").args(["storage", "rm", "-r", gcs_dir]).output().await;
         Ok(())
     }
 
@@ -911,11 +832,9 @@ impl SqlOperationsManager {
 
         // Create platform-specific manager based on platform
         let manager: Box<dyn SqlPlatformManager> = match self.platform.as_str() {
-            "google" => Box::new(GoogleSqlManager::new(
-                &self.project,
-                "us-central1",
-                self.config.clone(),
-            )),
+            "google" => {
+                Box::new(GoogleSqlManager::new(&self.project, "us-central1", self.config.clone()))
+            }
             "aws" => Box::new(AwsSqlManager::new(&self.project, "us-west-2")),
             "azure" => {
                 // Azure query-based export not yet implemented in Rust
@@ -963,23 +882,12 @@ impl SqlOperationsManager {
         table: &str,
         where_clause: &str,
     ) -> Result<()> {
-        println!(
-            "     Dropping entries from {}.{} WHERE {}",
-            database, table, where_clause
-        );
+        println!("     Dropping entries from {}.{} WHERE {}", database, table, where_clause);
 
         let delete_sql = format!("DELETE FROM {}.{} WHERE {}", database, table, where_clause);
 
         let output = Command::new("docker")
-            .args([
-                "exec",
-                &self.sql_container,
-                "mysql",
-                "-u",
-                "root",
-                "-e",
-                &delete_sql,
-            ])
+            .args(["exec", &self.sql_container, "mysql", "-u", "root", "-e", &delete_sql])
             .output()
             .context("Failed to clean local SQL data")?;
 
@@ -1043,10 +951,7 @@ impl SqlOperationsManager {
             .context("Failed to run gcloud sql export")?;
 
         if !output.status.success() {
-            anyhow::bail!(
-                "gcloud sql export failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
+            anyhow::bail!("gcloud sql export failed: {}", String::from_utf8_lossy(&output.stderr));
         }
 
         // Wait for export to complete (poll operation status)
@@ -1131,19 +1036,13 @@ impl SqlOperationsManager {
             return Ok(());
         }
 
-        let prefix = format!(
-            "CREATE DATABASE IF NOT EXISTS {};\nUSE {};\n\n",
-            db_name, db_name
-        );
+        let prefix = format!("CREATE DATABASE IF NOT EXISTS {};\nUSE {};\n\n", db_name, db_name);
 
         let mut new_content = prefix.into_bytes();
         new_content.extend_from_slice(&content);
 
         std::fs::write(&file_path, new_content)?;
-        info!(
-            "Modified {}.sql with CREATE DATABASE and USE statements",
-            db_name
-        );
+        info!("Modified {}.sql with CREATE DATABASE and USE statements", db_name);
 
         Ok(())
     }

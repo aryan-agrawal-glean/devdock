@@ -16,17 +16,13 @@ impl ProfileValidator {
     pub fn validate(&self, profile: &Profile) -> Result<()> {
         // Check project is not empty
         if profile.project.is_empty() {
-            return Err(Error::InvalidProfile(
-                "Project name cannot be empty".to_string(),
-            ));
+            return Err(Error::InvalidProfile("Project name cannot be empty".to_string()));
         }
 
         // Validate no empty component names
         for name in profile.all_components() {
             if name.is_empty() {
-                return Err(Error::InvalidProfile(
-                    "Component name cannot be empty".to_string(),
-                ));
+                return Err(Error::InvalidProfile("Component name cannot be empty".to_string()));
             }
         }
 
@@ -34,10 +30,7 @@ impl ProfileValidator {
         let mut seen = std::collections::HashSet::new();
         for name in profile.all_components() {
             if !seen.insert(name.clone()) {
-                return Err(Error::InvalidProfile(format!(
-                    "Duplicate component name: {}",
-                    name
-                )));
+                return Err(Error::InvalidProfile(format!("Duplicate component name: {}", name)));
             }
         }
 
@@ -124,10 +117,7 @@ mod tests {
         let mut infra = HashMap::new();
         infra.insert(
             "sql".to_string(),
-            InfraConfig {
-                deployment_type: DeploymentType::Local,
-                config: HashMap::new(),
-            },
+            InfraConfig { deployment_type: DeploymentType::Local, config: HashMap::new() },
         );
 
         let mut services = HashMap::new();

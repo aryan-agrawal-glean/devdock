@@ -37,12 +37,7 @@ pub fn header(msg: &str) {
 
 /// Print a step in a multi-step process.
 pub fn step(current: usize, total: usize, msg: &str) {
-    println!(
-        "{} {} {}",
-        format!("[{}/{}]", current, total).purple().bold(),
-        "▶".cyan(),
-        msg
-    );
+    println!("{} {} {}", format!("[{}/{}]", current, total).purple().bold(), "▶".cyan(), msg);
 }
 
 /// Create a progress bar with time estimate.

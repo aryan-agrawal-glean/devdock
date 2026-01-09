@@ -36,9 +36,7 @@ pub fn expand_env_vars(value: &str) -> String {
 
 /// Expand environment variables in a HashMap recursively
 pub fn expand_env_vars_in_map(map: &HashMap<String, String>) -> HashMap<String, String> {
-    map.iter()
-        .map(|(k, v)| (k.clone(), expand_env_vars(v)))
-        .collect()
+    map.iter().map(|(k, v)| (k.clone(), expand_env_vars(v))).collect()
 }
 
 #[cfg(test)]
@@ -48,10 +46,7 @@ mod tests {
     #[test]
     fn test_expand_simple() {
         std::env::set_var("TEST_VAR", "test_value");
-        assert_eq!(
-            expand_env_vars("prefix_${TEST_VAR}_suffix"),
-            "prefix_test_value_suffix"
-        );
+        assert_eq!(expand_env_vars("prefix_${TEST_VAR}_suffix"), "prefix_test_value_suffix");
     }
 
     #[test]
@@ -75,9 +70,6 @@ mod tests {
     fn test_multiple_vars() {
         std::env::set_var("VAR1", "val1");
         std::env::set_var("VAR2", "val2");
-        assert_eq!(
-            expand_env_vars("${VAR1}/middle/${VAR2}"),
-            "val1/middle/val2"
-        );
+        assert_eq!(expand_env_vars("${VAR1}/middle/${VAR2}"), "val1/middle/val2");
     }
 }

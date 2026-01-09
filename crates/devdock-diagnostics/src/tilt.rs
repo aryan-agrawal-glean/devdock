@@ -24,9 +24,8 @@ pub fn capture_tilt_snapshot(snapshot_dir: &Path) -> Result<Option<PathBuf>> {
     let snapshot_path = snapshot_dir.join(&snapshot_id);
 
     // Capture snapshot using Tilt CLI
-    let output = Command::new("tilt")
-        .args(["snapshot", "create", snapshot_path.to_str().unwrap()])
-        .output();
+    let output =
+        Command::new("tilt").args(["snapshot", "create", snapshot_path.to_str().unwrap()]).output();
 
     match output {
         Ok(output) if output.status.success() => {

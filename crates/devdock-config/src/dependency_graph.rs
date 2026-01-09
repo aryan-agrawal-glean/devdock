@@ -34,9 +34,7 @@ impl DependencyGraph {
     /// Build dependency graph from profile, resolving transitive dependencies
     pub async fn build(profile: &Profile, workspace_root: &Path) -> Result<Self> {
         let total_start = std::time::Instant::now();
-        let mut graph = Self {
-            nodes: HashMap::new(),
-        };
+        let mut graph = Self { nodes: HashMap::new() };
 
         // Create an expanded profile with transitive dependencies resolved
         let step_start = std::time::Instant::now();
@@ -58,23 +56,13 @@ impl DependencyGraph {
 
         // Add nodes to graph
         for (name, (config, component_type)) in configs {
-            graph.nodes.insert(
-                name.clone(),
-                ServiceNode {
-                    name,
-                    config,
-                    component_type,
-                },
-            );
+            graph.nodes.insert(name.clone(), ServiceNode { name, config, component_type });
         }
 
         // Validate graph (no cycles, all deps exist)
         graph.validate()?;
 
-        println!(
-            "      └─ Graph build total: {:.2}s",
-            total_start.elapsed().as_secs_f64()
-        );
+        println!("      └─ Graph build total: {:.2}s", total_start.elapsed().as_secs_f64());
 
         Ok(graph)
     }
@@ -103,10 +91,8 @@ impl DependencyGraph {
             for dep in deps {
                 if !processed.contains(&dep) && !to_process.contains(&dep) {
                     // Check what type of component the dependency is
-                    let service_path = workspace_root.join(format!(
-                        "devdock/config/services/{}/devdock_config.json",
-                        dep
-                    ));
+                    let service_path = workspace_root
+                        .join(format!("devdock/config/services/{}/devdock_config.json", dep));
                     let infra_path = workspace_root.join(format!("devdock/config/infra/{}", dep));
 
                     if service_path.exists() {
@@ -172,10 +158,8 @@ impl DependencyGraph {
     /// Find dependencies for a component
     async fn find_dependencies(workspace_root: &Path, name: &str) -> Vec<String> {
         // Try service config
-        let service_path = workspace_root.join(format!(
-            "devdock/config/services/{}/devdock_config.json",
-            name
-        ));
+        let service_path =
+            workspace_root.join(format!("devdock/config/services/{}/devdock_config.json", name));
 
         if service_path.exists() {
             if let Ok(content) = tokio::fs::read_to_string(&service_path).await {
@@ -262,14 +246,10 @@ impl DependencyGraph {
             workspace_root.join(format!(
                 "devdock/config/services/{}/devdock_config_{}.json",
                 service_name,
-                std::env::var("CLOUD_PLATFORM")
-                    .unwrap_or_default()
-                    .to_lowercase()
+                std::env::var("CLOUD_PLATFORM").unwrap_or_default().to_lowercase()
             )),
-            workspace_root.join(format!(
-                "devdock/config/services/{}/devdock_config.json",
-                service_name
-            )),
+            workspace_root
+                .join(format!("devdock/config/services/{}/devdock_config.json", service_name)),
         ];
 
         for config_path in &config_paths {
@@ -304,10 +284,8 @@ impl DependencyGraph {
     /// Load a single infra config
     async fn load_infra_config(workspace_root: &Path, infra_name: &str) -> Result<ServiceConfig> {
         // Try to load config file if it exists, otherwise return minimal config
-        let config_path = workspace_root.join(format!(
-            "devdock/config/infra/{}/devdock_config.json",
-            infra_name
-        ));
+        let config_path =
+            workspace_root.join(format!("devdock/config/infra/{}/devdock_config.json", infra_name));
 
         if config_path.exists() {
             let content = tokio::fs::read_to_string(&config_path).await?;

@@ -34,10 +34,7 @@ pub async fn execute(
     // Step 2: Resolve dependencies
     let resolver = DependencyResolver::new();
     let resolved_components = resolver.resolve(&profile)?;
-    output::info(&format!(
-        "Resolved {} components",
-        resolved_components.len()
-    ));
+    output::info(&format!("Resolved {} components", resolved_components.len()));
 
     // Step 3: Check Docker is running
     check_docker()?;
@@ -83,9 +80,7 @@ pub async fn execute(
     cleanup_startup_state_files()?;
 
     // Step 8: Update status and start Tilt
-    state_manager
-        .update_status(&instance.id, InstanceStatus::Running)
-        .await?;
+    state_manager.update_status(&instance.id, InstanceStatus::Running).await?;
 
     output::info("Starting Tilt...");
     let tilt_process = start_tilt(services)?;
@@ -136,11 +131,8 @@ fn check_docker() -> Result<()> {
     let (tx, rx) = mpsc::channel();
 
     thread::spawn(move || {
-        let result = Command::new("docker")
-            .arg("info")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
+        let result =
+            Command::new("docker").arg("info").stdout(Stdio::null()).stderr(Stdio::null()).status();
         tx.send(result).ok();
     });
 
@@ -318,19 +310,11 @@ fn start_tilt(services: Option<&str>) -> Result<Child> {
             cmd.arg(service.trim());
         }
         // Add helper services
-        cmd.args([
-            "gcloud-auth",
-            "trigger-profile-update",
-            "current-config",
-            "startup-monitor",
-        ]);
+        cmd.args(["gcloud-auth", "trigger-profile-update", "current-config", "startup-monitor"]);
     }
 
     // Spawn tilt process
-    let child = cmd
-        .stdin(Stdio::null())
-        .spawn()
-        .context("Failed to start tilt")?;
+    let child = cmd.stdin(Stdio::null()).spawn().context("Failed to start tilt")?;
 
     Ok(child)
 }
@@ -655,9 +639,7 @@ fn cleanup_port_processes() -> Result<()> {
         let mut pids_to_kill = Vec::new();
 
         for port in ports {
-            let output = Command::new("lsof")
-                .args(["-i", &format!(":{}", port), "-t"])
-                .output();
+            let output = Command::new("lsof").args(["-i", &format!(":{}", port), "-t"]).output();
 
             if let Ok(output) = output {
                 if output.status.success() {
@@ -712,9 +694,8 @@ fn cleanup_dangling_images() -> Result<()> {
     #[cfg(not(unix))]
     {
         // Fallback for non-Unix systems
-        let output = Command::new("docker")
-            .args(["images", "--filter", "dangling=true", "-q"])
-            .output()?;
+        let output =
+            Command::new("docker").args(["images", "--filter", "dangling=true", "-q"]).output()?;
 
         if output.status.success() {
             let images = String::from_utf8_lossy(&output.stdout);
@@ -760,10 +741,7 @@ fn cleanup_temp_files(workspace_root: &Path) -> Result<()> {
     output::info(&format!("Workspace root: {}", workspace_root.display()));
 
     let runtime_gen = workspace_root.join("devdock/runtime_generated");
-    output::info(&format!(
-        "Looking for runtime_generated at: {}",
-        runtime_gen.display()
-    ));
+    output::info(&format!("Looking for runtime_generated at: {}", runtime_gen.display()));
 
     if runtime_gen.exists() {
         output::info("Removing runtime_generated directory...");
@@ -842,10 +820,7 @@ async fn emit_telemetry(
         timestamp: now,
     };
 
-    let snapshot = TelemetrySnapshot {
-        session: Some(session),
-        ..Default::default()
-    };
+    let snapshot = TelemetrySnapshot { session: Some(session), ..Default::default() };
 
     // Configure BigQuery emitter
     let config = BigQueryConfig {
@@ -862,10 +837,7 @@ async fn emit_telemetry(
                 if result.is_success() {
                     tracing::info!("Telemetry emitted to BigQuery: status={}", status);
                 } else {
-                    tracing::warn!(
-                        "Partial telemetry emission: {} errors",
-                        result.failure_count
-                    );
+                    tracing::warn!("Partial telemetry emission: {} errors", result.failure_count);
                 }
             }
             Err(e) => {

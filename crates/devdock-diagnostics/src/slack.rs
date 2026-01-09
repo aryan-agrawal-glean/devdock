@@ -69,10 +69,7 @@ pub fn get_slack_bot_token() -> Result<String> {
         Ok(token)
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(DiagnosticsError::Slack(format!(
-            "Failed to fetch Slack bot token: {}",
-            stderr
-        )))
+        Err(DiagnosticsError::Slack(format!("Failed to fetch Slack bot token: {}", stderr)))
     }
 }
 
@@ -83,10 +80,7 @@ pub async fn post_to_slack(jira_key: &str, summary: &str, reporter_email: &str) 
     let bot_token = match get_slack_bot_token() {
         Ok(token) => token,
         Err(e) => {
-            warn!(
-                "Failed to get Slack bot token, skipping notification: {}",
-                e
-            );
+            warn!("Failed to get Slack bot token, skipping notification: {}", e);
             return Ok(());
         }
     };
@@ -158,12 +152,7 @@ pub async fn post_to_slack(jira_key: &str, summary: &str, reporter_email: &str) 
         info!("Successfully posted bug report to Slack");
         Ok(())
     } else {
-        let error = slack_response
-            .error
-            .unwrap_or_else(|| "Unknown error".to_string());
-        Err(DiagnosticsError::Slack(format!(
-            "Slack API returned error: {}",
-            error
-        )))
+        let error = slack_response.error.unwrap_or_else(|| "Unknown error".to_string());
+        Err(DiagnosticsError::Slack(format!("Slack API returned error: {}", error)))
     }
 }

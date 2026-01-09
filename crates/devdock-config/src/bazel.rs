@@ -16,21 +16,13 @@ pub struct BazelQueryEngine {
 impl BazelQueryEngine {
     pub fn new(workspace_root: PathBuf) -> Self {
         let use_remote_bazelrc = cfg!(target_os = "linux");
-        Self {
-            workspace_root,
-            use_remote_bazelrc,
-            silent: false,
-        }
+        Self { workspace_root, use_remote_bazelrc, silent: false }
     }
 
     /// Create a silent engine (no console output, for background tasks)
     pub fn new_silent(workspace_root: PathBuf) -> Self {
         let use_remote_bazelrc = cfg!(target_os = "linux");
-        Self {
-            workspace_root,
-            use_remote_bazelrc,
-            silent: true,
-        }
+        Self { workspace_root, use_remote_bazelrc, silent: true }
     }
 
     /// Generate all watch files in parallel
@@ -117,18 +109,12 @@ impl BazelQueryEngine {
 
         if self.use_remote_bazelrc {
             cmd.arg("--nohome_rc");
-            cmd.arg(format!(
-                "--bazelrc={}/.devdock.remote.bazelrc",
-                self.workspace_root.display()
-            ));
+            cmd.arg(format!("--bazelrc={}/.devdock.remote.bazelrc", self.workspace_root.display()));
         }
 
         cmd.arg("cquery");
         cmd.arg("--output=label");
-        cmd.arg(format!(
-            "filter('^//', kind('source file', deps(set({}))))",
-            target
-        ));
+        cmd.arg(format!("filter('^//', kind('source file', deps(set({}))))", target));
         cmd.current_dir(&self.workspace_root);
 
         let output = cmd.output().await.context("Failed to run bazel cquery")?;

@@ -16,11 +16,7 @@ pub struct RsyncClient {
 impl RsyncClient {
     /// Create a new rsync client.
     pub fn new(workspace_name: String, local_path: PathBuf, remote_path: PathBuf) -> Self {
-        Self {
-            workspace_name,
-            local_path,
-            remote_path,
-        }
+        Self { workspace_name, local_path, remote_path }
     }
 
     /// Sync specific files to remote.
@@ -42,11 +38,7 @@ impl RsyncClient {
         // Add files-from stdin and rsync over SSH (coder sets up .ssh/config)
         cmd.arg("--files-from=-")
             .arg(&self.local_path)
-            .arg(format!(
-                "{}.coder:{}",
-                self.workspace_name,
-                self.remote_path.display()
-            ))
+            .arg(format!("{}.coder:{}", self.workspace_name, self.remote_path.display()))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -103,11 +95,7 @@ impl RsyncClient {
             .arg("--exclude=node_modules")
             .arg("--exclude=bazel-*")
             .arg(format!("{}/", self.local_path.display()))
-            .arg(format!(
-                "{}.coder:{}",
-                self.workspace_name,
-                self.remote_path.display()
-            ))
+            .arg(format!("{}.coder:{}", self.workspace_name, self.remote_path.display()))
             .output()
             .map_err(|e| SyncError::RsyncFailed(format!("Failed to run rsync: {}", e)))?;
 

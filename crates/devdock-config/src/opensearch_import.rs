@@ -45,20 +45,12 @@ impl OpenSearchCopier {
             .map(|s| s.to_lowercase() == "true")
             .unwrap_or(false);
 
-        Ok(Self {
-            project: project.to_string(),
-            server_url,
-            private_setup,
-        })
+        Ok(Self { project: project.to_string(), server_url, private_setup })
     }
 
     /// Create with explicit config
     pub fn with_config(project: &str, server_url: &str, private_setup: bool) -> Self {
-        Self {
-            project: project.to_string(),
-            server_url: server_url.to_string(),
-            private_setup,
-        }
+        Self { project: project.to_string(), server_url: server_url.to_string(), private_setup }
     }
 
     /// Check if Elasticsearch is healthy on a given port
@@ -93,11 +85,7 @@ impl OpenSearchCopier {
             .or_else(|| self.server_url.strip_prefix("https://"))
             .unwrap_or(&self.server_url);
 
-        let tunnel_arg = if self.private_setup {
-            "--internal-ip"
-        } else {
-            "--tunnel-through-iap"
-        };
+        let tunnel_arg = if self.private_setup { "--internal-ip" } else { "--tunnel-through-iap" };
 
         info!("Starting SSH tunnel to {} ({})", host, tunnel_arg);
 
@@ -162,10 +150,7 @@ impl OpenSearchCopier {
             });
 
             client
-                .post(format!(
-                    "{}/_search?scroll={}&size={}",
-                    source_url, scroll, size
-                ))
+                .post(format!("{}/_search?scroll={}&size={}", source_url, scroll, size))
                 .header("Content-Type", "application/json")
                 .json(&body)
                 .send()?
@@ -228,19 +213,12 @@ impl OpenSearchCopier {
         max_docs: usize,
     ) -> Result<usize> {
         let mut total_docs = 0;
-        let max_chunks = if max_docs > 0 {
-            max_docs.div_ceil(size)
-        } else {
-            usize::MAX
-        };
+        let max_chunks = if max_docs > 0 { max_docs.div_ceil(size) } else { usize::MAX };
 
         // Initial fetch
         let response = self.fetch_data_chunk(source_index, query, size, scroll, None)?;
 
-        let mut scroll_id = response
-            .get("_scroll_id")
-            .and_then(|v| v.as_str())
-            .map(String::from);
+        let mut scroll_id = response.get("_scroll_id").and_then(|v| v.as_str()).map(String::from);
 
         let mut docs: Vec<serde_json::Value> = response
             .get("hits")
@@ -266,10 +244,7 @@ impl OpenSearchCopier {
                 let response =
                     self.fetch_data_chunk(source_index, query, size, scroll, Some(sid))?;
 
-                scroll_id = response
-                    .get("_scroll_id")
-                    .and_then(|v| v.as_str())
-                    .map(String::from);
+                scroll_id = response.get("_scroll_id").and_then(|v| v.as_str()).map(String::from);
 
                 docs = response
                     .get("hits")
@@ -297,11 +272,7 @@ impl OpenSearchCopier {
             "Copying index {} -> {} (max_docs: {})",
             remote_index,
             local_index,
-            if max_docs == 0 {
-                "unlimited".to_string()
-            } else {
-                max_docs.to_string()
-            }
+            if max_docs == 0 { "unlimited".to_string() } else { max_docs.to_string() }
         );
 
         // Start tunnel

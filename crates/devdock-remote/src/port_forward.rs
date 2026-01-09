@@ -71,10 +71,7 @@ fn read_service_config_port(service_name: &str) -> Option<u16> {
             .join("devdock_config.json");
 
     if !config_path.exists() {
-        debug!(
-            "No config found for service: {} at {:?}",
-            service_name, config_path
-        );
+        debug!("No config found for service: {} at {:?}", service_name, config_path);
         return None;
     }
 
@@ -194,9 +191,7 @@ impl PortForwardManager {
                 }
 
                 // Add main service port (priority: explicit > config file)
-                let port = service
-                    .port
-                    .or_else(|| read_service_config_port(&service_name));
+                let port = service.port.or_else(|| read_service_config_port(&service_name));
                 if let Some(port) = port {
                     mappings.push(PortMapping {
                         service_name: service_name.clone(),
@@ -205,20 +200,14 @@ impl PortForwardManager {
                         remote_port: port,
                         process_pid: None,
                     });
-                    debug!(
-                        "Added port mapping for {}: {}->{}",
-                        service_name,
-                        offset + port,
-                        port
-                    );
+                    debug!("Added port mapping for {}: {}->{}", service_name, offset + port, port);
                 } else {
                     debug!("No port mapping found for service: {}", service_name);
                 }
 
                 // Add debug port if present (priority: explicit > config file)
-                let debug_port = service
-                    .debug_port
-                    .or_else(|| read_service_config_debug_port(&service_name));
+                let debug_port =
+                    service.debug_port.or_else(|| read_service_config_debug_port(&service_name));
                 if let Some(debug_port) = debug_port {
                     mappings.push(PortMapping {
                         service_name: service_name.clone(),
@@ -267,10 +256,8 @@ impl PortForwardManager {
                     mapping.process_pid = Some(pid);
 
                     // Write PID file
-                    let pid_file = pid_dir.join(format!(
-                        "{}_{:?}.pid",
-                        mapping.service_name, mapping.port_type
-                    ));
+                    let pid_file = pid_dir
+                        .join(format!("{}_{:?}.pid", mapping.service_name, mapping.port_type));
                     let _ = fs::write(&pid_file, pid.to_string());
 
                     debug!(
@@ -282,10 +269,7 @@ impl PortForwardManager {
                     std::mem::forget(child);
                 }
                 Err(e) => {
-                    warn!(
-                        "Failed to start port forward for {}: {}",
-                        mapping.service_name, e
-                    );
+                    warn!("Failed to start port forward for {}: {}", mapping.service_name, e);
                 }
             }
         }

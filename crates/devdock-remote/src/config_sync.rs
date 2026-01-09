@@ -14,17 +14,11 @@ pub fn sync_profile(workspace: &str, profile_path: &Path, verbose: bool) -> Resu
     }
 
     if !profile_path.exists() {
-        return Err(RemoteError::ConfigSyncError(format!(
-            "Profile not found: {:?}",
-            profile_path
-        )));
+        return Err(RemoteError::ConfigSyncError(format!("Profile not found: {:?}", profile_path)));
     }
 
     // Note: Directory creation is handled by sync_all_config for efficiency
-    debug!(
-        "Copying profile using coder: {:?} -> {}",
-        profile_path, workspace
-    );
+    debug!("Copying profile using coder: {:?} -> {}", profile_path, workspace);
 
     // Read the file content
     let content = std::fs::read_to_string(profile_path)
@@ -190,10 +184,7 @@ pub fn sync_gcloud_credentials(workspace: &str, verbose: bool) -> Result<()> {
     }
 
     // Verify we have the critical ADC file
-    if !gcloud_temp
-        .join("application_default_credentials.json")
-        .exists()
-    {
+    if !gcloud_temp.join("application_default_credentials.json").exists() {
         return Err(RemoteError::ConfigSyncError(
             "application_default_credentials.json not found locally - run: gcloud auth application-default login".to_string()
         ));
@@ -362,10 +353,7 @@ pub fn sync_gcloud_credentials(workspace: &str, verbose: bool) -> Result<()> {
                 std::thread::sleep(Duration::from_millis(200));
             }
             Err(e) => {
-                return Err(RemoteError::ConfigSyncError(format!(
-                    "Failed to check status: {}",
-                    e
-                )));
+                return Err(RemoteError::ConfigSyncError(format!("Failed to check status: {}", e)));
             }
         }
     };
@@ -376,10 +364,7 @@ pub fn sync_gcloud_credentials(workspace: &str, verbose: bool) -> Result<()> {
             let auth_error = String::from_utf8_lossy(&output.stderr);
 
             if status.success() && !auth_output.trim().is_empty() {
-                info!(
-                    "gcloud credentials synced and verified: {}",
-                    auth_output.trim()
-                );
+                info!("gcloud credentials synced and verified: {}", auth_output.trim());
                 if verbose {
                     println!("      (authenticated as: {})", auth_output.trim());
                 }
@@ -395,10 +380,7 @@ pub fn sync_gcloud_credentials(workspace: &str, verbose: bool) -> Result<()> {
                     eprintln!("     3. gcloud auth application-default login");
                     eprintln!();
                 } else if !auth_output.trim().is_empty() || !auth_error.trim().is_empty() {
-                    debug!(
-                        "gcloud auth check completed but no active account: {}",
-                        auth_error
-                    );
+                    debug!("gcloud auth check completed but no active account: {}", auth_error);
                     if verbose {
                         println!("      (no active account found)");
                     }

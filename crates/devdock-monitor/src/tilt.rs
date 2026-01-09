@@ -44,10 +44,7 @@ impl TiltClient {
     /// Get only resources that should be monitored during startup.
     pub fn get_monitored_resources(&self) -> Result<Vec<TiltResource>> {
         let all_resources = self.get_resources()?;
-        Ok(all_resources
-            .into_iter()
-            .filter(|r| r.should_monitor())
-            .collect())
+        Ok(all_resources.into_iter().filter(|r| r.should_monitor()).collect())
     }
 
     /// Get logs for a specific resource.
