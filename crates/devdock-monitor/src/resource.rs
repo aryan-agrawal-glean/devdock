@@ -96,14 +96,22 @@ impl TiltResource {
 
         let name = metadata.get("name")?.as_str()?.to_string();
 
+        // Labels can be either an object {"service":"service"} or an array ["service"]
         let labels: Vec<ResourceLabel> = metadata
             .get("labels")
-            .and_then(|l| l.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str())
-                    .map(ResourceLabel::from)
-                    .collect()
+            .map(|l| {
+                if let Some(obj) = l.as_object() {
+                    // Object format: keys are the label names
+                    obj.keys().map(|k| ResourceLabel::from(k.as_str())).collect()
+                } else if let Some(arr) = l.as_array() {
+                    // Array format: values are the label names
+                    arr.iter()
+                        .filter_map(|v| v.as_str())
+                        .map(ResourceLabel::from)
+                        .collect()
+                } else {
+                    Vec::new()
+                }
             })
             .unwrap_or_default();
 

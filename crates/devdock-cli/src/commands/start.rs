@@ -14,7 +14,11 @@ pub async fn execute(
     _ci_mode: bool,
     run_monitor: bool,
     monitor_timeout: Option<u64>,
+    telemetry_enabled: bool,
 ) -> Result<()> {
+    // Track command start time for telemetry
+    let command_start_time = chrono::Utc::now();
+    
     output::info("Starting DevDock...");
 
     // Step 1: Load and validate profile
@@ -89,6 +93,9 @@ pub async fn execute(
 
     output::info("Starting Tilt...");
     let tilt_process = start_tilt(services)?;
+    
+    // Track tilt up time for telemetry
+    let tilt_up_time = chrono::Utc::now();
 
     output::success("DevDock started!");
     println!("\n  Tilt UI: http://localhost:10350");
@@ -109,6 +116,10 @@ pub async fn execute(
         workspace_root,
         run_monitor,
         monitor_timeout,
+        telemetry_enabled,
+        profile_name,
+        command_start_time,
+        tilt_up_time,
     ).await?;
 
     Ok(())
@@ -318,10 +329,18 @@ async fn wait_for_tilt(
     workspace_root: PathBuf,
     run_monitor: bool,
     monitor_timeout: Option<u64>,
+    telemetry_enabled: bool,
+    profile_name: &str,
+    command_start_time: chrono::DateTime<chrono::Utc>,
+    tilt_up_time: chrono::DateTime<chrono::Utc>,
 ) -> Result<()> {
     use devdock_monitor::{StartupMonitor, StartupMonitorConfig, StartupResult};
     let instance_id = instance_id.to_string();
     let workspace_root = workspace_root.clone();
+    let profile_name = profile_name.to_string();
+    
+    // Track watch start time (when monitoring begins)
+    let watch_start_time = chrono::Utc::now();
     
     // Get PID before moving the process
     let tilt_pid = tilt_process.id();
@@ -352,28 +371,77 @@ async fn wait_for_tilt(
 
         tokio::select! {
             result = monitor.run() => {
-                match result {
+                match &result {
                     Ok(StartupResult::Success { duration_secs, resources }) => {
                         output::success(&format!(
                             "All {} resources healthy in {}s - monitoring complete",
                             resources.len(),
                             duration_secs
                         ));
+                        
+                        // Emit telemetry on success
+                        if telemetry_enabled {
+                            emit_telemetry(
+                                "success",
+                                resources.len(),
+                                0,
+                                &profile_name,
+                                command_start_time,
+                                tilt_up_time,
+                                watch_start_time,
+                            ).await;
+                        }
                     }
                     Ok(StartupResult::Timeout { healthy, pending, failed, .. }) => {
                         output::warn(&format!(
                             "Startup monitoring timed out: {} healthy, {} pending, {} failed",
                             healthy.len(), pending.len(), failed.len()
                         ));
+                        
+                        if telemetry_enabled {
+                            emit_telemetry(
+                                "timeout",
+                                healthy.len(),
+                                failed.len(),
+                                &profile_name,
+                                command_start_time,
+                                tilt_up_time,
+                                watch_start_time,
+                            ).await;
+                        }
                     }
                     Ok(StartupResult::Failed { failed, .. }) => {
                         output::warn(&format!(
                             "Startup monitoring failed: {} resource(s) in error state",
                             failed.len()
                         ));
+                        
+                        if telemetry_enabled {
+                            emit_telemetry(
+                                "failed",
+                                0,
+                                failed.len(),
+                                &profile_name,
+                                command_start_time,
+                                tilt_up_time,
+                                watch_start_time,
+                            ).await;
+                        }
                     }
                     Ok(StartupResult::TiltNotRunning) => {
                         output::warn("Tilt stopped during monitoring");
+                        
+                        if telemetry_enabled {
+                            emit_telemetry(
+                                "tilt_stopped",
+                                0,
+                                0,
+                                &profile_name,
+                                command_start_time,
+                                tilt_up_time,
+                                watch_start_time,
+                            ).await;
+                        }
                     }
                     Err(e) => {
                         output::warn(&format!("Monitor error: {}", e));
@@ -658,4 +726,101 @@ fn cleanup_temp_files(workspace_root: &Path) -> Result<()> {
 
     output::success(&format!("Cleaned {} file(s)/directory(s)", cleaned_count));
     Ok(())
+}
+
+/// Emit telemetry data to BigQuery
+async fn emit_telemetry(
+    status: &str,
+    healthy_count: usize,
+    failed_count: usize,
+    profile: &str,
+    command_start_time: chrono::DateTime<chrono::Utc>,
+    tilt_up_time: chrono::DateTime<chrono::Utc>,
+    watch_start_time: chrono::DateTime<chrono::Utc>,
+) {
+    use devdock_telemetry::{BigQueryEmitter, BigQueryConfig, TelemetryEmitter, SessionMetrics, TelemetrySnapshot};
+    use chrono::Utc;
+    
+    let machine_id = get_machine_id();
+    let devdock_id = uuid::Uuid::new_v4().to_string();
+    let now = Utc::now();
+    
+    // Calculate timing metrics
+    let tilt_bootstrap_secs = (tilt_up_time - command_start_time).num_seconds() as f64;
+    let total_startup_secs = (now - command_start_time).num_seconds() as f64;
+    
+    let session = SessionMetrics {
+        devdock_id: devdock_id.clone(),
+        machine_id: machine_id.clone(),
+        architecture: std::env::consts::OS.to_string(), // darwin, linux, windows
+        platform: std::env::consts::OS.to_string(),
+        project: "scio".to_string(),
+        profile: profile.to_string(),
+        branch: get_git_branch().ok(),
+        command_start_time,
+        tilt_up_time: Some(tilt_up_time),
+        watch_start_time: Some(watch_start_time),
+        startup_complete_time: Some(now),
+        tilt_bootstrap_seconds: Some(tilt_bootstrap_secs),
+        total_startup_seconds: Some(total_startup_secs),
+        startup_status: status.to_string(),
+        total_resources: (healthy_count + failed_count) as i32,
+        healthy_resources: healthy_count as i32,
+        failed_resources: failed_count as i32,
+        timestamp: now,
+    };
+    
+    let snapshot = TelemetrySnapshot {
+        session: Some(session),
+        ..Default::default()
+    };
+    
+    // Configure BigQuery emitter
+    let config = BigQueryConfig {
+        project_id: "dev-sandbox-334901".to_string(),
+        dataset: "devdock".to_string(),
+        use_adc: true,
+        ..Default::default()
+    };
+    
+    // Try to emit to BigQuery
+    match BigQueryEmitter::new(config) {
+        Ok(emitter) => {
+            match emitter.emit(&snapshot).await {
+                Ok(result) => {
+                    if result.is_success() {
+                        tracing::info!("Telemetry emitted to BigQuery: status={}", status);
+                    } else {
+                        tracing::warn!("Partial telemetry emission: {} errors", result.failure_count);
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to emit telemetry to BigQuery: {}", e);
+                }
+            }
+        }
+        Err(e) => {
+            tracing::debug!("BigQuery telemetry not available: {} (this is normal for local dev)", e);
+        }
+    }
+}
+
+/// Get a stable machine identifier
+fn get_machine_id() -> String {
+    use std::ffi::CStr;
+    
+    #[cfg(unix)]
+    {
+        let mut name = [0i8; 256];
+        unsafe {
+            if libc::gethostname(name.as_mut_ptr(), 256) == 0 {
+                if let Ok(hostname) = CStr::from_ptr(name.as_ptr()).to_str() {
+                    return hostname.to_string();
+                }
+            }
+        }
+    }
+    
+    // Fallback to USER env var
+    std::env::var("USER").unwrap_or_else(|_| "unknown".to_string())
 }

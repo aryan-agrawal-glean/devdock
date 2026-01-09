@@ -110,6 +110,27 @@ impl StartupMonitor {
         self.session_state.clear()
     }
 
+    /// Wait for Tilt to become available.
+    async fn wait_for_tilt(&self, max_wait: Duration) -> bool {
+        let start = Instant::now();
+        let check_interval = Duration::from_secs(1);
+
+        if self.config.show_progress {
+            println!("Waiting for Tilt to start...");
+        }
+
+        while start.elapsed() < max_wait {
+            if self.tilt_client.is_running() {
+                info!("Tilt is now available after {:?}", start.elapsed());
+                return true;
+            }
+            debug!("Tilt not ready yet, waiting...");
+            sleep(check_interval).await;
+        }
+
+        false
+    }
+
     /// Run the startup monitoring loop.
     pub async fn run(&self) -> Result<StartupResult> {
         if self.config.skip_if_completed && self.session_state.is_completed() {
@@ -128,8 +149,10 @@ impl StartupMonitor {
             self.config.timeout_secs, self.config.poll_interval_secs
         );
 
-        if !self.tilt_client.is_running() {
-            warn!("Tilt is not running");
+        // Wait for Tilt to become available (up to 30 seconds)
+        let tilt_ready = self.wait_for_tilt(Duration::from_secs(30)).await;
+        if !tilt_ready {
+            warn!("Tilt did not become available within 30 seconds");
             return Ok(StartupResult::TiltNotRunning);
         }
 
@@ -181,10 +204,8 @@ impl StartupMonitor {
                         return self.handle_success(elapsed, stable_healthy);
                     }
 
-                    // Some resources failed and none are still pending/stabilizing
-                    if !failed.is_empty() && pending.is_empty() && stabilizing.is_empty() {
-                        return self.handle_failure(elapsed, failed);
-                    }
+                    // Don't fail immediately - resources often briefly show as failed
+                    // during startup then recover. Only fail at timeout.
                 }
                 Err(MonitorError::TiltNotRunning) => {
                     warn!("Tilt stopped running");
@@ -252,66 +273,54 @@ impl StartupMonitor {
         failed: &[String],
         total: usize,
     ) {
-        print!("\x1B[2K\r");
+        // Simple single-line output that doesn't conflict with Tilt's output
+        let stable = stable_healthy.len();
+        let stab = stabilizing.len();
+        let pend = pending.len();
+        let fail = failed.len();
 
-        let mut parts = Vec::new();
+        // Clear line and print compact status
+        print!("\r\x1B[K");
 
-        if !stable_healthy.is_empty() {
-            parts.push(format!(
-                "\x1B[32m✓ Stable:\x1B[0m {}",
-                self.truncate_list(stable_healthy, 5)
-            ));
-        }
+        if stable == total {
+            println!(
+                "\x1B[32m✓ All {}/{} resources stable\x1B[0m",
+                stable, total
+            );
+        } else {
+            print!(
+                "\x1B[34m[{}/{}]\x1B[0m ",
+                stable, total
+            );
 
-        if !stabilizing.is_empty() {
-            // Show stabilizing resources with their progress
-            let stabilizing_with_progress: Vec<String> = stabilizing
+            if stab > 0 {
+                print!("\x1B[36m{}◐\x1B[0m ", stab);
+            }
+            if pend > 0 {
+                print!("\x1B[33m{}⟳\x1B[0m ", pend);
+            }
+            if fail > 0 {
+                print!("\x1B[31m{}✗\x1B[0m ", fail);
+            }
+
+            // Show what's not stable yet
+            let not_stable: Vec<&str> = pending
                 .iter()
-                .map(|name| {
-                    if let Some(info) = self.get_stability_info(name) {
-                        format!("{} ({})", name, info.progress_string())
-                    } else {
-                        name.clone()
-                    }
-                })
+                .chain(stabilizing.iter())
+                .chain(failed.iter())
+                .take(3)
+                .map(|s| s.as_str())
                 .collect();
-            parts.push(format!(
-                "\x1B[36m◐ Stabilizing:\x1B[0m {}",
-                self.truncate_list(&stabilizing_with_progress, 3)
-            ));
+
+            if !not_stable.is_empty() {
+                print!("waiting: {}", not_stable.join(", "));
+                if pending.len() + stabilizing.len() + failed.len() > 3 {
+                    print!("...");
+                }
+            }
+
+            io::stdout().flush().ok();
         }
-
-        if !pending.is_empty() {
-            parts.push(format!(
-                "\x1B[33m⟳ Pending:\x1B[0m {}",
-                self.truncate_list(pending, 5)
-            ));
-        }
-
-        if !failed.is_empty() {
-            parts.push(format!(
-                "\x1B[31m✗ Failed:\x1B[0m {}",
-                self.truncate_list(failed, 5)
-            ));
-        }
-
-        for part in parts {
-            println!("{}", part);
-        }
-
-        println!(
-            "\x1B[34mProgress: {}/{} resources stable\x1B[0m",
-            stable_healthy.len(),
-            total
-        );
-
-        let move_up = 2
-            + (!stable_healthy.is_empty() as usize)
-            + (!stabilizing.is_empty() as usize)
-            + (!pending.is_empty() as usize)
-            + (!failed.is_empty() as usize);
-        print!("\x1B[{}A", move_up);
-        io::stdout().flush().ok();
     }
 
     fn truncate_list(&self, items: &[String], max: usize) -> String {
@@ -325,11 +334,11 @@ impl StartupMonitor {
 
     fn handle_success(&self, elapsed: Duration, healthy: Vec<String>) -> Result<StartupResult> {
         if self.config.show_progress {
-            print!("\x1B[4B");
             println!();
             println!(
-                "\x1B[32m\x1B[1mAll {} resources are healthy! Startup complete.\x1B[0m",
-                healthy.len()
+                "\x1B[32m\x1B[1m✓ All {} resources stable in {}s\x1B[0m",
+                healthy.len(),
+                elapsed.as_secs()
             );
         }
 
@@ -405,20 +414,24 @@ impl StartupMonitor {
         drop(tracker);
 
         if self.config.show_progress {
-            print!("\x1B[5B");
             println!();
             println!(
-                "\x1B[31m\x1B[1mStartup timed out after {} seconds!\x1B[0m",
+                "\x1B[31m\x1B[1m✗ Startup timed out after {} seconds\x1B[0m",
                 self.config.timeout_secs
             );
-            if !stabilizing.is_empty() {
-                println!("Still stabilizing: {}", stabilizing.join(", "));
-            }
-            if !pending.is_empty() {
-                println!("Still pending: {}", pending.join(", "));
+            println!(
+                "  Stable: {}, Stabilizing: {}, Pending: {}, Failed: {}",
+                stable_healthy.len(),
+                stabilizing.len(),
+                pending.len(),
+                failed.len()
+            );
+            if !stabilizing.is_empty() || !pending.is_empty() {
+                let waiting: Vec<_> = stabilizing.iter().chain(pending.iter()).take(5).collect();
+                println!("  Waiting on: {}", waiting.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "));
             }
             if !failed.is_empty() {
-                println!("Failed: {}", failed.join(", "));
+                println!("  Failed: {}", failed.iter().take(5).cloned().collect::<Vec<_>>().join(", "));
             }
         }
 
@@ -451,15 +464,15 @@ impl StartupMonitor {
         })
     }
 
+    #[allow(dead_code)]
     fn handle_failure(&self, elapsed: Duration, failed: Vec<String>) -> Result<StartupResult> {
         if self.config.show_progress {
-            print!("\x1B[4B");
             println!();
             println!(
-                "\x1B[31m\x1B[1mStartup failed: {} resource(s) in error state\x1B[0m",
+                "\x1B[31m\x1B[1m✗ Startup failed: {} resource(s) in error state\x1B[0m",
                 failed.len()
             );
-            println!("Failed resources: {}", failed.join(", "));
+            println!("  Failed: {}", failed.join(", "));
         }
 
         warn!("Startup failed: resources {:?} in error state", failed);

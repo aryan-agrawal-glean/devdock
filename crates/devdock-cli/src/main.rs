@@ -70,6 +70,10 @@ enum Commands {
         /// Startup monitor timeout in seconds (default: 1200 = 20 minutes)
         #[arg(long)]
         monitor_timeout: Option<u64>,
+
+        /// Disable telemetry/metrics export to BigQuery
+        #[arg(long)]
+        no_telemetry: bool,
     },
 
     /// Stop DevDock instance
@@ -489,6 +493,7 @@ async fn main() {
             verbose,
             no_monitor,
             monitor_timeout,
+            no_telemetry,
         } => {
             if mode == "remote" {
                 commands::remote::start_remote(commands::remote::RemoteStartConfig {
@@ -508,6 +513,7 @@ async fn main() {
                     ci_mode,
                     !no_monitor, // monitoring enabled by default
                     monitor_timeout,
+                    !no_telemetry, // telemetry enabled by default
                 ).await
             }
         },

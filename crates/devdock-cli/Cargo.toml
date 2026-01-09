@@ -19,6 +19,7 @@ devdock-remote = { path = "../devdock-remote" }
 devdock-sync = { path = "../devdock-sync" }
 devdock-diagnostics = { path = "../devdock-diagnostics" }
 devdock-monitor = { path = "../devdock-monitor" }
+devdock-telemetry = { path = "../devdock-telemetry" }
 
 anyhow.workspace = true
 clap.workspace = true
