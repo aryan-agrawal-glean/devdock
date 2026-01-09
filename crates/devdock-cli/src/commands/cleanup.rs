@@ -216,8 +216,10 @@ fn clean_old_logs(devdock_dir: &PathBuf) -> Result<()> {
 
 /// Clean up stale instance records from the database
 /// 
-/// This reconciles the database state with reality by checking if instances
-/// marked as Running or Starting actually have active Tilt processes.
+/// This removes:
+/// - Instances marked as Running/Starting but without active Tilt processes
+/// - Instances in Stopping state that never completed
+/// - ALL Stopped and Error instances (cleanup all old instances)
 async fn clean_stale_instances() -> Result<usize> {
     let state_manager = StateManager::new().await?;
     let instances = state_manager.list_instances().await?;
@@ -236,13 +238,13 @@ async fn clean_stale_instances() -> Result<usize> {
                 true
             }
             InstanceStatus::Stopped | InstanceStatus::Error => {
-                // Already marked as stopped/error, no need to clean
-                false
+                // Clean up all stopped/error instances
+                true
             }
         };
         
         if should_clean {
-            output::info(&format!("  Removing stale instance {} ({})", 
+            output::info(&format!("  Removing instance {} ({})", 
                 &instance.id[..8], 
                 instance.status.as_str()
             ));

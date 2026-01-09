@@ -30,17 +30,18 @@ pub async fn execute(running_only: bool) -> Result<()> {
     }
 
     println!("\n{}", "DevDock Instances".bold());
-    println!("{}", "═".repeat(100));
+    println!("{}", "═".repeat(110));
     println!(
-        "{:<10} {:<12} {:<15} {:<8} {:<10} {:<40}",
+        "{:<10} {:<12} {:<8} {:<15} {:<8} {:<10} {:<40}",
         "ID".bold(),
         "STATUS".bold(),
+        "MODE".bold(),
         "PROFILE".bold(),
         "PORT".bold(),
         "BRANCH".bold(),
         "WORKSPACE".bold()
     );
-    println!("{}", "─".repeat(100));
+    println!("{}", "─".repeat(110));
 
     for instance in &filtered {
         let status_str = match instance.status {
@@ -51,11 +52,37 @@ pub async fn execute(running_only: bool) -> Result<()> {
             InstanceStatus::Error => "✗ Error".red().to_string(),
         };
 
-        // Truncate workspace path if too long
-        let workspace = if instance.workspace_path.len() > 38 {
-            format!("...{}", &instance.workspace_path[instance.workspace_path.len() - 35..])
+        // Display mode
+        let mode = if instance.mode == "remote" {
+            "Remote"
         } else {
-            instance.workspace_path.clone()
+            "Local"
+        };
+
+        // For remote instances, show workspace_name if available, otherwise show workspace_path
+        // For local instances, always show workspace_path
+        let workspace = if instance.mode == "remote" {
+            if let Some(ref name) = instance.workspace_name {
+                if name.len() > 38 {
+                    format!("...{}", &name[name.len() - 35..])
+                } else {
+                    name.clone()
+                }
+            } else {
+                // Fallback to path if workspace_name is missing
+                if instance.workspace_path.len() > 38 {
+                    format!("...{}", &instance.workspace_path[instance.workspace_path.len() - 35..])
+                } else {
+                    instance.workspace_path.clone()
+                }
+            }
+        } else {
+            // Local instance - show workspace path
+            if instance.workspace_path.len() > 38 {
+                format!("...{}", &instance.workspace_path[instance.workspace_path.len() - 35..])
+            } else {
+                instance.workspace_path.clone()
+            }
         };
 
         // Truncate branch if too long
@@ -66,9 +93,10 @@ pub async fn execute(running_only: bool) -> Result<()> {
         };
 
         println!(
-            "{:<10} {:<12} {:<15} {:<8} {:<10} {:<40}",
+            "{:<10} {:<12} {:<8} {:<15} {:<8} {:<10} {:<40}",
             &instance.id[..8],
             status_str,
+            mode,
             instance.profile,
             instance.port_base,
             branch,
@@ -76,7 +104,7 @@ pub async fn execute(running_only: bool) -> Result<()> {
         );
     }
 
-    println!("{}", "─".repeat(100));
+    println!("{}", "─".repeat(110));
     println!(
         "Total: {} instance{}",
         filtered.len(),

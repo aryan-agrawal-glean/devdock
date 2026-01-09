@@ -37,8 +37,8 @@ pub async fn execute(profile_name: &str, services: Option<&str>, _ci_mode: bool)
 
     // Step 5: Register instance and allocate ports
     let state_manager = StateManager::new().await?;
-    let mut port_allocator = PortAllocator::new();
-    let port_base = port_allocator.allocate()?;
+    let port_allocator = PortAllocator::new(state_manager.clone()).await;
+    let port_base = port_allocator.allocate().await?;
 
     let workspace_path = std::env::current_dir()?.display().to_string();
     let branch = get_git_branch()?;
@@ -86,7 +86,6 @@ pub async fn execute(profile_name: &str, services: Option<&str>, _ci_mode: bool)
 
     output::success("DevDock started!");
     println!("\n  Tilt UI: http://localhost:10350");
-    println!("  Services: https://local.glean.com:{}", port_base);
     println!("\nPress Ctrl+C to stop DevDock\n");
 
     // Wait for Tilt process

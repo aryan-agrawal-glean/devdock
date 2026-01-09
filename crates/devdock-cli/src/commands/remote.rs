@@ -3,7 +3,7 @@
 use anyhow::{anyhow, Result};
 use colored::Colorize;
 use devdock_remote::{coder, workspace, CoderWorkspaceConfig};
-use devdock_state::{instance::{Instance, InstanceStatus}, StateManager};
+use devdock_state::{instance::{Instance, InstanceStatus}, ports::PortAllocator, StateManager};
 use devdock_sync::daemon as sync_daemon;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -53,7 +53,14 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
     // Register instance in database
     let state = StateManager::new().await?;
     let instance_id = uuid::Uuid::new_v4().to_string();
-    let offset = calculate_port_offset(&state, port_base).await?;
+    
+    // Calculate port offset
+    let offset = if let Some(base) = port_base {
+        base
+    } else {
+        let port_allocator = PortAllocator::new(state.clone()).await;
+        port_allocator.allocate().await?
+    };
     
     let instance = Instance {
         id: instance_id.clone(),
@@ -609,29 +616,6 @@ fn find_profile(profile: &str) -> Result<PathBuf> {
     Err(anyhow!("Profile not found: {}", profile))
 }
 
-/// Calculate port offset for new instance.
-async fn calculate_port_offset(state: &StateManager, port_base: Option<u16>) -> Result<u16> {
-    if let Some(base) = port_base {
-        return Ok(base);
-    }
-    
-    // Auto-allocate port offset - only consider active instances
-    let instances = state.list_instances().await?;
-    let used_ports: Vec<u16> = instances
-        .iter()
-        .filter(|i| matches!(i.status, InstanceStatus::Running | InstanceStatus::Starting))
-        .map(|i| i.port_base)
-        .collect();
-    
-    // Find first available offset in increments of 1000
-    for offset in (2000..65000).step_by(1000) {
-        if !used_ports.contains(&offset) {
-            return Ok(offset);
-        }
-    }
-    
-    Err(anyhow!("No available port offsets"))
-}
 
 /// Get current timestamp.
 fn now() -> i64 {
