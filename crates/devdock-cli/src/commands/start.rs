@@ -126,25 +126,57 @@ pub async fn execute(
 
 /// Check if Docker is running
 fn check_docker() -> Result<()> {
+    use std::sync::mpsc;
+    use std::thread;
+    use std::time::Duration;
+
     output::info("Checking Docker...");
 
-    let output = Command::new("docker")
-        .arg("info")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .context("Failed to run 'docker info'")?;
+    // Run docker info with a timeout to prevent hanging
+    let (tx, rx) = mpsc::channel();
 
-    if !output.success() {
-        anyhow::bail!(
-            "Docker is not running. Please start Docker and try again.\n\
-             To start Docker (macOS with colima):\n\
-             colima start --memory 10 --cpu 4 --network-address slirp --vm-type vz"
-        );
+    thread::spawn(move || {
+        let result = Command::new("docker")
+            .arg("info")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        tx.send(result).ok();
+    });
+
+    // Wait for result with 10 second timeout
+    match rx.recv_timeout(Duration::from_secs(10)) {
+        Ok(Ok(status)) if status.success() => {
+            output::success("Docker is running");
+            Ok(())
+        }
+        Ok(Ok(_)) => {
+            anyhow::bail!(
+                "Docker is not running. Please start Docker and try again.\n\
+                 \n\
+                 To start Docker:\n\
+                 • macOS with colima: colima start --memory 10 --cpu 4 --network-address slirp --vm-type vz\n\
+                 • Linux: sudo systemctl start docker"
+            )
+        }
+        Ok(Err(e)) => {
+            anyhow::bail!("Failed to run 'docker info': {}", e)
+        }
+        Err(_timeout) => {
+            anyhow::bail!(
+                "Docker check timed out after 10 seconds.\n\
+                 \n\
+                 This usually means:\n\
+                 1. Docker daemon is not running\n\
+                 2. Docker daemon is stuck/unresponsive\n\
+                 \n\
+                 Try:\n\
+                 • Restart Docker: colima start --memory 10 --cpu 4 --network-address slirp --vm-type vz (macOS) or sudo systemctl restart docker (Linux)\n\
+                 • Check Docker status: docker ps\n\
+                 • Kill stuck processes: pkill -9 docker"
+            )
+        }
     }
-
-    output::success("Docker is running");
-    Ok(())
 }
 
 /// Setup Docker networks
@@ -475,12 +507,13 @@ async fn wait_for_tilt(
             #[cfg(unix)]
             {
                 output::info(&format!("Terminating Tilt process: {}", tilt_pid));
-                // Send SIGTERM
+                // Send SIGTERM for graceful shutdown
                 unsafe {
                     libc::kill(tilt_pid as i32, libc::SIGTERM);
                 }
-                // Wait a bit for graceful shutdown
-                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+
+                // Wait briefly for graceful shutdown (reduced from 2s to 500ms)
+                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
                 // Check if still running, send SIGKILL
                 if unsafe { libc::kill(tilt_pid as i32, 0) } == 0 {
@@ -544,16 +577,16 @@ async fn wait_for_tilt(
 async fn perform_cleanup(_instance_id: &str, workspace_root: &Path) -> Result<()> {
     output::info("Cleaning up DevDock resources...");
 
-    // 1. Stop Docker containers
+    // 1. Stop Docker containers (fast with batch command)
     cleanup_docker_containers()?;
 
-    // 2. Kill processes on ports
+    // 2. Kill processes on ports (fast without sleeps)
     cleanup_port_processes()?;
 
-    // 3. Clean up dangling images
+    // 3. Clean up dangling images (optimized batch command)
     cleanup_dangling_images()?;
 
-    // 4. Clean up temporary files
+    // 4. Clean up temporary files (fast)
     cleanup_temp_files(workspace_root)?;
 
     output::success("Cleanup complete");
@@ -564,44 +597,44 @@ async fn perform_cleanup(_instance_id: &str, workspace_root: &Path) -> Result<()
 fn cleanup_docker_containers() -> Result<()> {
     output::info("Stopping Docker containers...");
 
-    // Get all devdock containers
-    let output = Command::new("docker")
-        .args([
-            "ps",
-            "-a",
-            "--filter",
-            "name=devdock-",
-            "--format",
-            "{{.Names}}",
-        ])
-        .output()?;
+    // Use batch docker command for much faster cleanup
+    // This stops and removes all devdock containers in one command
+    #[cfg(unix)]
+    {
+        let status = Command::new("sh")
+            .arg("-c")
+            .arg("docker ps -a --filter 'name=devdock-' --format '{{.Names}}' | xargs -r docker rm -f 2>/dev/null || true")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
 
-    if output.status.success() {
-        let containers = String::from_utf8_lossy(&output.stdout);
-        let container_list: Vec<&str> = containers.lines().filter(|s| !s.is_empty()).collect();
+        if let Ok(status) = status {
+            if status.success() {
+                output::success("Stopped Docker containers");
+            }
+        }
+    }
 
-        if !container_list.is_empty() {
-            // Stop containers
-            for container in &container_list {
+    #[cfg(not(unix))]
+    {
+        // Fallback for non-Unix systems
+        let output = Command::new("docker")
+            .args(["ps", "-a", "--filter", "name=devdock-", "-q"])
+            .output()?;
+
+        if output.status.success() {
+            let container_ids = String::from_utf8_lossy(&output.stdout);
+            if !container_ids.trim().is_empty() {
                 Command::new("docker")
-                    .args(["stop", container])
+                    .arg("rm")
+                    .arg("-f")
+                    .args(container_ids.lines())
                     .stdout(Stdio::null())
                     .stderr(Stdio::null())
                     .status()
                     .ok();
+                output::success("Stopped Docker containers");
             }
-
-            // Remove containers
-            for container in &container_list {
-                Command::new("docker")
-                    .args(["rm", "-f", container])
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .status()
-                    .ok();
-            }
-
-            output::success(&format!("Stopped {} container(s)", container_list.len()));
         }
     }
 
@@ -612,13 +645,15 @@ fn cleanup_docker_containers() -> Result<()> {
 fn cleanup_port_processes() -> Result<()> {
     output::info("Cleaning up processes on ports...");
 
-    let ports = vec![8888, 8880, 7070, 8090, 7972, 3407, 3408, 10350]; // Added Tilt port
+    let ports = vec![8888, 8880, 7070, 8090, 7972, 3407, 3408, 10350];
     let mut killed = 0;
 
-    for port in ports {
-        #[cfg(unix)]
-        {
-            // Use lsof to find processes on port
+    #[cfg(unix)]
+    {
+        // Collect all PIDs first to kill them in batch
+        let mut pids_to_kill = Vec::new();
+
+        for port in ports {
             let output = Command::new("lsof")
                 .args(["-i", &format!(":{}", port), "-t"])
                 .output();
@@ -628,18 +663,18 @@ fn cleanup_port_processes() -> Result<()> {
                     let pids = String::from_utf8_lossy(&output.stdout);
                     for pid_str in pids.lines() {
                         if let Ok(pid) = pid_str.parse::<i32>() {
-                            unsafe {
-                                // Try SIGTERM first
-                                if libc::kill(pid, libc::SIGTERM) == 0 {
-                                    killed += 1;
-                                    // Wait a bit
-                                    std::thread::sleep(std::time::Duration::from_secs(1));
-                                    // Force kill if still running
-                                    libc::kill(pid, libc::SIGKILL);
-                                }
-                            }
+                            pids_to_kill.push(pid);
                         }
                     }
+                }
+            }
+        }
+
+        // Kill all processes at once with SIGKILL (fast)
+        for pid in pids_to_kill {
+            unsafe {
+                if libc::kill(pid, libc::SIGKILL) == 0 {
+                    killed += 1;
                 }
             }
         }
@@ -652,28 +687,49 @@ fn cleanup_port_processes() -> Result<()> {
     Ok(())
 }
 
-/// Remove dangling Docker images
+
+/// Remove dangling Docker images (optimized batch version)
 fn cleanup_dangling_images() -> Result<()> {
     output::info("Cleaning up dangling images...");
 
-    let output = Command::new("docker")
-        .args(["images", "--filter", "dangling=true", "-q"])
-        .output()?;
+    #[cfg(unix)]
+    {
+        // Use batch command for fast cleanup
+        let status = Command::new("sh")
+            .arg("-c")
+            .arg("docker images --filter 'dangling=true' -q | xargs -r docker rmi 2>/dev/null || true")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
 
-    if output.status.success() {
-        let images = String::from_utf8_lossy(&output.stdout);
-        let image_list: Vec<&str> = images.lines().filter(|s| !s.is_empty()).collect();
+        if let Ok(status) = status {
+            if status.success() {
+                output::success("Cleaned up dangling images");
+            }
+        }
+    }
 
-        if !image_list.is_empty() {
-            for image in &image_list {
+    #[cfg(not(unix))]
+    {
+        // Fallback for non-Unix systems
+        let output = Command::new("docker")
+            .args(["images", "--filter", "dangling=true", "-q"])
+            .output()?;
+
+        if output.status.success() {
+            let images = String::from_utf8_lossy(&output.stdout);
+            let image_list: Vec<&str> = images.lines().filter(|s| !s.is_empty()).collect();
+
+            if !image_list.is_empty() {
                 Command::new("docker")
-                    .args(["rmi", image])
+                    .arg("rmi")
+                    .args(&image_list)
                     .stdout(Stdio::null())
                     .stderr(Stdio::null())
                     .status()
                     .ok();
+                output::success(&format!("Removed {} dangling image(s)", image_list.len()));
             }
-            output::success(&format!("Removed {} dangling image(s)", image_list.len()));
         }
     }
 
