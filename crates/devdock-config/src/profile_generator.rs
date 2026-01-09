@@ -200,6 +200,7 @@ impl TempProfileGenerator {
     /// Queries AWS EC2 for the bastion instance in the specified region.
     fn get_aws_bastion_instance_id(&self, region: &str) -> Option<String> {
         // Use AWS CLI to describe instances
+        println!("   └─ Looking up AWS bastion instance in region: {}", region);
         let output = Command::new("aws")
             .args([
                 "ec2",
@@ -217,21 +218,22 @@ impl TempProfileGenerator {
             Ok(out) if out.status.success() => {
                 let instance_id = String::from_utf8_lossy(&out.stdout).trim().to_string();
                 if instance_id.is_empty() || instance_id == "None" {
-                    warn!("No running bastion instance found in region {}", region);
+                    eprintln!("⚠️  No running bastion instance found in region {}", region);
                     None
                 } else {
+                    println!("   └─ Found bastion instance: {}", instance_id);
                     Some(instance_id)
                 }
             }
             Ok(out) => {
-                warn!(
-                    "Failed to get bastion instance: {}",
+                eprintln!(
+                    "⚠️  Failed to get bastion instance: {}",
                     String::from_utf8_lossy(&out.stderr)
                 );
                 None
             }
             Err(e) => {
-                warn!("Failed to execute aws cli: {}", e);
+                eprintln!("⚠️  Failed to execute aws cli: {}", e);
                 None
             }
         }
@@ -459,6 +461,8 @@ impl TempProfileGenerator {
 
         // SQL-specific configuration
         if name == "sql" {
+            let platform = self.profile.platform.as_str();
+            
             if infra_type == "local" {
                 // Set k8s_service_account for local SQL
                 self.profile.k8s_service_account = Some("root".to_string());
