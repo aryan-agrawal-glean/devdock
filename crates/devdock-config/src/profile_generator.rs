@@ -461,8 +461,6 @@ impl TempProfileGenerator {
 
         // SQL-specific configuration
         if name == "sql" {
-            let platform = self.profile.platform.as_str();
-            
             if infra_type == "local" {
                 // Set k8s_service_account for local SQL
                 self.profile.k8s_service_account = Some("root".to_string());
