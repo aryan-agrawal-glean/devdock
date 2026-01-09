@@ -61,4 +61,3 @@ impl Instance {
         format!("{:x}", timestamp)
     }
 }
-

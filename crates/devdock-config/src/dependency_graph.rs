@@ -2,7 +2,7 @@
 
 use crate::service_config::ServiceConfig;
 use anyhow::{Context, Result};
-use devdock_core::profile::{Profile, InfraConfig, ServiceConfig as ProfileServiceConfig};
+use devdock_core::profile::{InfraConfig, Profile, ServiceConfig as ProfileServiceConfig};
 use devdock_core::types::DeploymentType;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -41,7 +41,8 @@ impl DependencyGraph {
         // Create an expanded profile with transitive dependencies resolved
         let step_start = std::time::Instant::now();
         let expanded = Self::expand_dependencies(profile, workspace_root).await?;
-        println!("      └─ Expanded {} deps in {:.2}s", 
+        println!(
+            "      └─ Expanded {} deps in {:.2}s",
             expanded.services.len() + expanded.infra.len(),
             step_start.elapsed().as_secs_f64()
         );
@@ -49,7 +50,8 @@ impl DependencyGraph {
         // Load all service configs in parallel
         let step_start = std::time::Instant::now();
         let configs = Self::load_all_configs(&expanded, workspace_root).await?;
-        println!("      └─ Loaded {} configs in {:.2}s", 
+        println!(
+            "      └─ Loaded {} configs in {:.2}s",
             configs.len(),
             step_start.elapsed().as_secs_f64()
         );
@@ -68,8 +70,11 @@ impl DependencyGraph {
 
         // Validate graph (no cycles, all deps exist)
         graph.validate()?;
-        
-        println!("      └─ Graph build total: {:.2}s", total_start.elapsed().as_secs_f64());
+
+        println!(
+            "      └─ Graph build total: {:.2}s",
+            total_start.elapsed().as_secs_f64()
+        );
 
         Ok(graph)
     }
@@ -99,34 +104,39 @@ impl DependencyGraph {
                 if !processed.contains(&dep) && !to_process.contains(&dep) {
                     // Check what type of component the dependency is
                     let service_path = workspace_root.join(format!(
-                        "devdock/config/services/{}/devdock_config.json", dep
+                        "devdock/config/services/{}/devdock_config.json",
+                        dep
                     ));
-                    let infra_path = workspace_root.join(format!(
-                        "devdock/config/infra/{}", dep
-                    ));
+                    let infra_path = workspace_root.join(format!("devdock/config/infra/{}", dep));
 
                     if service_path.exists() {
                         // It's a service, add with default remote type
                         if !expanded.services.contains_key(&dep) {
-                            expanded.services.insert(dep.clone(), ProfileServiceConfig {
-                                deployment_type: DeploymentType::Remote,
-                                env: HashMap::new(),
-                                hot_reload: None,
-                                ini_overrides: Vec::new(),
-                                script: None,
-                                service: None,
-                                depends_on_services: None,
-                                timeout: None,
-                                config: HashMap::new(),
-                            });
+                            expanded.services.insert(
+                                dep.clone(),
+                                ProfileServiceConfig {
+                                    deployment_type: DeploymentType::Remote,
+                                    env: HashMap::new(),
+                                    hot_reload: None,
+                                    ini_overrides: Vec::new(),
+                                    script: None,
+                                    service: None,
+                                    depends_on_services: None,
+                                    timeout: None,
+                                    config: HashMap::new(),
+                                },
+                            );
                         }
                     } else if infra_path.exists() {
                         // It's infra, add with default local type
                         if !expanded.infra.contains_key(&dep) {
-                            expanded.infra.insert(dep.clone(), InfraConfig {
-                                deployment_type: DeploymentType::Local,
-                                config: HashMap::new(),
-                            });
+                            expanded.infra.insert(
+                                dep.clone(),
+                                InfraConfig {
+                                    deployment_type: DeploymentType::Local,
+                                    config: HashMap::new(),
+                                },
+                            );
                         }
                     }
 
@@ -140,17 +150,20 @@ impl DependencyGraph {
         // Only add QE if the profile already has services AND QE wasn't resolved via dependencies
         let has_services = !profile.services.is_empty();
         if has_services && !expanded.services.contains_key("qe") {
-            expanded.services.insert("qe".to_string(), ProfileServiceConfig {
-                deployment_type: DeploymentType::Remote,
-                env: HashMap::new(),
-                hot_reload: None,
-                ini_overrides: Vec::new(),
-                script: None,
-                service: None,
-                depends_on_services: None,
-                timeout: None,
-                config: HashMap::new(),
-            });
+            expanded.services.insert(
+                "qe".to_string(),
+                ProfileServiceConfig {
+                    deployment_type: DeploymentType::Remote,
+                    env: HashMap::new(),
+                    hot_reload: None,
+                    ini_overrides: Vec::new(),
+                    script: None,
+                    service: None,
+                    depends_on_services: None,
+                    timeout: None,
+                    config: HashMap::new(),
+                },
+            );
         }
 
         Ok(expanded)
@@ -160,7 +173,8 @@ impl DependencyGraph {
     async fn find_dependencies(workspace_root: &Path, name: &str) -> Vec<String> {
         // Try service config
         let service_path = workspace_root.join(format!(
-            "devdock/config/services/{}/devdock_config.json", name
+            "devdock/config/services/{}/devdock_config.json",
+            name
         ));
 
         if service_path.exists() {
@@ -222,9 +236,9 @@ impl DependencyGraph {
                 Ok(Err(e)) => {
                     // Skip warnings for known hook services that don't have config files
                     let error_msg = e.to_string();
-                    let is_hook_service = error_msg.contains("pre_setup") 
-                        || error_msg.contains("post_setup");
-                    
+                    let is_hook_service =
+                        error_msg.contains("pre_setup") || error_msg.contains("post_setup");
+
                     if !is_hook_service {
                         eprintln!("Warning: Failed to load config: {}", e);
                     }
@@ -248,7 +262,9 @@ impl DependencyGraph {
             workspace_root.join(format!(
                 "devdock/config/services/{}/devdock_config_{}.json",
                 service_name,
-                std::env::var("CLOUD_PLATFORM").unwrap_or_default().to_lowercase()
+                std::env::var("CLOUD_PLATFORM")
+                    .unwrap_or_default()
+                    .to_lowercase()
             )),
             workspace_root.join(format!(
                 "devdock/config/services/{}/devdock_config.json",
@@ -273,11 +289,9 @@ impl DependencyGraph {
         }
 
         // Check if Tiltfile exists - if so, return default config
-        let tiltfile_path = workspace_root.join(format!(
-            "devdock/config/services/{}/Tiltfile",
-            service_name
-        ));
-        
+        let tiltfile_path =
+            workspace_root.join(format!("devdock/config/services/{}/Tiltfile", service_name));
+
         if tiltfile_path.exists() {
             return Ok(ServiceConfig::default());
         }
@@ -288,10 +302,7 @@ impl DependencyGraph {
     }
 
     /// Load a single infra config
-    async fn load_infra_config(
-        workspace_root: &Path,
-        infra_name: &str,
-    ) -> Result<ServiceConfig> {
+    async fn load_infra_config(workspace_root: &Path, infra_name: &str) -> Result<ServiceConfig> {
         // Try to load config file if it exists, otherwise return minimal config
         let config_path = workspace_root.join(format!(
             "devdock/config/infra/{}/devdock_config.json",
@@ -315,7 +326,7 @@ impl DependencyGraph {
         // added by expand_dependencies() with default types (remote for services, local for infra).
         // If a service declares a dependency that doesn't exist in the codebase, it will
         // simply use the remote version, matching Python behavior.
-        
+
         // Only check for cycles (which are actual errors)
         for name in self.nodes.keys() {
             let mut visited = HashSet::new();
@@ -382,4 +393,3 @@ impl DependencyGraph {
             .collect()
     }
 }
-

@@ -32,4 +32,3 @@ impl Default for DockerComposeGenerator {
         Self::new()
     }
 }
-

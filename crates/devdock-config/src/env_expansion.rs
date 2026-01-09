@@ -48,7 +48,10 @@ mod tests {
     #[test]
     fn test_expand_simple() {
         std::env::set_var("TEST_VAR", "test_value");
-        assert_eq!(expand_env_vars("prefix_${TEST_VAR}_suffix"), "prefix_test_value_suffix");
+        assert_eq!(
+            expand_env_vars("prefix_${TEST_VAR}_suffix"),
+            "prefix_test_value_suffix"
+        );
     }
 
     #[test]
@@ -78,5 +81,3 @@ mod tests {
         );
     }
 }
-
-

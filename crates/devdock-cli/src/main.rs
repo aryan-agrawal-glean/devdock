@@ -1,8 +1,8 @@
 //! DevDock CLI entry point.
 
 mod commands;
-mod output;
 mod logging;
+mod output;
 
 use clap::{Parser, Subcommand};
 use colored::Colorize;
@@ -62,6 +62,18 @@ enum Commands {
         /// Show detailed progress (all substeps)
         #[arg(long)]
         verbose: bool,
+
+        /// Disable startup monitor (by default, waits for all resources to become healthy)
+        #[arg(long)]
+        no_monitor: bool,
+
+        /// Startup monitor timeout in seconds (default: 1200 = 20 minutes)
+        #[arg(long)]
+        monitor_timeout: Option<u64>,
+
+        /// Disable telemetry/metrics export to BigQuery
+        #[arg(long)]
+        no_telemetry: bool,
     },
 
     /// Stop DevDock instance
@@ -194,6 +206,21 @@ enum Commands {
         /// Command that was run when the issue occurred (skip interactive prompt)
         #[arg(long)]
         command: Option<String>,
+    },
+
+    /// Monitor startup resources until all healthy (or timeout)
+    Monitor {
+        /// Timeout in seconds (default: 1200 = 20 minutes)
+        #[arg(short, long)]
+        timeout: Option<u64>,
+
+        /// Polling interval in seconds (default: 2)
+        #[arg(short, long)]
+        interval: Option<u64>,
+
+        /// Disable desktop notifications
+        #[arg(long)]
+        no_notify: bool,
     },
 }
 
@@ -423,19 +450,19 @@ async fn main() {
         let workspace_name = &args[3];
         let repo_path = std::path::PathBuf::from(&args[4]);
         let full_mode = args.get(5).map(|s| s == "true").unwrap_or(false);
-        
+
         if let Err(e) = devdock_sync::daemon::run_daemon_process(
             devdock_id,
             workspace_name,
             &repo_path,
-            full_mode
+            full_mode,
         ) {
             eprintln!("Daemon process error: {}", e);
             process::exit(1);
         }
         process::exit(0);
     }
-    
+
     let cli = Cli::parse();
 
     // Set up logging
@@ -464,6 +491,9 @@ async fn main() {
             port_base,
             auto_forward,
             verbose,
+            no_monitor,
+            monitor_timeout,
+            no_telemetry,
         } => {
             if mode == "remote" {
                 commands::remote::start_remote(commands::remote::RemoteStartConfig {
@@ -475,11 +505,20 @@ async fn main() {
                     auto_forward,
                     services,
                     verbose,
-                }).await
+                })
+                .await
             } else {
-                commands::start::execute(&profile, services.as_deref(), ci_mode).await
+                commands::start::execute(
+                    &profile,
+                    services.as_deref(),
+                    ci_mode,
+                    !no_monitor, // monitoring enabled by default
+                    monitor_timeout,
+                    !no_telemetry, // telemetry enabled by default
+                )
+                .await
             }
-        },
+        }
 
         Commands::Stop { target, force } => commands::stop::execute(target.as_deref(), force).await,
 
@@ -495,7 +534,9 @@ async fn main() {
 
         Commands::Cleanup { soft, logs } => commands::cleanup::execute(soft, logs).await,
 
-        Commands::Exec { container, command } => commands::exec::execute(&container, &command).await,
+        Commands::Exec { container, command } => {
+            commands::exec::execute(&container, &command).await
+        }
 
         Commands::Docker { command } => match command {
             DockerCommands::Check => commands::docker::check().await,
@@ -517,9 +558,11 @@ async fn main() {
 
         Commands::Ports { command } => match command {
             PortCommands::List { instance } => commands::ports::list(instance).await,
-            PortCommands::Forward { all, service, custom } => {
-                commands::ports::forward(all, service.as_deref(), custom.as_deref()).await
-            }
+            PortCommands::Forward {
+                all,
+                service,
+                custom,
+            } => commands::ports::forward(all, service.as_deref(), custom.as_deref()).await,
             PortCommands::Stop { all, service } => {
                 commands::ports::stop(all, service.as_deref()).await
             }
@@ -535,21 +578,21 @@ async fn main() {
             summary,
             description,
             command,
-        } => {
-            match (summary, description, command) {
-                (Some(s), Some(d), Some(c)) => {
-                    commands::report::report_bug_with_details(s, d, c).await
-                }
-                _ => commands::report::report_bug().await,
-            }
-        }
+        } => match (summary, description, command) {
+            (Some(s), Some(d), Some(c)) => commands::report::report_bug_with_details(s, d, c).await,
+            _ => commands::report::report_bug().await,
+        },
+
+        Commands::Monitor {
+            timeout,
+            interval,
+            no_notify,
+        } => commands::monitor::execute(timeout, interval, no_notify).await,
 
         Commands::Service { command } => match command {
             ServiceCommands::Enable { name } => commands::service::enable(&name).await,
             ServiceCommands::Disable { name } => commands::service::disable(&name).await,
-            ServiceCommands::Logs { name, follow } => {
-                commands::service::logs(&name, follow).await
-            }
+            ServiceCommands::Logs { name, follow } => commands::service::logs(&name, follow).await,
         },
 
         Commands::Profile { command } => match command {

@@ -80,12 +80,10 @@ pub struct TempProfile {
 }
 
 /// DNS kubectl enabled projects
-const DNS_KUBECTL_ENABLED_PROJECTS: &[&str] = &[
-    "dev-sandbox-334901",
-    "salessavvy-test",
-];
+const DNS_KUBECTL_ENABLED_PROJECTS: &[&str] = &["dev-sandbox-334901", "salessavvy-test"];
 
 /// Google Cloud Platform implementation
+#[allow(dead_code)]
 pub struct GooglePlatform {
     project: String,
     zone: String,
@@ -192,7 +190,10 @@ impl Platform for GooglePlatform {
             .status()
             .await
             .context("Failed to switch gcloud project")?;
-        println!("      └─ gcloud set project: {:.2}s", step_start.elapsed().as_secs_f64());
+        println!(
+            "      └─ gcloud set project: {:.2}s",
+            step_start.elapsed().as_secs_f64()
+        );
 
         // Get cluster credentials
         let cluster = if self.project.contains("apps") || self.project.contains("canary") {
@@ -217,11 +218,12 @@ impl Platform for GooglePlatform {
             }
 
             let step_start = std::time::Instant::now();
-            let status = Command::new("gcloud")
-                .args(&args)
-                .status()
-                .await?;
-            println!("      └─ gcloud get-credentials ({}): {:.2}s", cluster, step_start.elapsed().as_secs_f64());
+            let status = Command::new("gcloud").args(&args).status().await?;
+            println!(
+                "      └─ gcloud get-credentials ({}): {:.2}s",
+                cluster,
+                step_start.elapsed().as_secs_f64()
+            );
 
             if !status.success() {
                 eprintln!(
@@ -235,7 +237,11 @@ impl Platform for GooglePlatform {
     }
 
     fn update_devdock_config(&self, config: &mut IniConfig) {
-        config.set("google", "storage.configbucket", format!("config-{}", self.project));
+        config.set(
+            "google",
+            "storage.configbucket",
+            format!("config-{}", self.project),
+        );
         config.set("google", "apps.useCentralApp", "false");
         config.set("google", "docbuilderRequest.enabled", "true");
     }
@@ -246,7 +252,12 @@ impl Platform for GooglePlatform {
         profile.zone = self.zone.clone();
         profile.region = self.region.clone();
         profile.project_number = self.project_number.clone();
-        profile.dns_kubectl = if self.dns_kubectl_enabled { "enabled" } else { "disabled" }.to_string();
+        profile.dns_kubectl = if self.dns_kubectl_enabled {
+            "enabled"
+        } else {
+            "disabled"
+        }
+        .to_string();
     }
 
     fn name(&self) -> &str {
@@ -277,7 +288,7 @@ impl AWSPlatform {
 
         Ok(Self {
             project,
-            zone: String::new(),  // AWS doesn't use zones the same way
+            zone: String::new(), // AWS doesn't use zones the same way
             region,
         })
     }
@@ -437,5 +448,3 @@ pub async fn create_platform_with_multi_project(
         _ => anyhow::bail!("Unsupported platform: {}", platform_name),
     }
 }
-
-

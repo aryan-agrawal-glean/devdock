@@ -102,7 +102,8 @@ impl DependencyResolver {
                 if matches!(
                     opensearch_config.deployment_type,
                     devdock_core::types::DeploymentType::Remote
-                ) && profile.infra.contains_key("bastion") {
+                ) && profile.infra.contains_key("bastion")
+                {
                     graph
                         .entry("opensearch".to_string())
                         .or_default()
@@ -117,7 +118,8 @@ impl DependencyResolver {
                 if matches!(
                     sql_config.deployment_type,
                     devdock_core::types::DeploymentType::Remote
-                ) && profile.infra.contains_key("bastion") {
+                ) && profile.infra.contains_key("bastion")
+                {
                     graph
                         .entry("sql".to_string())
                         .or_default()
@@ -240,4 +242,3 @@ mod tests {
         assert!(resolved.contains(&"qe".to_string()));
     }
 }
-

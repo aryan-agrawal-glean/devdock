@@ -14,7 +14,9 @@ pub async fn execute(detailed: bool) -> Result<()> {
     let workspace_path = std::env::current_dir()?.display().to_string();
 
     // Try to find instance for current workspace
-    let instance = state_manager.get_instance_by_workspace(&workspace_path).await?;
+    let instance = state_manager
+        .get_instance_by_workspace(&workspace_path)
+        .await?;
 
     match instance {
         Some(instance) => {
@@ -29,7 +31,10 @@ pub async fn execute(detailed: bool) -> Result<()> {
                 .collect();
 
             if running.is_empty() {
-                println!("\n{}", "No DevDock instance running for this workspace.".yellow());
+                println!(
+                    "\n{}",
+                    "No DevDock instance running for this workspace.".yellow()
+                );
                 println!("\nTo start DevDock:");
                 println!("  devdock start <profile_name>");
             } else {
@@ -53,7 +58,11 @@ pub async fn execute(detailed: bool) -> Result<()> {
     Ok(())
 }
 
-async fn print_instance_status(state_manager: &StateManager, instance: &Instance, detailed: bool) -> Result<()> {
+async fn print_instance_status(
+    state_manager: &StateManager,
+    instance: &Instance,
+    detailed: bool,
+) -> Result<()> {
     let status_str = match instance.status {
         InstanceStatus::Running => "● Running".green(),
         InstanceStatus::Starting => "◐ Starting".yellow(),
@@ -76,14 +85,8 @@ async fn print_instance_status(state_manager: &StateManager, instance: &Instance
         println!("{}", "─".repeat(50));
         println!("  Workspace:  {}", instance.workspace_path);
         println!("  Full ID:    {}", instance.id);
-        println!(
-            "  Created:    {}",
-            format_timestamp(instance.created_at)
-        );
-        println!(
-            "  Updated:    {}",
-            format_timestamp(instance.updated_at)
-        );
+        println!("  Created:    {}", format_timestamp(instance.created_at));
+        println!("  Updated:    {}", format_timestamp(instance.updated_at));
 
         // Check Docker containers (only for local mode)
         if instance.mode == "local" {
@@ -113,24 +116,24 @@ async fn print_instance_status(state_manager: &StateManager, instance: &Instance
     // Show port mappings for remote instances
     if instance.mode == "remote" {
         let mappings = state_manager.get_port_mappings(&instance.id).await?;
-        
+
         if !mappings.is_empty() {
             println!("\n{}", "Port Mappings".bold());
             println!("{}", "─".repeat(50));
-            
+
             let mut table = Table::new();
             table.set_format(*format::consts::FORMAT_CLEAN);
-            
+
             // Add header row
             table.add_row(row!["Service", "Type", "Local", "Remote", "Status"]);
-            
+
             for (service_name, port_type, local_port, remote_port, pid) in &mappings {
                 let status = if pid.is_some() {
                     "Active".green().to_string()
                 } else {
                     "Inactive".red().to_string()
                 };
-                
+
                 table.add_row(row![
                     service_name,
                     port_type,
@@ -139,10 +142,13 @@ async fn print_instance_status(state_manager: &StateManager, instance: &Instance
                     status
                 ]);
             }
-            
+
             table.printstd();
-            
-            println!("\n  Run {} to see all port mappings", "devdock ports".cyan());
+
+            println!(
+                "\n  Run {} to see all port mappings",
+                "devdock ports".cyan()
+            );
         }
     }
 
@@ -182,16 +188,18 @@ async fn print_tilt_status(mode: &str, state_manager: &StateManager) -> Result<(
     if mode == "remote" {
         // For remote mode, check Tilt on the remote workspace
         let workspace_path = std::env::current_dir()?.display().to_string();
-        
-        if let Ok(Some(instance)) = state_manager.get_instance_by_workspace(&workspace_path).await {
-            if let Ok(Some((workspace_name, _, _, _))) = state_manager.get_sync_session(&instance.id).await {
+
+        if let Ok(Some(instance)) = state_manager
+            .get_instance_by_workspace(&workspace_path)
+            .await
+        {
+            if let Ok(Some((workspace_name, _, _, _))) =
+                state_manager.get_sync_session(&instance.id).await
+            {
                 // Check Tilt on remote using lsof
                 let check_cmd = format!("coder ssh {} -- 'lsof -i:10350 >/dev/null 2>&1 && echo running || echo stopped'", workspace_name);
-                
-                if let Ok(output) = Command::new("bash")
-                    .args(["-c", &check_cmd])
-                    .output()
-                {
+
+                if let Ok(output) = Command::new("bash").args(["-c", &check_cmd]).output() {
                     let result = String::from_utf8_lossy(&output.stdout).trim().to_string();
                     if result == "running" {
                         println!("  {} (on remote workspace)", "Tilt is running".green());
@@ -200,13 +208,11 @@ async fn print_tilt_status(mode: &str, state_manager: &StateManager) -> Result<(
                 }
             }
         }
-        
+
         println!("  {} (on remote workspace)", "Tilt status unknown".yellow());
     } else {
         // Local mode - check local process
-        let output = Command::new("pgrep")
-            .args(["-f", "tilt up"])
-            .output();
+        let output = Command::new("pgrep").args(["-f", "tilt up"]).output();
 
         match output {
             Ok(output) if output.status.success() => {

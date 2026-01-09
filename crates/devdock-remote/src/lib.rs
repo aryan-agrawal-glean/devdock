@@ -10,7 +10,7 @@ pub mod port_forward;
 pub mod ssh;
 pub mod workspace;
 
-pub use coder::{CoderWorkspaceConfig, check_coder_installed, workspace_exists};
+pub use coder::{check_coder_installed, workspace_exists, CoderWorkspaceConfig};
 pub use port_forward::{PortForwardManager, PortMapping, PortType};
 pub use workspace::{cleanup_existing_devdock, provision_workspace, start_remote_devdock};
 
@@ -47,4 +47,3 @@ pub enum RemoteError {
 }
 
 pub type Result<T> = std::result::Result<T, RemoteError>;
-

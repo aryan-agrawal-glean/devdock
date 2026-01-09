@@ -83,16 +83,16 @@ pub async fn post_to_slack(jira_key: &str, summary: &str, reporter_email: &str) 
     let bot_token = match get_slack_bot_token() {
         Ok(token) => token,
         Err(e) => {
-            warn!("Failed to get Slack bot token, skipping notification: {}", e);
+            warn!(
+                "Failed to get Slack bot token, skipping notification: {}",
+                e
+            );
             return Ok(());
         }
     };
 
     let jira_url = format!("https://askscio.atlassian.net/browse/{}", jira_key);
-    let reporter_name = reporter_email
-        .split('@')
-        .next()
-        .unwrap_or(reporter_email);
+    let reporter_name = reporter_email.split('@').next().unwrap_or(reporter_email);
 
     let message = SlackMessage {
         channel: SLACK_CHANNEL.to_string(),
@@ -158,11 +158,12 @@ pub async fn post_to_slack(jira_key: &str, summary: &str, reporter_email: &str) 
         info!("Successfully posted bug report to Slack");
         Ok(())
     } else {
-        let error = slack_response.error.unwrap_or_else(|| "Unknown error".to_string());
+        let error = slack_response
+            .error
+            .unwrap_or_else(|| "Unknown error".to_string());
         Err(DiagnosticsError::Slack(format!(
             "Slack API returned error: {}",
             error
         )))
     }
 }
-

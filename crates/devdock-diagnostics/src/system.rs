@@ -117,8 +117,5 @@ fn get_disk_info() -> Result<DiskInfo> {
         });
     }
 
-    Err(DiagnosticsError::SystemInfo(
-        "No disk found".to_string(),
-    ))
+    Err(DiagnosticsError::SystemInfo("No disk found".to_string()))
 }
-

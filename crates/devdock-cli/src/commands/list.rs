@@ -71,7 +71,10 @@ pub async fn execute(running_only: bool) -> Result<()> {
             } else {
                 // Fallback to path if workspace_name is missing
                 if instance.workspace_path.len() > 38 {
-                    format!("...{}", &instance.workspace_path[instance.workspace_path.len() - 35..])
+                    format!(
+                        "...{}",
+                        &instance.workspace_path[instance.workspace_path.len() - 35..]
+                    )
                 } else {
                     instance.workspace_path.clone()
                 }
@@ -79,7 +82,10 @@ pub async fn execute(running_only: bool) -> Result<()> {
         } else {
             // Local instance - show workspace path
             if instance.workspace_path.len() > 38 {
-                format!("...{}", &instance.workspace_path[instance.workspace_path.len() - 35..])
+                format!(
+                    "...{}",
+                    &instance.workspace_path[instance.workspace_path.len() - 35..]
+                )
             } else {
                 instance.workspace_path.clone()
             }

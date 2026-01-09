@@ -39,7 +39,11 @@ pub struct Profile {
     pub ini_overrides: Vec<IniOverride>,
 
     /// Multi-project config (e.g., glean-apps-canary).
-    #[serde(rename = "glean-apps-canary", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "glean-apps-canary",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub multi_project: Option<MultiProjectConfig>,
 }
 
@@ -266,7 +270,7 @@ ini_overrides:
         let profile: Profile = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(profile.ini_overrides.len(), 1);
         assert_eq!(profile.ini_overrides[0].section, "manifest");
-        
+
         let qe_config = profile.services.get("qe").unwrap();
         assert_eq!(qe_config.ini_overrides.len(), 1);
         assert_eq!(qe_config.ini_overrides[0].section, "queryapi");
@@ -288,12 +292,17 @@ services:
     timeout: 10m
 "#;
         let profile: Profile = serde_yaml::from_str(yaml).unwrap();
-        
+
         let pre_setup = profile.services.get("pre_setup").unwrap();
-        assert_eq!(pre_setup.script, Some("devdock/config/services/service_hooks/pre_scripts/disable_datasources.sh".to_string()));
+        assert_eq!(
+            pre_setup.script,
+            Some(
+                "devdock/config/services/service_hooks/pre_scripts/disable_datasources.sh"
+                    .to_string()
+            )
+        );
         assert_eq!(pre_setup.service, Some("crawler".to_string()));
         assert_eq!(pre_setup.depends_on_services.as_ref().unwrap().len(), 1);
         assert_eq!(pre_setup.timeout, Some("10m".to_string()));
     }
 }
-

@@ -1,9 +1,9 @@
 //! DevDock INI configuration generator.
 
+use crate::dependency_graph::ServiceNode;
 use crate::ini_parser::ParsedIniConfig;
 use crate::platform::{IniConfig, Platform};
 use crate::service_config::ServiceConfig;
-use crate::dependency_graph::ServiceNode;
 use devdock_core::profile::Profile;
 
 /// Context for INI generation that affects how configs are generated
@@ -54,11 +54,11 @@ impl IniGenerator {
     }
 
     /// Create with reference to dynamic.ini for reading values (NOT merging)
-    /// 
+    ///
     /// IMPORTANT: devdock.ini should ONLY contain local development overrides.
     /// Services read dynamic.ini first (base config from GCS), then devdock.ini overrides.
     /// We do NOT merge dynamic.ini into devdock.ini - that would duplicate everything.
-    /// 
+    ///
     /// The dynamic_ini parameter is used to READ values when we need to reference
     /// the production config (e.g., to get namespace names), but NOT to copy them.
     #[allow(dead_code)]
@@ -68,13 +68,16 @@ impl IniGenerator {
     }
 
     /// Create with context (the correct way to create the generator)
-    /// 
+    ///
     /// devdock.ini waterfall resolution:
     /// 1. Services read dynamic.ini (fetched from GCS, stored separately)
     /// 2. Services then read devdock.ini (local overrides only)
-    /// 
+    ///
     /// This method creates a generator that produces ONLY the overrides.
-    pub fn with_base_config_and_context(_base: &ParsedIniConfig, context: IniGeneratorContext) -> Self {
+    pub fn with_base_config_and_context(
+        _base: &ParsedIniConfig,
+        context: IniGeneratorContext,
+    ) -> Self {
         // IMPORTANT: Do NOT merge base config - devdock.ini should only have overrides
         let mut generator = Self::new();
         generator.context = context;
@@ -92,7 +95,11 @@ impl IniGenerator {
         config.set("storage", "caching.disabled", "false");
 
         // Memcached
-        config.set("memcached", "discoveryEndpoints", "memcached.devdock.local:11211");
+        config.set(
+            "memcached",
+            "discoveryEndpoints",
+            "memcached.devdock.local:11211",
+        );
 
         // Google Drive
         config.set("gdrive", "contentIncrementalCrawlFrequencySecs", "1");
@@ -119,7 +126,11 @@ impl IniGenerator {
         // O365
         config.set("o365", "crawl.identityFrequencySecs", "1");
         config.set("o365", "crawl.activityFrequencySecs", "1");
-        config.set("o365onedrive", "crawl.contentIncrementalCrawlFrequencySecs", "1");
+        config.set(
+            "o365onedrive",
+            "crawl.contentIncrementalCrawlFrequencySecs",
+            "1",
+        );
 
         // Config
         config.set("config", "refreshSecs", "864000");
@@ -129,7 +140,11 @@ impl IniGenerator {
 
         // DLP
         config.set("dlp", "continuous.findingsPublishIntervalMinutes", "5");
-        config.set("dlp_multiple", "continuous.findingsPublishIntervalMinutes", "5");
+        config.set(
+            "dlp_multiple",
+            "continuous.findingsPublishIntervalMinutes",
+            "5",
+        );
 
         // Docbuilder
         config.set("docbuilder", "sharedLinkExpirationBufferSecs", "0");
@@ -142,7 +157,7 @@ impl IniGenerator {
     }
 
     /// Apply service configuration
-    /// 
+    ///
     /// NOTE: Environment variables are NOT written to devdock.ini.
     /// They belong in docker-compose.yaml or container runtime.
     /// devdock.ini only contains app configuration (INI overrides).
@@ -159,7 +174,7 @@ impl IniGenerator {
     }
 
     /// Apply profile-level INI overrides
-    /// 
+    ///
     /// These are applied last and take precedence over all other configurations.
     pub fn apply_profile_overrides(&mut self, overrides: &[devdock_core::IniOverride]) {
         for override_entry in overrides {
@@ -203,7 +218,11 @@ impl IniGenerator {
     fn apply_sql_config(&mut self, node: &ServiceNode) {
         if node.config.is_local() {
             // Use different port for multi-project setup
-            let sql_port = if self.context.multi_project { "3319" } else { "3310" };
+            let sql_port = if self.context.multi_project {
+                "3319"
+            } else {
+                "3310"
+            };
 
             // Determine host based on quality_pipelines (they run outside Docker)
             let sql_host = if self.context.has_quality_pipelines {
@@ -213,7 +232,8 @@ impl IniGenerator {
             };
 
             // Basic config for local SQL
-            self.config.set("sql", "useSecretsManagerForPassword", "false");
+            self.config
+                .set("sql", "useSecretsManagerForPassword", "false");
             self.config.set("sql", "useDbIAMAuth", "false");
             self.config.set("sql", "useCloudSqlConnectorInQe", "false");
 
@@ -227,14 +247,19 @@ impl IniGenerator {
                     format!("{}.", instance)
                 };
 
-                self.config.set("sql", &format!("{}db.password", instance_prefix), "");
-                self.config.set("sql", &format!("{}db.user", instance_prefix), "root");
-                self.config.set("sql", &format!("{}db.host", instance_prefix), &sql_host);
+                self.config
+                    .set("sql", &format!("{}db.password", instance_prefix), "");
+                self.config
+                    .set("sql", &format!("{}db.user", instance_prefix), "root");
+                self.config
+                    .set("sql", &format!("{}db.host", instance_prefix), &sql_host);
             }
 
             // Set googlecloud.instanceName for frontend and backend
-            self.config.set("sql", "frontendInstance.googlecloud.instanceName", "");
-            self.config.set("sql", "backendInstance.googlecloud.instanceName", "");
+            self.config
+                .set("sql", "frontendInstance.googlecloud.instanceName", "");
+            self.config
+                .set("sql", "backendInstance.googlecloud.instanceName", "");
 
             // Special handling for glean-apps-canary and scio-apps
             if self.context.project == "glean-apps-canary" || self.context.project == "scio-apps" {
@@ -245,28 +270,45 @@ impl IniGenerator {
         } else {
             // Remote SQL configuration
             // Port base for remote SQL proxy
-            let curr_port = if self.context.multi_project { 3311 } else { 3307 };
+            let curr_port = if self.context.multi_project {
+                3311
+            } else {
+                3307
+            };
 
             // For remote, we still set these but with different values
             // The actual cloud-sql-proxy setup happens in Tiltfile based on temp_profile.yaml
-            self.config.set("sql", "useSecretsManagerForPassword", "true");
+            self.config
+                .set("sql", "useSecretsManagerForPassword", "true");
             self.config.set("sql", "useDbIAMAuth", "true");
 
             // Set host for remote SQL (goes through cloud-sql-proxy)
-            let instances = vec![("frontendInstance", curr_port), ("backendInstance", curr_port + 1)];
+            let instances = vec![
+                ("frontendInstance", curr_port),
+                ("backendInstance", curr_port + 1),
+            ];
 
             for (instance, port) in instances {
-                self.config.set("sql", &format!("{}.db.host", instance),
-                    format!("host.docker.internal:{}", port));
+                self.config.set(
+                    "sql",
+                    &format!("{}.db.host", instance),
+                    format!("host.docker.internal:{}", port),
+                );
             }
 
             // Set googlecloud.instanceName for frontend and backend
-            self.config.set("sql", "frontendInstance.googlecloud.instanceName", "");
-            self.config.set("sql", "backendInstance.googlecloud.instanceName", "");
+            self.config
+                .set("sql", "frontendInstance.googlecloud.instanceName", "");
+            self.config
+                .set("sql", "backendInstance.googlecloud.instanceName", "");
 
             // Special handling for glean-apps-canary and scio-apps
             if self.context.project == "glean-apps-canary" || self.context.project == "scio-apps" {
-                self.config.set("sql", "db.host", format!("host.docker.internal:{}", curr_port + 1));
+                self.config.set(
+                    "sql",
+                    "db.host",
+                    format!("host.docker.internal:{}", curr_port + 1),
+                );
             }
         }
     }
@@ -274,7 +316,8 @@ impl IniGenerator {
     fn apply_redis_config(&mut self, node: &ServiceNode) {
         // Redis uses host.docker.internal for both cases since it runs in a container
         self.config.set("redis", "host", "host.docker.internal");
-        self.config.set("redis", "internalLBHost", "host.docker.internal");
+        self.config
+            .set("redis", "internalLBHost", "host.docker.internal");
 
         if node.config.is_local() {
             self.config.set("redis", "port", "6380");
@@ -285,23 +328,40 @@ impl IniGenerator {
 
     fn apply_opensearch_config(&mut self, node: &ServiceNode) {
         if node.config.is_local() {
-            let port = node.config.env.get("PORT").unwrap_or(&"9200".to_string()).clone();
+            let port = node
+                .config
+                .env
+                .get("PORT")
+                .unwrap_or(&"9200".to_string())
+                .clone();
 
             self.config.set("indexing", "index.name", "index-1");
-            self.config.set("indexing", "server.url", format!("http://host.docker.internal:{}", port));
-            self.config.set("entitybuilder", "index.name", "entity-index-1");
+            self.config.set(
+                "indexing",
+                "server.url",
+                format!("http://host.docker.internal:{}", port),
+            );
+            self.config
+                .set("entitybuilder", "index.name", "entity-index-1");
             self.config.set("elastic_plugin", "hotswapJarPluginTag", "");
-            self.config.set("elastic_plugin", "hotswapJarPluginConfig", "");
+            self.config
+                .set("elastic_plugin", "hotswapJarPluginConfig", "");
 
             // Namespace-based config (standard namespace convention)
             let namespace = "elasticsearch-1-namespace";
-            self.config.set(namespace, "indexing.server.url", format!("http://host.docker.internal:{}", port));
+            self.config.set(
+                namespace,
+                "indexing.server.url",
+                format!("http://host.docker.internal:{}", port),
+            );
             self.config.set(namespace, "indexing.index.name", "index-1");
-            self.config.set(namespace, "entitybuilder.index.name", "entity-index-1");
+            self.config
+                .set(namespace, "entitybuilder.index.name", "entity-index-1");
 
             // Cluster mapping with standard namespace
             let cluster_mapping = r#"{"primary": [{"namespace": "elasticsearch-1-namespace", "cluster_type": "StandardCluster"}], "staging": [], "old": []}"#;
-            self.config.set("opensearch", "clusterMapping", cluster_mapping);
+            self.config
+                .set("opensearch", "clusterMapping", cluster_mapping);
         }
     }
 
@@ -312,7 +372,8 @@ impl IniGenerator {
     fn apply_rabbitmq_config(&mut self, node: &ServiceNode) {
         if node.config.is_local() {
             self.config.set("rabbitmq", "host", "host.docker.internal");
-            self.config.set("rabbitmq", "internalLBHost", "host.docker.internal");
+            self.config
+                .set("rabbitmq", "internalLBHost", "host.docker.internal");
             self.config.set("rabbitmq", "port", "5671");
             self.config.set("rabbitmq", "mgmtPort", "15671");
             self.config.set("rabbitmq", "useTls", "false");
@@ -321,13 +382,15 @@ impl IniGenerator {
 
     fn apply_pubsub_config(&mut self, node: &ServiceNode) {
         if node.config.is_local() {
-            self.config.set("pubsub", "emulator_host", "pubsub.devdock.local:8085");
+            self.config
+                .set("pubsub", "emulator_host", "pubsub.devdock.local:8085");
         }
     }
 
     fn apply_servicebus_config(&mut self, node: &ServiceNode) {
         if node.config.is_local() {
-            self.config.set("servicebus", "host", "host.docker.internal");
+            self.config
+                .set("servicebus", "host", "host.docker.internal");
             self.config.set("servicebus", "port", "5672");
         }
     }
@@ -340,7 +403,12 @@ impl IniGenerator {
     // ===== Service-Specific Config Methods =====
 
     fn apply_qe_config(&mut self, node: &ServiceNode) {
-        let port = node.config.env.get("PORT").unwrap_or(&"7960".to_string()).clone();
+        let port = node
+            .config
+            .env
+            .get("PORT")
+            .unwrap_or(&"7960".to_string())
+            .clone();
 
         let glean_base_url = if node.config.is_local() {
             format!("https://local.glean.com:{}", port)
@@ -351,36 +419,78 @@ impl IniGenerator {
         };
 
         self.config.set("queryapi", "baseURL", &glean_base_url);
-        self.config.set("queryapi", "baseInternalURL", &glean_base_url);
+        self.config
+            .set("queryapi", "baseInternalURL", &glean_base_url);
         self.config.set("queryapi", "preferClusterBaseUrl", "false");
     }
 
     fn apply_task_push_config(&mut self, node: &ServiceNode) {
-        let port = node.config.env.get("PORT").unwrap_or(&"7992".to_string()).clone();
+        let port = node
+            .config
+            .env
+            .get("PORT")
+            .unwrap_or(&"7992".to_string())
+            .clone();
 
-        self.config.set("task_push", "baseURL", format!("http://host.docker.internal:{}", port));
-        self.config.set("task_push", "internalLBBaseURL", format!("http://host.docker.internal:{}", port));
+        self.config.set(
+            "task_push",
+            "baseURL",
+            format!("http://host.docker.internal:{}", port),
+        );
+        self.config.set(
+            "task_push",
+            "internalLBBaseURL",
+            format!("http://host.docker.internal:{}", port),
+        );
         self.config.set("task_push", "rabbitmq.connections", "5");
     }
 
     fn apply_crawler_config(&mut self, node: &ServiceNode) {
-        let port = node.config.env.get("PORT").unwrap_or(&"7961".to_string()).clone();
+        let port = node
+            .config
+            .env
+            .get("PORT")
+            .unwrap_or(&"7961".to_string())
+            .clone();
 
-        self.config.set("task_push", "crawler.baseURL", format!("http://host.docker.internal:{}", port));
+        self.config.set(
+            "task_push",
+            "crawler.baseURL",
+            format!("http://host.docker.internal:{}", port),
+        );
         self.config.set("local", "taskHandler.port", "7961");
-        self.config.set("chat", "fileUpload.clamAVScan.enabled", "false");
+        self.config
+            .set("chat", "fileUpload.clamAVScan.enabled", "false");
     }
 
     fn apply_scholastic_config(&mut self, node: &ServiceNode) {
-        let port = node.config.env.get("PORT").unwrap_or(&"8090".to_string()).clone();
+        let port = node
+            .config
+            .env
+            .get("PORT")
+            .unwrap_or(&"8090".to_string())
+            .clone();
 
-        self.config.set("queryapi", "scholastic.url", format!("http://host.docker.internal:{}", port));
+        self.config.set(
+            "queryapi",
+            "scholastic.url",
+            format!("http://host.docker.internal:{}", port),
+        );
     }
 
     fn apply_py_agents_config(&mut self, node: &ServiceNode) {
-        let port = node.config.env.get("PORT").unwrap_or(&"8091".to_string()).clone();
+        let port = node
+            .config
+            .env
+            .get("PORT")
+            .unwrap_or(&"8091".to_string())
+            .clone();
 
-        self.config.set("queryapi", "pyAgents.url", format!("http://host.docker.internal:{}", port));
+        self.config.set(
+            "queryapi",
+            "pyAgents.url",
+            format!("http://host.docker.internal:{}", port),
+        );
     }
 
     fn apply_deployment_wizard_config(&mut self, _node: &ServiceNode) {
@@ -395,39 +505,85 @@ impl IniGenerator {
 
     fn apply_dse_config(&mut self, node: &ServiceNode) {
         if node.config.is_local() {
-            let port = node.config.env.get("PORT").unwrap_or(&"7962".to_string()).clone();
-            self.config.set("queryapi", "datasourceEvents.url",
-                format!("http://local.glean.com:{}", port));
+            let port = node
+                .config
+                .env
+                .get("PORT")
+                .unwrap_or(&"7962".to_string())
+                .clone();
+            self.config.set(
+                "queryapi",
+                "datasourceEvents.url",
+                format!("http://local.glean.com:{}", port),
+            );
         } else {
-            let port = node.config.env.get("PORT").unwrap_or(&"7962".to_string()).clone();
-            self.config.set("queryapi", "datasourceEvents.url",
-                format!("http://host.docker.internal:{}", port));
+            let port = node
+                .config
+                .env
+                .get("PORT")
+                .unwrap_or(&"7962".to_string())
+                .clone();
+            self.config.set(
+                "queryapi",
+                "datasourceEvents.url",
+                format!("http://host.docker.internal:{}", port),
+            );
         }
     }
 
     fn apply_notebook_sandbox_config(&mut self, node: &ServiceNode) {
         if node.config.is_local() {
-            let port = node.config.env.get("PORT").unwrap_or(&"5050".to_string()).clone();
-            self.config.set("code_interpreter", "notebook_sandbox_host_url",
-                format!("http://local.glean.com:{}", port));
-            self.config.set("chat", "fileUpload.clamAVScan.enabled", "false");
+            let port = node
+                .config
+                .env
+                .get("PORT")
+                .unwrap_or(&"5050".to_string())
+                .clone();
+            self.config.set(
+                "code_interpreter",
+                "notebook_sandbox_host_url",
+                format!("http://local.glean.com:{}", port),
+            );
+            self.config
+                .set("chat", "fileUpload.clamAVScan.enabled", "false");
         }
     }
 
     fn apply_tempo_config(&mut self, node: &ServiceNode) {
         if !node.config.is_local() {
-            self.config.set("queryapi", "otel.otlpEndpoint", "http://host.docker.internal:4318");
-            self.config.set("queryapi", "otel.tempoQueryFrontendEndpoint", "http://host.docker.internal:3100");
+            self.config.set(
+                "queryapi",
+                "otel.otlpEndpoint",
+                "http://host.docker.internal:4318",
+            );
+            self.config.set(
+                "queryapi",
+                "otel.tempoQueryFrontendEndpoint",
+                "http://host.docker.internal:3100",
+            );
         }
     }
 
     fn apply_git_crawler_config(&mut self, node: &ServiceNode) {
         if node.config.is_local() {
-            let port = node.config.env.get("PORT").unwrap_or(&"7976".to_string()).clone();
-            self.config.set("deploy", "computeengine.git_crawler.url",
-                format!("http://host.docker.internal:{}/git-crawler", port));
-            self.config.set("deploy", "git_crawler.machine_type", "e2-small");
-            self.config.set("git", "vmCrawler.workspaceDirectory", "/mnt/git_crawler/workspace");
+            let port = node
+                .config
+                .env
+                .get("PORT")
+                .unwrap_or(&"7976".to_string())
+                .clone();
+            self.config.set(
+                "deploy",
+                "computeengine.git_crawler.url",
+                format!("http://host.docker.internal:{}/git-crawler", port),
+            );
+            self.config
+                .set("deploy", "git_crawler.machine_type", "e2-small");
+            self.config.set(
+                "git",
+                "vmCrawler.workspaceDirectory",
+                "/mnt/git_crawler/workspace",
+            );
         }
     }
 }
@@ -437,4 +593,3 @@ impl Default for IniGenerator {
         Self::new()
     }
 }
-

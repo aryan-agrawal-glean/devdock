@@ -120,7 +120,12 @@ pub fn instance_name_to_type(instance_name: &str) -> &'static str {
 /// Get zones for a region
 pub fn get_zones_for_region(region: &str) -> &'static [&'static str] {
     match region {
-        "us-central1" => &["us-central1-a", "us-central1-b", "us-central1-c", "us-central1-f"],
+        "us-central1" => &[
+            "us-central1-a",
+            "us-central1-b",
+            "us-central1-c",
+            "us-central1-f",
+        ],
         "us-east1" => &["us-east1-b", "us-east1-c", "us-east1-d"],
         "us-east4" => &["us-east4-a", "us-east4-b", "us-east4-c"],
         "us-west1" => &["us-west1-a", "us-west1-b", "us-west1-c"],
@@ -128,8 +133,16 @@ pub fn get_zones_for_region(region: &str) -> &'static [&'static str] {
         "europe-west1" => &["europe-west1-b", "europe-west1-c", "europe-west1-d"],
         "europe-west2" => &["europe-west2-a", "europe-west2-b", "europe-west2-c"],
         "asia-east1" => &["asia-east1-a", "asia-east1-b", "asia-east1-c"],
-        "asia-northeast1" => &["asia-northeast1-a", "asia-northeast1-b", "asia-northeast1-c"],
-        "australia-southeast1" => &["australia-southeast1-a", "australia-southeast1-b", "australia-southeast1-c"],
+        "asia-northeast1" => &[
+            "asia-northeast1-a",
+            "asia-northeast1-b",
+            "asia-northeast1-c",
+        ],
+        "australia-southeast1" => &[
+            "australia-southeast1-a",
+            "australia-southeast1-b",
+            "australia-southeast1-c",
+        ],
         _ => &[],
     }
 }
@@ -179,4 +192,3 @@ mod tests {
         assert!(zones.contains(&"us-central1-c"));
     }
 }
-

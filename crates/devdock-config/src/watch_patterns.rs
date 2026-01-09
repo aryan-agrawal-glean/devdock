@@ -116,12 +116,7 @@ impl WatchPatternConfig {
             ],
         );
 
-        map.insert(
-            "java".to_string(),
-            vec![
-                "java/com/askscio/".to_string(),
-            ],
-        );
+        map.insert("java".to_string(), vec!["java/com/askscio/".to_string()]);
 
         map.insert(
             "frontend".to_string(),
@@ -308,8 +303,14 @@ impl WatchPatternGenerator {
     }
 
     /// Check if we have a cached cquery result that's still valid
-    pub fn get_cached_patterns(&self, service_name: &str, target_hash: &str) -> Option<Vec<String>> {
-        let cache_file = self.cache_dir.join(format!("{}_{}.yaml", service_name, target_hash));
+    pub fn get_cached_patterns(
+        &self,
+        service_name: &str,
+        target_hash: &str,
+    ) -> Option<Vec<String>> {
+        let cache_file = self
+            .cache_dir
+            .join(format!("{}_{}.yaml", service_name, target_hash));
 
         if !cache_file.exists() {
             return None;
@@ -341,7 +342,9 @@ impl WatchPatternGenerator {
         target_hash: &str,
         patterns: &[String],
     ) -> Result<()> {
-        let cache_file = self.cache_dir.join(format!("{}_{}.yaml", service_name, target_hash));
+        let cache_file = self
+            .cache_dir
+            .join(format!("{}_{}.yaml", service_name, target_hash));
 
         let mut map = HashMap::new();
         map.insert(service_name.to_string(), patterns.to_vec());
@@ -376,8 +379,13 @@ impl HybridWatchStrategy {
         // Step 1: Generate static patterns immediately (< 1ms)
         println!("⚡ Generating watch patterns (static, no bazel)...");
         let start = std::time::Instant::now();
-        self.static_generator.generate_all_watch_files(services).await?;
-        println!("✅ Watch patterns generated in {:.2}ms", start.elapsed().as_secs_f64() * 1000.0);
+        self.static_generator
+            .generate_all_watch_files(services)
+            .await?;
+        println!(
+            "✅ Watch patterns generated in {:.2}ms",
+            start.elapsed().as_secs_f64() * 1000.0
+        );
 
         // Step 2: Optionally spawn background cquery to refine (non-blocking)
         if self.enable_background_cquery {
@@ -425,8 +433,16 @@ mod tests {
 
         // The patterns are compressed, so we should have go/ directories (not the specific subdirectory)
         // because go/platform/ already covers go/platform/gcp/query_endpoint/
-        assert!(patterns.iter().any(|p| p.starts_with("go/")), "Should have go patterns: {:?}", patterns);
-        assert!(patterns.contains(&"config/".to_string()), "Should have config/: {:?}", patterns);
+        assert!(
+            patterns.iter().any(|p| p.starts_with("go/")),
+            "Should have go patterns: {:?}",
+            patterns
+        );
+        assert!(
+            patterns.contains(&"config/".to_string()),
+            "Should have config/: {:?}",
+            patterns
+        );
     }
 
     #[test]
@@ -457,4 +473,3 @@ mod tests {
         assert_eq!(compressed, vec!["go/".to_string()]);
     }
 }
-

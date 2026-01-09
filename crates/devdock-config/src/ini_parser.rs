@@ -46,9 +46,7 @@ impl ParsedIniConfig {
         let mut sections = HashMap::new();
 
         for (section_name, properties) in &ini {
-            let section_key = section_name
-                .map(|s| s.to_string())
-                .unwrap_or_default();
+            let section_key = section_name.map(|s| s.to_string()).unwrap_or_default();
             let mut section_map = HashMap::new();
 
             for (key, value) in properties {
@@ -68,7 +66,9 @@ impl ParsedIniConfig {
 
     /// Get a value with a default
     pub fn get_or_default<'a>(&'a self, section: &str, key: &str, default: &'a str) -> &'a str {
-        self.get(section, key).map(|s| s.as_str()).unwrap_or(default)
+        self.get(section, key)
+            .map(|s| s.as_str())
+            .unwrap_or(default)
     }
 
     /// Check if a section exists
@@ -110,11 +110,7 @@ impl ParsedIniConfig {
 
     /// Get all options that match a suffix pattern in a section
     /// e.g., options ending with ".db.instance" in the "sql" section
-    pub fn get_options_by_suffix(
-        &self,
-        section: &str,
-        suffix: &str,
-    ) -> Vec<(String, String)> {
+    pub fn get_options_by_suffix(&self, section: &str, suffix: &str) -> Vec<(String, String)> {
         self.sections
             .get(section)
             .map(|s| {
@@ -127,11 +123,7 @@ impl ParsedIniConfig {
     }
 
     /// Get all options that match a prefix pattern in a section
-    pub fn get_options_by_prefix(
-        &self,
-        section: &str,
-        prefix: &str,
-    ) -> Vec<(String, String)> {
+    pub fn get_options_by_prefix(&self, section: &str, prefix: &str) -> Vec<(String, String)> {
         self.sections
             .get(section)
             .map(|s| {
@@ -319,7 +311,10 @@ key3 = new_value
         base.merge(&override_config);
 
         assert_eq!(base.get("section1", "key1"), Some(&"value1".to_string()));
-        assert_eq!(base.get("section1", "key2"), Some(&"overridden".to_string()));
+        assert_eq!(
+            base.get("section1", "key2"),
+            Some(&"overridden".to_string())
+        );
         assert_eq!(base.get("section1", "key3"), Some(&"new_value".to_string()));
     }
 
@@ -337,4 +332,3 @@ key3 = new_value
         assert!(output.contains("keyA = valueA"));
     }
 }
-

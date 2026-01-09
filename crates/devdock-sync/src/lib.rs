@@ -48,4 +48,3 @@ pub enum SyncError {
 }
 
 pub type Result<T> = std::result::Result<T, SyncError>;
-

@@ -33,10 +33,7 @@ pub fn get_docker_info() -> Result<DockerInfo> {
         Ok(_) => Ok(DockerInfo {
             containers: {
                 let mut map = HashMap::new();
-                map.insert(
-                    "error".to_string(),
-                    "Docker command failed".to_string(),
-                );
+                map.insert("error".to_string(), "Docker command failed".to_string());
                 map
             },
         }),
@@ -63,4 +60,3 @@ pub fn check_tilt_running() -> Result<Option<u32>> {
 
     Ok(None)
 }
-
