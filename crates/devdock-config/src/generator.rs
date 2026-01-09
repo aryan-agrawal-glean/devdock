@@ -452,7 +452,7 @@ impl ConfigGenerator {
         &self,
         generator: &mut TempProfileGenerator,
         multi_config: &devdock_core::profile::MultiProjectConfig,
-        dynamic_ini: Option<&ParsedIniConfig>,
+        _dynamic_ini: Option<&ParsedIniConfig>,
     ) -> Result<()> {
         use crate::profile_generator::ServiceProfileEntry;
         
