@@ -18,6 +18,7 @@ devdock-codegen = { path = "../devdock-codegen" }
 devdock-remote = { path = "../devdock-remote" }
 devdock-sync = { path = "../devdock-sync" }
 devdock-diagnostics = { path = "../devdock-diagnostics" }
+devdock-monitor = { path = "../devdock-monitor" }
 
 anyhow.workspace = true
 clap.workspace = true

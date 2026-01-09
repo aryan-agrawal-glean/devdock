@@ -62,6 +62,14 @@ enum Commands {
         /// Show detailed progress (all substeps)
         #[arg(long)]
         verbose: bool,
+
+        /// Disable startup monitor (by default, waits for all resources to become healthy)
+        #[arg(long)]
+        no_monitor: bool,
+
+        /// Startup monitor timeout in seconds (default: 1200 = 20 minutes)
+        #[arg(long)]
+        monitor_timeout: Option<u64>,
     },
 
     /// Stop DevDock instance
@@ -194,6 +202,21 @@ enum Commands {
         /// Command that was run when the issue occurred (skip interactive prompt)
         #[arg(long)]
         command: Option<String>,
+    },
+
+    /// Monitor startup resources until all healthy (or timeout)
+    Monitor {
+        /// Timeout in seconds (default: 1200 = 20 minutes)
+        #[arg(short, long)]
+        timeout: Option<u64>,
+
+        /// Polling interval in seconds (default: 2)
+        #[arg(short, long)]
+        interval: Option<u64>,
+
+        /// Disable desktop notifications
+        #[arg(long)]
+        no_notify: bool,
     },
 }
 
@@ -464,6 +487,8 @@ async fn main() {
             port_base,
             auto_forward,
             verbose,
+            no_monitor,
+            monitor_timeout,
         } => {
             if mode == "remote" {
                 commands::remote::start_remote(commands::remote::RemoteStartConfig {
@@ -477,7 +502,13 @@ async fn main() {
                     verbose,
                 }).await
             } else {
-                commands::start::execute(&profile, services.as_deref(), ci_mode).await
+                commands::start::execute(
+                    &profile,
+                    services.as_deref(),
+                    ci_mode,
+                    !no_monitor, // monitoring enabled by default
+                    monitor_timeout,
+                ).await
             }
         },
 
@@ -543,6 +574,12 @@ async fn main() {
                 _ => commands::report::report_bug().await,
             }
         }
+
+        Commands::Monitor {
+            timeout,
+            interval,
+            no_notify,
+        } => commands::monitor::execute(timeout, interval, no_notify).await,
 
         Commands::Service { command } => match command {
             ServiceCommands::Enable { name } => commands::service::enable(&name).await,

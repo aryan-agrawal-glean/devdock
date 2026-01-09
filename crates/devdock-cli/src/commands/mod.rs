@@ -7,6 +7,7 @@ pub mod generate;
 pub mod infra;
 pub mod list;
 pub mod logs;
+pub mod monitor;
 pub mod ports;
 pub mod profile;
 pub mod plugin;

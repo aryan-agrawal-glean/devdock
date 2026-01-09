@@ -6,7 +6,10 @@ members = [
     "crates/devdock-state",
     "crates/devdock-codegen",
     "crates/devdock-remote",
-    "crates/devdock-sync", "crates/devdock-diagnostics",
+    "crates/devdock-sync",
+    "crates/devdock-diagnostics",
+    "crates/devdock-monitor",
+    "crates/devdock-telemetry",
 ]
 resolver = "2"
 
@@ -44,7 +47,7 @@ dirs = "5.0"
 futures = "0.3"
 regex = "1.10"
 rust-ini = "0.21"
-chrono = "0.4"
+chrono = { version = "0.4", features = ["serde"] }
 
 # Database - pin to older version to avoid home crate issue
 sqlx = { version = "=0.7.3", features = ["sqlite", "runtime-tokio-native-tls", "migrate"] }

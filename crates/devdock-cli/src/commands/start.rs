@@ -8,7 +8,13 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub async fn execute(profile_name: &str, services: Option<&str>, _ci_mode: bool) -> Result<()> {
+pub async fn execute(
+    profile_name: &str,
+    services: Option<&str>,
+    _ci_mode: bool,
+    run_monitor: bool,
+    monitor_timeout: Option<u64>,
+) -> Result<()> {
     output::info("Starting DevDock...");
 
     // Step 1: Load and validate profile
@@ -87,10 +93,23 @@ pub async fn execute(profile_name: &str, services: Option<&str>, _ci_mode: bool)
     output::success("DevDock started!");
     println!("\n  Tilt UI: http://localhost:10350");
     println!("  Services: https://local.glean.com:{}", port_base);
-    println!("\nPress Ctrl+C to stop DevDock\n");
 
-    // Wait for Tilt process
-    wait_for_tilt(tilt_process, &state_manager, &instance.id, workspace_root).await?;
+    if run_monitor {
+        println!("\nStarting resource monitor (timeout: {}s)...\n",
+            monitor_timeout.unwrap_or(1200));
+    } else {
+        println!("\nPress Ctrl+C to stop DevDock\n");
+    }
+
+    // Wait for Tilt process (optionally with monitoring)
+    wait_for_tilt(
+        tilt_process,
+        &state_manager,
+        &instance.id,
+        workspace_root,
+        run_monitor,
+        monitor_timeout,
+    ).await?;
 
     Ok(())
 }
@@ -297,7 +316,10 @@ async fn wait_for_tilt(
     state_manager: &StateManager,
     instance_id: &str,
     workspace_root: PathBuf,
+    run_monitor: bool,
+    monitor_timeout: Option<u64>,
 ) -> Result<()> {
+    use devdock_monitor::{StartupMonitor, StartupMonitorConfig, StartupResult};
     let instance_id = instance_id.to_string();
     let workspace_root = workspace_root.clone();
     
@@ -306,6 +328,65 @@ async fn wait_for_tilt(
 
     // Convert std Child to tokio Command for async waiting
     let mut tilt_handle = tokio::task::spawn_blocking(move || tilt_process.wait());
+
+    // If monitoring is enabled, run the startup monitor
+    if run_monitor {
+        use devdock_monitor::StabilityConfig;
+        use std::time::Duration;
+
+        let monitor_config = StartupMonitorConfig {
+            timeout_secs: monitor_timeout.unwrap_or(1200),
+            poll_interval_secs: 2,
+            notifications_enabled: true,
+            show_progress: true,
+            skip_if_completed: false, // Don't skip when integrated with start
+            collect_stats: true,
+            stability: StabilityConfig {
+                required_successes: 3,
+                window_duration: Duration::from_secs(10),
+                min_healthy_duration: Duration::from_secs(5),
+            },
+        };
+
+        let monitor = StartupMonitor::new(monitor_config);
+
+        tokio::select! {
+            result = monitor.run() => {
+                match result {
+                    Ok(StartupResult::Success { duration_secs, resources }) => {
+                        output::success(&format!(
+                            "All {} resources healthy in {}s - monitoring complete",
+                            resources.len(),
+                            duration_secs
+                        ));
+                    }
+                    Ok(StartupResult::Timeout { healthy, pending, failed, .. }) => {
+                        output::warn(&format!(
+                            "Startup monitoring timed out: {} healthy, {} pending, {} failed",
+                            healthy.len(), pending.len(), failed.len()
+                        ));
+                    }
+                    Ok(StartupResult::Failed { failed, .. }) => {
+                        output::warn(&format!(
+                            "Startup monitoring failed: {} resource(s) in error state",
+                            failed.len()
+                        ));
+                    }
+                    Ok(StartupResult::TiltNotRunning) => {
+                        output::warn("Tilt stopped during monitoring");
+                    }
+                    Err(e) => {
+                        output::warn(&format!("Monitor error: {}", e));
+                    }
+                }
+            }
+            _ = tokio::signal::ctrl_c() => {
+                output::info("Received shutdown signal during monitoring...");
+            }
+        }
+
+        println!("\nPress Ctrl+C to stop DevDock\n");
+    }
 
     tokio::select! {
         _ = tokio::signal::ctrl_c() => {
