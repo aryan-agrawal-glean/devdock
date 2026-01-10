@@ -16,21 +16,13 @@ pub struct BazelQueryEngine {
 impl BazelQueryEngine {
     pub fn new(workspace_root: PathBuf) -> Self {
         let use_remote_bazelrc = cfg!(target_os = "linux");
-        Self {
-            workspace_root,
-            use_remote_bazelrc,
-            silent: false,
-        }
+        Self { workspace_root, use_remote_bazelrc, silent: false }
     }
 
     /// Create a silent engine (no console output, for background tasks)
     pub fn new_silent(workspace_root: PathBuf) -> Self {
         let use_remote_bazelrc = cfg!(target_os = "linux");
-        Self {
-            workspace_root,
-            use_remote_bazelrc,
-            silent: true,
-        }
+        Self { workspace_root, use_remote_bazelrc, silent: true }
     }
 
     /// Generate all watch files in parallel
@@ -83,17 +75,17 @@ impl BazelQueryEngine {
         let mut error_count = 0;
         for result in results {
             match result {
-                Ok(Ok(_)) => success_count += 1,
+                Ok(Ok(())) => success_count += 1,
                 Ok(Err(e)) => {
                     error_count += 1;
                     if !self.silent {
-                        eprintln!("         └─ Warning: Failed to generate watch file: {}", e);
+                        eprintln!("         └─ Warning: Failed to generate watch file: {e}");
                     }
                 }
                 Err(e) => {
                     error_count += 1;
                     if !self.silent {
-                        eprintln!("         └─ Warning: Task panicked: {}", e);
+                        eprintln!("         └─ Warning: Task panicked: {e}");
                     }
                 }
             }
@@ -117,18 +109,12 @@ impl BazelQueryEngine {
 
         if self.use_remote_bazelrc {
             cmd.arg("--nohome_rc");
-            cmd.arg(format!(
-                "--bazelrc={}/.devdock.remote.bazelrc",
-                self.workspace_root.display()
-            ));
+            cmd.arg(format!("--bazelrc={}/.devdock.remote.bazelrc", self.workspace_root.display()));
         }
 
         cmd.arg("cquery");
         cmd.arg("--output=label");
-        cmd.arg(format!(
-            "filter('^//', kind('source file', deps(set({}))))",
-            target
-        ));
+        cmd.arg(format!("filter('^//', kind('source file', deps(set({target}))))"));
         cmd.current_dir(&self.workspace_root);
 
         let output = cmd.output().await.context("Failed to run bazel cquery")?;
@@ -152,7 +138,7 @@ impl BazelQueryEngine {
                     .unwrap_or("")
                     .strip_prefix("//")
                     .unwrap_or(line)
-                    .replace(":", "/")
+                    .replace(':', "/")
             })
             .collect();
 
@@ -166,7 +152,7 @@ impl BazelQueryEngine {
         let watch_file = self
             .workspace_root
             .join("devdock/runtime_generated")
-            .join(format!("watch_file_{}.yaml", service_name));
+            .join(format!("watch_file_{service_name}.yaml"));
 
         let yaml = serde_yaml::to_string(&watch_map)?;
         tokio::fs::write(watch_file, yaml).await?;
@@ -180,7 +166,7 @@ impl BazelQueryEngine {
         let exclude_dirs: HashSet<&str> = ["go", "java", "python_scio"].into_iter().collect();
 
         let all_dirs: HashSet<String> = std::fs::read_dir(&self.workspace_root)?
-            .filter_map(|e| e.ok())
+            .filter_map(std::result::Result::ok)
             .filter(|e| e.path().is_dir())
             .map(|e| e.file_name().to_string_lossy().to_string())
             .filter(|d| !exclude_dirs.contains(d.as_str()))
@@ -205,7 +191,7 @@ impl BazelQueryEngine {
                 let compressed_path = parts[..3 + java_offset].join("/");
                 compressed.insert(compressed_path);
             } else {
-                compressed.insert(file.to_string());
+                compressed.insert(file.clone());
             }
         }
 

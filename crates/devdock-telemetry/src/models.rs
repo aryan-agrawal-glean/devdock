@@ -176,10 +176,10 @@ impl TelemetrySnapshot {
     }
 
     pub fn total_metrics_count(&self) -> usize {
-        (self.session.is_some() as usize)
+        usize::from(self.session.is_some())
             + self.resource_statuses.len()
             + self.resource_startups.len()
-            + (self.host.is_some() as usize)
+            + usize::from(self.host.is_some())
             + self.docker.len()
             + self.failures.len()
             + self.builds.len()

@@ -37,9 +37,7 @@ pub struct SqlUtils {
 impl SqlUtils {
     /// Create a new SQL utilities instance
     pub fn new(project: &str) -> Self {
-        Self {
-            project: project.to_string(),
-        }
+        Self { project: project.to_string() }
     }
 
     /// Get SQL instance name map from config
@@ -56,17 +54,13 @@ impl SqlUtils {
         if let Some(active_instances) = config.get("sql", "active.instances") {
             for instance_type in active_instances.split(',') {
                 let instance_type = instance_type.trim();
-                let key = format!("{}.googlecloud.instanceName", instance_type);
+                let key = format!("{instance_type}.googlecloud.instanceName");
 
                 if let Some(full_name) = config.get("sql", &key) {
                     let value = if get_id_only {
                         // Extract instance ID from connection name
                         // Format: project:region:instance-id
-                        full_name
-                            .split(':')
-                            .next_back()
-                            .unwrap_or(full_name)
-                            .to_string()
+                        full_name.split(':').next_back().unwrap_or(full_name).to_string()
                     } else {
                         full_name.clone()
                     };
@@ -76,18 +70,14 @@ impl SqlUtils {
         } else {
             // Fallback: look for standard instance types
             for instance_type in &[FRONTEND_INSTANCE, BACKEND_INSTANCE] {
-                let key = format!("{}.googlecloud.instanceName", instance_type);
+                let key = format!("{instance_type}.googlecloud.instanceName");
                 if let Some(full_name) = config.get("sql", &key) {
                     let value = if get_id_only {
-                        full_name
-                            .split(':')
-                            .next_back()
-                            .unwrap_or(full_name)
-                            .to_string()
+                        full_name.split(':').next_back().unwrap_or(full_name).to_string()
                     } else {
                         full_name.clone()
                     };
-                    instance_map.insert(instance_type.to_string(), value);
+                    instance_map.insert((*instance_type).to_string(), value);
                 }
             }
         }
@@ -100,21 +90,15 @@ impl SqlUtils {
     /// Replaces: python_scio.deployment.sql.get_instance_id_for_db
     pub fn get_instance_id_for_db(&self, config: &ParsedIniConfig, db_key: &str) -> Option<String> {
         // First get which instance type this DB uses
-        let instance_key = format!("{}.db.instance", db_key);
-        let instance_type = config
-            .get("sql", &instance_key)
-            .map(|s| s.as_str())
-            .unwrap_or(FRONTEND_INSTANCE);
+        let instance_key = format!("{db_key}.db.instance");
+        let instance_type =
+            config.get("sql", &instance_key).map_or(FRONTEND_INSTANCE, std::string::String::as_str);
 
         // Then get the instance connection name
-        let connection_key = format!("{}.googlecloud.instanceName", instance_type);
+        let connection_key = format!("{instance_type}.googlecloud.instanceName");
         config.get("sql", &connection_key).map(|full_name| {
             // Extract instance ID from connection name
-            full_name
-                .split(':')
-                .next_back()
-                .unwrap_or(full_name)
-                .to_string()
+            full_name.split(':').next_back().unwrap_or(full_name).to_string()
         })
     }
 
@@ -207,11 +191,7 @@ impl SqlUtils {
             .context("Failed to run gcloud sql export")?;
 
         if !status.success() {
-            anyhow::bail!(
-                "Failed to export database {} from {}",
-                database,
-                instance_id
-            );
+            anyhow::bail!("Failed to export database {database} from {instance_id}");
         }
 
         Ok(())
@@ -237,24 +217,18 @@ pub fn get_bastion_port_map(config: &ParsedIniConfig, use_iam_port: bool) -> Has
 
     // Add document shards if configured
     let mut all_instances: Vec<String> = active_instances;
-    let num_shards = config
-        .get("sql", "document.numShards")
-        .and_then(|s| s.parse::<u32>().ok())
-        .unwrap_or(0);
+    let num_shards =
+        config.get("sql", "document.numShards").and_then(|s| s.parse::<u32>().ok()).unwrap_or(0);
 
     for shard in 0..num_shards {
-        all_instances.push(format!("{}_{}", SHARDED_SQL_INSTANCE_INFO_PREFIX, shard));
+        all_instances.push(format!("{SHARDED_SQL_INSTANCE_INFO_PREFIX}_{shard}"));
     }
 
     // Sort instances by type and numeric suffix
     all_instances.sort_by_key(|instance| get_sort_value(instance));
 
     // Assign ports
-    let start_port = if use_iam_port {
-        IAM_PORT_START
-    } else {
-        PORT_START
-    };
+    let start_port = if use_iam_port { IAM_PORT_START } else { PORT_START };
     for (i, instance) in all_instances.iter().enumerate() {
         port_map.insert(instance.clone(), start_port + i as u16);
     }
@@ -288,7 +262,7 @@ fn extract_index(instance: &str) -> i32 {
         .replace("frontend", "")
         .replace("Instance", "")
         .replace("internal", "")
-        .replace(&format!("{}_", SHARDED_SQL_INSTANCE_INFO_PREFIX), "");
+        .replace(&format!("{SHARDED_SQL_INSTANCE_INFO_PREFIX}_"), "");
 
     cleaned.parse().unwrap_or(0)
 }
@@ -326,7 +300,7 @@ pub fn get_backend_databases(config: &ParsedIniConfig) -> Vec<String> {
 mod tests {
     use super::*;
 
-    const TEST_CONFIG: &str = r#"
+    const TEST_CONFIG: &str = r"
 [sql]
 active.instances = frontendInstance,backendInstance
 frontendInstance.googlecloud.instanceName = myproject:us-central1:frontend-sql-1
@@ -334,7 +308,7 @@ backendInstance.googlecloud.instanceName = myproject:us-central1:backend-sql-1
 frontend_keyval.db.instance = frontendInstance
 backend_data.db.instance = backendInstance
 user_profile.db.instance = frontendInstance
-"#;
+";
 
     #[test]
     fn test_get_instance_name_map() {
@@ -350,14 +324,8 @@ user_profile.db.instance = frontendInstance
 
         // Get instance IDs only
         let id_map = utils.get_instance_name_map(&config, true);
-        assert_eq!(
-            id_map.get("frontendInstance"),
-            Some(&"frontend-sql-1".to_string())
-        );
-        assert_eq!(
-            id_map.get("backendInstance"),
-            Some(&"backend-sql-1".to_string())
-        );
+        assert_eq!(id_map.get("frontendInstance"), Some(&"frontend-sql-1".to_string()));
+        assert_eq!(id_map.get("backendInstance"), Some(&"backend-sql-1".to_string()));
     }
 
     #[test]

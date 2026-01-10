@@ -46,7 +46,7 @@ impl TiltClient {
         let all_resources = self.get_resources()?;
         Ok(all_resources
             .into_iter()
-            .filter(|r| r.should_monitor())
+            .filter(super::resource::TiltResource::should_monitor)
             .collect())
     }
 
@@ -60,7 +60,7 @@ impl TiltClient {
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             warn!("Failed to get logs for {}: {}", resource_name, stderr);
-            return Ok(format!("Error getting logs: {}", stderr));
+            return Ok(format!("Error getting logs: {stderr}"));
         }
 
         Ok(String::from_utf8_lossy(&output.stdout).to_string())
@@ -77,16 +77,15 @@ impl TiltClient {
 
         let resources: Vec<TiltResource> = items
             .iter()
-            .filter_map(|item| match TiltResource::from_json(item) {
-                Some(r) => {
+            .filter_map(|item| {
+                if let Some(r) = TiltResource::from_json(item) {
                     if r.name == "(Tiltfile)" {
                         None
                     } else {
                         debug!("Parsed resource: {} -> {:?}", r.name, r.status);
                         Some(r)
                     }
-                }
-                None => {
+                } else {
                     warn!("Failed to parse resource: {:?}", item.get("metadata"));
                     None
                 }

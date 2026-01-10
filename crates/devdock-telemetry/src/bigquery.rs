@@ -5,7 +5,7 @@
 
 use crate::{
     emitter::{EmitResult, TelemetryEmitter},
-    models::*,
+    models::TelemetrySnapshot,
     Result, TelemetryError,
 };
 use async_trait::async_trait;
@@ -55,12 +55,12 @@ pub struct TableNames {
 impl TableNames {
     pub fn new(project: &str, dataset: &str) -> Self {
         TableNames {
-            session_stats: format!("{}.{}.devdock_session_stats", project, dataset),
-            resource_stats: format!("{}.{}.resource_stats", project, dataset),
-            startup_stats: format!("{}.{}.startup_stats", project, dataset),
-            host_stats: format!("{}.{}.host_stats", project, dataset),
-            docker_stats: format!("{}.{}.docker_stats", project, dataset),
-            failure_logs: format!("{}.{}.resource_failure_logs", project, dataset),
+            session_stats: format!("{project}.{dataset}.devdock_session_stats"),
+            resource_stats: format!("{project}.{dataset}.resource_stats"),
+            startup_stats: format!("{project}.{dataset}.startup_stats"),
+            host_stats: format!("{project}.{dataset}.host_stats"),
+            docker_stats: format!("{project}.{dataset}.docker_stats"),
+            failure_logs: format!("{project}.{dataset}.resource_failure_logs"),
         }
     }
 }
@@ -116,12 +116,7 @@ impl BigQueryEmitter {
             .build()
             .map_err(|e| TelemetryError::BigQuery(e.to_string()))?;
 
-        Ok(BigQueryEmitter {
-            config,
-            client,
-            tables,
-            access_token: Arc::new(RwLock::new(None)),
-        })
+        Ok(BigQueryEmitter { config, client, tables, access_token: Arc::new(RwLock::new(None)) })
     }
 
     /// Get or refresh the access token.
@@ -147,9 +142,7 @@ impl BigQueryEmitter {
         } else if let Some(key_path) = &self.config.service_account_key {
             self.fetch_sa_token(key_path).await
         } else {
-            Err(TelemetryError::Config(
-                "No authentication method configured".to_string(),
-            ))
+            Err(TelemetryError::Config("No authentication method configured".to_string()))
         }
     }
 
@@ -158,23 +151,18 @@ impl BigQueryEmitter {
             .args(["auth", "print-access-token"])
             .output()
             .await
-            .map_err(|e| TelemetryError::BigQuery(format!("Failed to get ADC token: {}", e)))?;
+            .map_err(|e| TelemetryError::BigQuery(format!("Failed to get ADC token: {e}")))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(TelemetryError::BigQuery(format!(
-                "gcloud auth failed: {}",
-                stderr
-            )));
+            return Err(TelemetryError::BigQuery(format!("gcloud auth failed: {stderr}")));
         }
 
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
     }
 
     async fn fetch_sa_token(&self, _key_path: &str) -> Result<String> {
-        Err(TelemetryError::Config(
-            "Service account key auth not yet implemented".to_string(),
-        ))
+        Err(TelemetryError::Config("Service account key auth not yet implemented".to_string()))
     }
 
     async fn insert_rows<T: Serialize + Send + Sync>(
@@ -189,10 +177,7 @@ impl BigQueryEmitter {
         let token = self.get_access_token().await?;
         let parts: Vec<&str> = table_id.split('.').collect();
         if parts.len() != 3 {
-            return Err(TelemetryError::Config(format!(
-                "Invalid table ID format: {}",
-                table_id
-            )));
+            return Err(TelemetryError::Config(format!("Invalid table ID format: {table_id}")));
         }
 
         let url = format!(
@@ -210,20 +195,13 @@ impl BigQueryEmitter {
 
         debug!("Inserting {} rows into {}", rows.len(), table_id);
 
-        let response = self
-            .client
-            .post(&url)
-            .bearer_auth(&token)
-            .json(&request)
-            .send()
-            .await?;
+        let response = self.client.post(&url).bearer_auth(&token).json(&request).send().await?;
 
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
             return Err(TelemetryError::BigQuery(format!(
-                "BigQuery insert failed ({}): {}",
-                status, body
+                "BigQuery insert failed ({status}): {body}"
             )));
         }
 
@@ -232,26 +210,19 @@ impl BigQueryEmitter {
         if let Some(errors) = insert_response.insert_errors {
             let error_count = errors.len();
             for err in errors.iter().take(3) {
-                warn!(
-                    "BigQuery insert error at row {}: {:?}",
-                    err.index, err.errors
-                );
+                warn!("BigQuery insert error at row {}: {:?}", err.index, err.errors);
             }
             return Ok(rows.len() - error_count);
         }
 
-        info!(
-            "Successfully inserted {} rows into {}",
-            rows.len(),
-            table_id
-        );
+        info!("Successfully inserted {} rows into {}", rows.len(), table_id);
         Ok(rows.len())
     }
 }
 
 #[async_trait]
 impl TelemetryEmitter for BigQueryEmitter {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "bigquery"
     }
 
@@ -271,40 +242,31 @@ impl TelemetryEmitter for BigQueryEmitter {
         let mut errors = Vec::new();
 
         if let Some(session) = &snapshot.session {
-            match self
-                .insert_rows(&self.tables.session_stats, &[session])
-                .await
-            {
+            match self.insert_rows(&self.tables.session_stats, &[session]).await {
                 Ok(n) => success_count += n,
                 Err(e) => {
                     failure_count += 1;
-                    errors.push(format!("session_stats: {}", e));
+                    errors.push(format!("session_stats: {e}"));
                 }
             }
         }
 
         if !snapshot.resource_statuses.is_empty() {
-            match self
-                .insert_rows(&self.tables.resource_stats, &snapshot.resource_statuses)
-                .await
-            {
+            match self.insert_rows(&self.tables.resource_stats, &snapshot.resource_statuses).await {
                 Ok(n) => success_count += n,
                 Err(e) => {
                     failure_count += snapshot.resource_statuses.len();
-                    errors.push(format!("resource_stats: {}", e));
+                    errors.push(format!("resource_stats: {e}"));
                 }
             }
         }
 
         if !snapshot.resource_startups.is_empty() {
-            match self
-                .insert_rows(&self.tables.startup_stats, &snapshot.resource_startups)
-                .await
-            {
+            match self.insert_rows(&self.tables.startup_stats, &snapshot.resource_startups).await {
                 Ok(n) => success_count += n,
                 Err(e) => {
                     failure_count += snapshot.resource_startups.len();
-                    errors.push(format!("startup_stats: {}", e));
+                    errors.push(format!("startup_stats: {e}"));
                 }
             }
         }
@@ -314,33 +276,27 @@ impl TelemetryEmitter for BigQueryEmitter {
                 Ok(n) => success_count += n,
                 Err(e) => {
                     failure_count += 1;
-                    errors.push(format!("host_stats: {}", e));
+                    errors.push(format!("host_stats: {e}"));
                 }
             }
         }
 
         if !snapshot.docker.is_empty() {
-            match self
-                .insert_rows(&self.tables.docker_stats, &snapshot.docker)
-                .await
-            {
+            match self.insert_rows(&self.tables.docker_stats, &snapshot.docker).await {
                 Ok(n) => success_count += n,
                 Err(e) => {
                     failure_count += snapshot.docker.len();
-                    errors.push(format!("docker_stats: {}", e));
+                    errors.push(format!("docker_stats: {e}"));
                 }
             }
         }
 
         if !snapshot.failures.is_empty() {
-            match self
-                .insert_rows(&self.tables.failure_logs, &snapshot.failures)
-                .await
-            {
+            match self.insert_rows(&self.tables.failure_logs, &snapshot.failures).await {
                 Ok(n) => success_count += n,
                 Err(e) => {
                     failure_count += snapshot.failures.len();
-                    errors.push(format!("failure_logs: {}", e));
+                    errors.push(format!("failure_logs: {e}"));
                 }
             }
         }

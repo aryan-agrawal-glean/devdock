@@ -16,11 +16,7 @@ pub struct RsyncClient {
 impl RsyncClient {
     /// Create a new rsync client.
     pub fn new(workspace_name: String, local_path: PathBuf, remote_path: PathBuf) -> Self {
-        Self {
-            workspace_name,
-            local_path,
-            remote_path,
-        }
+        Self { workspace_name, local_path, remote_path }
     }
 
     /// Sync specific files to remote.
@@ -42,11 +38,7 @@ impl RsyncClient {
         // Add files-from stdin and rsync over SSH (coder sets up .ssh/config)
         cmd.arg("--files-from=-")
             .arg(&self.local_path)
-            .arg(format!(
-                "{}.coder:{}",
-                self.workspace_name,
-                self.remote_path.display()
-            ))
+            .arg(format!("{}.coder:{}", self.workspace_name, self.remote_path.display()))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -61,20 +53,20 @@ impl RsyncClient {
 
         let mut child = cmd
             .spawn()
-            .map_err(|e| SyncError::RsyncFailed(format!("Failed to spawn rsync: {}", e)))?;
+            .map_err(|e| SyncError::RsyncFailed(format!("Failed to spawn rsync: {e}")))?;
 
         // Write file list to stdin
         if let Some(mut stdin) = child.stdin.take() {
             for file in files {
                 writeln!(stdin, "{}", file.display()).map_err(|e| {
-                    SyncError::RsyncFailed(format!("Failed to write to rsync stdin: {}", e))
+                    SyncError::RsyncFailed(format!("Failed to write to rsync stdin: {e}"))
                 })?;
             }
         }
 
         let output = child
             .wait_with_output()
-            .map_err(|e| SyncError::RsyncFailed(format!("Failed to wait for rsync: {}", e)))?;
+            .map_err(|e| SyncError::RsyncFailed(format!("Failed to wait for rsync: {e}")))?;
 
         if !output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);
@@ -83,7 +75,7 @@ impl RsyncClient {
             error!("Exit code: {:?}", output.status.code());
             error!("STDOUT: {}", stdout);
             error!("STDERR: {}", stderr);
-            return Err(SyncError::RsyncFailed(format!("rsync failed: {}", stderr)));
+            return Err(SyncError::RsyncFailed(format!("rsync failed: {stderr}")));
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -103,13 +95,9 @@ impl RsyncClient {
             .arg("--exclude=node_modules")
             .arg("--exclude=bazel-*")
             .arg(format!("{}/", self.local_path.display()))
-            .arg(format!(
-                "{}.coder:{}",
-                self.workspace_name,
-                self.remote_path.display()
-            ))
+            .arg(format!("{}.coder:{}", self.workspace_name, self.remote_path.display()))
             .output()
-            .map_err(|e| SyncError::RsyncFailed(format!("Failed to run rsync: {}", e)))?;
+            .map_err(|e| SyncError::RsyncFailed(format!("Failed to run rsync: {e}")))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);

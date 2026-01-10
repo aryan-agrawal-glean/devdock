@@ -38,27 +38,15 @@ pub struct EmitResult {
 
 impl EmitResult {
     pub fn success(count: usize) -> Self {
-        EmitResult {
-            success_count: count,
-            failure_count: 0,
-            errors: vec![],
-        }
+        EmitResult { success_count: count, failure_count: 0, errors: vec![] }
     }
 
     pub fn partial(success: usize, failures: usize, errors: Vec<String>) -> Self {
-        EmitResult {
-            success_count: success,
-            failure_count: failures,
-            errors,
-        }
+        EmitResult { success_count: success, failure_count: failures, errors }
     }
 
     pub fn failure(error: String) -> Self {
-        EmitResult {
-            success_count: 0,
-            failure_count: 1,
-            errors: vec![error],
-        }
+        EmitResult { success_count: 0, failure_count: 1, errors: vec![error] }
     }
 
     pub fn is_success(&self) -> bool {
@@ -72,7 +60,7 @@ pub struct NoopEmitter;
 
 #[async_trait]
 impl TelemetryEmitter for NoopEmitter {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "noop"
     }
 
@@ -102,15 +90,13 @@ pub struct FileEmitter {
 #[allow(dead_code)]
 impl FileEmitter {
     pub fn new(output_dir: impl Into<std::path::PathBuf>) -> Self {
-        FileEmitter {
-            output_dir: output_dir.into(),
-        }
+        FileEmitter { output_dir: output_dir.into() }
     }
 }
 
 #[async_trait]
 impl TelemetryEmitter for FileEmitter {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "file"
     }
 
@@ -122,9 +108,7 @@ impl TelemetryEmitter for FileEmitter {
         use chrono::Utc;
 
         let timestamp = Utc::now().format("%Y%m%d_%H%M%S");
-        let filename = self
-            .output_dir
-            .join(format!("telemetry_{}.json", timestamp));
+        let filename = self.output_dir.join(format!("telemetry_{timestamp}.json"));
 
         let json = serde_json::to_string_pretty(snapshot)?;
         std::fs::write(&filename, json)?;

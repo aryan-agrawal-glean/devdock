@@ -24,20 +24,14 @@ impl OperationLogger {
         std::fs::create_dir_all(&log_dir)?;
 
         let timestamp = Local::now().format("%Y%m%d-%H%M%S");
-        let log_path = log_dir.join(format!("devdock-remote-{}.log", timestamp));
+        let log_path = log_dir.join(format!("devdock-remote-{timestamp}.log"));
 
-        let file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&log_path)?;
+        let file = OpenOptions::new().create(true).append(true).open(&log_path)?;
 
-        let logger = Self {
-            file: Arc::new(Mutex::new(file)),
-            log_path,
-        };
+        let logger = Self { file: Arc::new(Mutex::new(file)), log_path };
 
         logger.log_line("=== DevDock Remote Session Started ===")?;
-        logger.log_line(&format!("DevDock ID: {}", devdock_id))?;
+        logger.log_line(&format!("DevDock ID: {devdock_id}"))?;
         logger.log_line(&format!("Timestamp: {}", Local::now().to_rfc3339()))?;
         logger.log_line("")?;
 
@@ -53,7 +47,7 @@ impl OperationLogger {
     pub fn log(&self, message: &str) -> Result<()> {
         let timestamp = Local::now().format("%H:%M:%S");
         let mut file = self.file.lock().unwrap();
-        writeln!(file, "[{}] {}", timestamp, message)?;
+        writeln!(file, "[{timestamp}] {message}")?;
         file.flush()?;
         Ok(())
     }
@@ -61,7 +55,7 @@ impl OperationLogger {
     /// Log a message without timestamp.
     pub fn log_line(&self, message: &str) -> Result<()> {
         let mut file = self.file.lock().unwrap();
-        writeln!(file, "{}", message)?;
+        writeln!(file, "{message}")?;
         file.flush()?;
         Ok(())
     }
@@ -69,7 +63,7 @@ impl OperationLogger {
     /// Log a section header.
     pub fn log_section(&self, title: &str) -> Result<()> {
         self.log_line("")?;
-        self.log_line(&format!("=== {} ===", title))?;
+        self.log_line(&format!("=== {title} ==="))?;
         Ok(())
     }
 
@@ -84,16 +78,13 @@ impl OperationLogger {
     /// Log command execution.
     #[allow(dead_code)]
     pub fn log_command(&self, command: &str) -> Result<()> {
-        self.log(&format!("Executing: {}", command))?;
+        self.log(&format!("Executing: {command}"))?;
         Ok(())
     }
 }
 
 impl Clone for OperationLogger {
     fn clone(&self) -> Self {
-        Self {
-            file: Arc::clone(&self.file),
-            log_path: self.log_path.clone(),
-        }
+        Self { file: Arc::clone(&self.file), log_path: self.log_path.clone() }
     }
 }

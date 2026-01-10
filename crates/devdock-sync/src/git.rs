@@ -60,7 +60,7 @@ pub fn should_sync_file_by_pattern(path: &Path) -> bool {
     // Check extension
     if let Some(ext_os) = path.extension() {
         if let Some(ext) = ext_os.to_str() {
-            let ext_with_dot = format!(".{}", ext);
+            let ext_with_dot = format!(".{ext}");
             return SYNC_EXTENSIONS.contains(&ext_with_dot.as_str());
         }
     }
@@ -88,14 +88,8 @@ pub fn list_git_tracked_files(repo_path: &Path) -> Result<Vec<PathBuf>> {
         }
     }
 
-    debug!(
-        "Found {} git-tracked files in monitored directories",
-        files.len()
-    );
-    eprintln!(
-        "[SYNC-GIT] Found {} git-tracked files to sync (after filtering)",
-        files.len()
-    );
+    debug!("Found {} git-tracked files in monitored directories", files.len());
+    eprintln!("[SYNC-GIT] Found {} git-tracked files to sync (after filtering)", files.len());
     Ok(files)
 }
 
@@ -105,11 +99,8 @@ pub fn list_all_files(repo_path: &Path) -> Result<Vec<PathBuf>> {
 
     let mut files = Vec::new();
 
-    let walker = WalkBuilder::new(repo_path)
-        .hidden(false)
-        .git_ignore(true)
-        .git_exclude(true)
-        .build();
+    let walker =
+        WalkBuilder::new(repo_path).hidden(false).git_ignore(true).git_exclude(true).build();
 
     for entry in walker.flatten() {
         if entry.path().is_file() {
@@ -158,7 +149,7 @@ pub fn list_git_modified_files(repo_path: &Path) -> Result<Vec<PathBuf>> {
         .args(["diff", "--name-only", "--diff-filter=ACDMRT", &base])
         .current_dir(repo_path)
         .output()
-        .map_err(|e| SyncError::DaemonError(format!("Failed to run git diff: {}", e)))?;
+        .map_err(|e| SyncError::DaemonError(format!("Failed to run git diff: {e}")))?;
 
     if !output.status.success() {
         eprintln!("[SYNC-GIT] git diff failed, falling back to empty list");

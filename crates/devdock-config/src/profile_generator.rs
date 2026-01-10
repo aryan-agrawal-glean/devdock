@@ -124,7 +124,7 @@ impl TempProfileGenerator {
             architecture,
             project_number: String::new(),
             enable_service_metrics: "True".to_string(),
-            current_profile: profile_path.map(|s| s.to_string()),
+            current_profile: profile_path.map(std::string::ToString::to_string),
             dns_kubectl: Some("disabled".to_string()),
             k8s_service_account: None,
             debug_mode: "False".to_string(),
@@ -137,10 +137,7 @@ impl TempProfileGenerator {
             multi_project: None,
         };
 
-        Self {
-            profile,
-            dynamic_ini: None,
-        }
+        Self { profile, dynamic_ini: None }
     }
 
     /// Set the dynamic.ini config for reading production values
@@ -161,11 +158,7 @@ impl TempProfileGenerator {
         };
 
         // Get the nodepool key based on staging flag
-        let nodepool_key = if staging {
-            "index.staging.nodePool"
-        } else {
-            "index.nodePool"
-        };
+        let nodepool_key = if staging { "index.staging.nodePool" } else { "index.nodePool" };
 
         // Try to read nodepool from dynamic.ini
         let nodepool = match dynamic_ini.get("indexing", nodepool_key) {
@@ -177,10 +170,7 @@ impl TempProfileGenerator {
         match get_elastic_namespace(nodepool) {
             Ok(ns) => ns,
             Err(e) => {
-                warn!(
-                    "Failed to convert nodepool '{}' to namespace: {}",
-                    nodepool, e
-                );
+                warn!("Failed to convert nodepool '{}' to namespace: {}", nodepool, e);
                 default_namespace
             }
         }
@@ -218,10 +208,7 @@ impl TempProfileGenerator {
                 }
             }
             Ok(out) => {
-                warn!(
-                    "Failed to get bastion instance: {}",
-                    String::from_utf8_lossy(&out.stderr)
-                );
+                warn!("Failed to get bastion instance: {}", String::from_utf8_lossy(&out.stderr));
                 None
             }
             Err(e) => {
@@ -318,14 +305,13 @@ impl TempProfileGenerator {
     ) {
         // Parse active services list
         let active_set: Option<HashSet<&str>> =
-            active_services.map(|s| s.split(',').map(|s| s.trim()).collect());
+            active_services.map(|s| s.split(',').map(str::trim).collect());
 
         // Check if SQL is local (for docbuilder special case)
         let sql_is_local = profile
             .infra
             .get("sql")
-            .map(|c| c.deployment_type == devdock_core::types::DeploymentType::Local)
-            .unwrap_or(false);
+            .is_some_and(|c| c.deployment_type == devdock_core::types::DeploymentType::Local);
 
         // Track if QE is in the graph
         let has_qe = graph.nodes().any(|n| n.name == "qe");
@@ -394,9 +380,7 @@ impl TempProfileGenerator {
                     });
 
                     // Extract any extra fields from the profile (like tick_type)
-                    let extra = profile_service
-                        .map(|s| s.config.clone())
-                        .unwrap_or_default();
+                    let extra = profile_service.map(|s| s.config.clone()).unwrap_or_default();
 
                     let mut entry = ServiceProfileEntry {
                         service_type,
@@ -414,10 +398,8 @@ impl TempProfileGenerator {
                     // Special case: Docbuilder with local SQL - add ENABLE_WRITES env
                     if node.name == "docbuilder" && sql_is_local {
                         let env_map = entry.env.get_or_insert_with(HashMap::new);
-                        env_map.insert(
-                            "ENABLE_WRITES".to_string(),
-                            "--allWritesEnabled".to_string(),
-                        );
+                        env_map
+                            .insert("ENABLE_WRITES".to_string(), "--allWritesEnabled".to_string());
                     }
 
                     self.profile.services.insert(node.name.clone(), entry);
@@ -480,16 +462,10 @@ impl TempProfileGenerator {
 
             // Set defaults if not present
             if !extra.contains_key("mode") {
-                extra.insert(
-                    "mode".to_string(),
-                    serde_json::Value::String("fast".to_string()),
-                );
+                extra.insert("mode".to_string(), serde_json::Value::String("fast".to_string()));
             }
             if !extra.contains_key("copy_tables") {
-                extra.insert(
-                    "copy_tables".to_string(),
-                    serde_json::Value::String(String::new()),
-                );
+                extra.insert("copy_tables".to_string(), serde_json::Value::String(String::new()));
             }
             if !extra.contains_key("full_cleanup") {
                 extra.insert("full_cleanup".to_string(), serde_json::Value::Bool(false));
@@ -498,10 +474,7 @@ impl TempProfileGenerator {
                 extra.insert("copy_keyval".to_string(), serde_json::Value::Bool(true));
             }
             if !extra.contains_key("copy_where_queries") {
-                extra.insert(
-                    "copy_where_queries".to_string(),
-                    serde_json::Value::Array(vec![]),
-                );
+                extra.insert("copy_where_queries".to_string(), serde_json::Value::Array(vec![]));
             }
         }
 
@@ -515,16 +488,11 @@ impl TempProfileGenerator {
             let platform = self.profile.platform.as_str();
             if infra_type == "remote" && platform != "azure" && !extra.contains_key("namespace") {
                 // Check if staging mode from config
-                let staging = extra
-                    .get("staging")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false);
+                let staging =
+                    extra.get("staging").and_then(serde_json::Value::as_bool).unwrap_or(false);
 
                 let namespace = self.get_opensearch_namespace(staging);
-                extra.insert(
-                    "namespace".to_string(),
-                    serde_json::Value::String(namespace),
-                );
+                extra.insert("namespace".to_string(), serde_json::Value::String(namespace));
             }
         }
 
@@ -533,10 +501,8 @@ impl TempProfileGenerator {
             // Add local_to_remote_ports for port forwarding
             // Default ports: [7972, 8888] for Tilt UI forwarding
             if !extra.contains_key("local_to_remote_ports") {
-                extra.insert(
-                    "local_to_remote_ports".to_string(),
-                    serde_json::json!([[7972, 8888]]),
-                );
+                extra
+                    .insert("local_to_remote_ports".to_string(), serde_json::json!([[7972, 8888]]));
             }
 
             // For AWS platform, get bastion instance ID
@@ -630,44 +596,28 @@ impl TempProfileGenerator {
     /// Store hook configuration as raw JSON (workaround for hook-specific fields)
     fn store_hook_config(&mut self, hook_name: &str, hook_data: serde_json::Value) {
         // Extract all fields from the hook configuration
-        let service_type = hook_data
-            .get("type")
-            .and_then(|v| v.as_str())
-            .unwrap_or("local")
-            .to_string();
+        let service_type =
+            hook_data.get("type").and_then(|v| v.as_str()).unwrap_or("local").to_string();
 
         let env = hook_data
             .get("env")
             .and_then(|v| serde_json::from_value::<HashMap<String, String>>(v.clone()).ok());
 
-        let script = hook_data
-            .get("script")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
+        let script =
+            hook_data.get("script").and_then(|v| v.as_str()).map(std::string::ToString::to_string);
 
-        let service = hook_data
-            .get("service")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
+        let service =
+            hook_data.get("service").and_then(|v| v.as_str()).map(std::string::ToString::to_string);
 
         let depends_on_services = hook_data
             .get("depends_on_services")
             .and_then(|v| serde_json::from_value::<Vec<String>>(v.clone()).ok());
 
-        let timeout = hook_data
-            .get("timeout")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
+        let timeout =
+            hook_data.get("timeout").and_then(|v| v.as_str()).map(std::string::ToString::to_string);
 
         // Collect any extra fields that aren't in the standard set
-        let standard_keys = [
-            "type",
-            "env",
-            "script",
-            "service",
-            "depends_on_services",
-            "timeout",
-        ];
+        let standard_keys = ["type", "env", "script", "service", "depends_on_services", "timeout"];
         let mut extra = HashMap::new();
         if let Some(obj) = hook_data.as_object() {
             for (key, value) in obj {
@@ -707,6 +657,6 @@ impl TempProfileGenerator {
     /// Generate the final YAML string
     pub fn generate(self) -> Result<String> {
         serde_yaml::to_string(&self.profile)
-            .map_err(|e| anyhow::anyhow!("Failed to serialize temp profile: {}", e))
+            .map_err(|e| anyhow::anyhow!("Failed to serialize temp profile: {e}"))
     }
 }

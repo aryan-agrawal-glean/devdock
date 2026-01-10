@@ -65,16 +65,8 @@ pub fn collect_system_info() -> Result<SystemInfo> {
 
     Ok(SystemInfo {
         timestamp: Local::now().to_rfc3339(),
-        cpu: CpuInfo {
-            percent: cpu_percent,
-            cores,
-            physical_cores,
-        },
-        memory: MemoryInfo {
-            total: mem_total,
-            available: mem_available,
-            percent: mem_percent,
-        },
+        cpu: CpuInfo { percent: cpu_percent, cores, physical_cores },
+        memory: MemoryInfo { total: mem_total, available: mem_available, percent: mem_percent },
         disk,
         docker,
     })
@@ -93,12 +85,7 @@ fn get_disk_info() -> Result<DiskInfo> {
             let used = total - available;
             let percent = (used as f32 / total as f32) * 100.0;
 
-            return Ok(DiskInfo {
-                total,
-                used,
-                free: available,
-                percent,
-            });
+            return Ok(DiskInfo { total, used, free: available, percent });
         }
     }
 
@@ -109,12 +96,7 @@ fn get_disk_info() -> Result<DiskInfo> {
         let used = total - available;
         let percent = (used as f32 / total as f32) * 100.0;
 
-        return Ok(DiskInfo {
-            total,
-            used,
-            free: available,
-            percent,
-        });
+        return Ok(DiskInfo { total, used, free: available, percent });
     }
 
     Err(DiagnosticsError::SystemInfo("No disk found".to_string()))

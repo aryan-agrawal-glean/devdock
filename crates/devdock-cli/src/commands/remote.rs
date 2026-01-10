@@ -46,9 +46,7 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
     let branch = get_current_branch()?;
 
     // Determine workspace name and sanitize it (replace slashes and special chars)
-    let workspace_name = workspace_name
-        .or_else(|| vm.clone())
-        .unwrap_or_else(|| branch.clone());
+    let workspace_name = workspace_name.or_else(|| vm.clone()).unwrap_or_else(|| branch.clone());
     let workspace_name = sanitize_workspace_name(&workspace_name);
 
     // Find profile path
@@ -71,7 +69,7 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
         workspace_path: worktree.clone(),
         workspace_name: Some(workspace_name.clone()),
         branch: branch.clone(),
-        profile: profile.to_string(),
+        profile: profile.clone(),
         mode: "remote".to_string(),
         status: InstanceStatus::Starting,
         port_base: offset,
@@ -87,13 +85,13 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
     // Create operation logger
     let logger = OperationLogger::new(&instance_id)?;
     logger.log_section("Configuration")?;
-    logger.log(&format!("Profile: {}", profile))?;
-    logger.log(&format!("Branch: {}", branch))?;
-    logger.log(&format!("Workspace: {}", workspace_name))?;
-    logger.log(&format!("Region: {}", region))?;
-    logger.log(&format!("Port Base: {}", offset))?;
-    logger.log(&format!("Auto-forward: {}", auto_forward))?;
-    logger.log(&format!("Verbose: {}", verbose))?;
+    logger.log(&format!("Profile: {profile}"))?;
+    logger.log(&format!("Branch: {branch}"))?;
+    logger.log(&format!("Workspace: {workspace_name}"))?;
+    logger.log(&format!("Region: {region}"))?;
+    logger.log(&format!("Port Base: {offset}"))?;
+    logger.log(&format!("Auto-forward: {auto_forward}"))?;
+    logger.log(&format!("Verbose: {verbose}"))?;
 
     // Progress will be shown via spinners for non-verbose mode
 
@@ -113,28 +111,19 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
         println!("   • Creating workspace: ~1-2 min");
         println!("   • Starting DevDock: ~1 min");
         println!();
-        println!(
-            "📋 Session logs: {}",
-            logger.path().display().to_string().dimmed()
-        );
-        println!(
-            "   Monitor: tail -f {}",
-            logger.path().display().to_string().dimmed()
-        );
+        println!("📋 Session logs: {}", logger.path().display().to_string().dimmed());
+        println!("   Monitor: tail -f {}", logger.path().display().to_string().dimmed());
         println!();
     } else {
         // Compact header
         println!("{}", "╭───────────────────────────────────────────╮".cyan());
-        println!(
-            "{}",
-            format!("│  🚀 Remote DevDock: {}@{}", profile, workspace_name).cyan()
-        );
+        println!("{}", format!("│  🚀 Remote DevDock: {profile}@{workspace_name}").cyan());
         println!("{}", "╰───────────────────────────────────────────╯".cyan());
         println!();
         println!(
             "{} | {} | {}",
-            format!("Profile: {}", profile).dimmed(),
-            format!("Branch: {}", branch).dimmed(),
+            format!("Profile: {profile}").dimmed(),
+            format!("Branch: {branch}").dimmed(),
             format!("ID: {}", &instance_id[..8]).dimmed()
         );
         println!();
@@ -147,24 +136,21 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
         // Create or start workspace
         let workspace_name = if let Some(existing) = vm {
             logger.log_section("Using Existing Workspace")?;
-            logger.log(&format!("Workspace: {}", existing))?;
-            output::info(&format!("Using existing workspace: {}", existing));
+            logger.log(&format!("Workspace: {existing}"))?;
+            output::info(&format!("Using existing workspace: {existing}"));
             coder::start_workspace(&existing)?;
             logger.log("Workspace started successfully")?;
             existing
         } else {
             // Check if workspace already exists
-            logger.log(&format!(
-                "Checking if workspace '{}' exists...",
-                workspace_name
-            ))?;
+            logger.log(&format!("Checking if workspace '{workspace_name}' exists..."))?;
             let exists = coder::workspace_exists(&workspace_name)?;
-            logger.log(&format!("Workspace exists: {}", exists))?;
+            logger.log(&format!("Workspace exists: {exists}"))?;
 
             if exists {
                 if verbose {
                     println!();
-                    output::warn(&format!("Workspace '{}' already exists!", workspace_name));
+                    output::warn(&format!("Workspace '{workspace_name}' already exists!"));
                     println!();
                 } else {
                     println!(
@@ -199,7 +185,7 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
                 match choice {
                     "1" => {
                         logger.log_section("Using Existing Workspace")?;
-                        logger.log(&format!("Workspace: {}", workspace_name))?;
+                        logger.log(&format!("Workspace: {workspace_name}"))?;
                         logger.log("User chose to continue with existing workspace")?;
 
                         if !verbose {
@@ -208,7 +194,7 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
 
                         // Start workspace if stopped (silent in non-verbose mode)
                         if verbose {
-                            output::info(&format!("Using existing workspace: {}", workspace_name));
+                            output::info(&format!("Using existing workspace: {workspace_name}"));
                         }
                         coder::start_workspace(&workspace_name)?;
                         logger.log("Workspace started")?;
@@ -234,10 +220,10 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
                     }
                     "2" => {
                         logger.log_section("Deleting and Recreating Workspace")?;
-                        logger.log(&format!("Workspace: {}", workspace_name))?;
+                        logger.log(&format!("Workspace: {workspace_name}"))?;
                         logger.log("User chose to delete and recreate workspace")?;
 
-                        output::info(&format!("Deleting existing workspace: {}", workspace_name));
+                        output::info(&format!("Deleting existing workspace: {workspace_name}"));
                         coder::delete_workspace(&workspace_name)?;
                         logger.log("Workspace deleted")?;
 
@@ -247,17 +233,17 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
                         // Create new workspace
                         logger.log_section("Creating Workspace")?;
                         logger.log("Template: devdock-glean")?;
-                        logger.log(&format!("Workspace name: {}", workspace_name))?;
-                        logger.log(&format!("Region: {}", region))?;
+                        logger.log(&format!("Workspace name: {workspace_name}"))?;
+                        logger.log(&format!("Region: {region}"))?;
 
                         let spinner =
                             output::create_spinner("Creating Coder workspace (1-2 minutes)...");
                         let config = CoderWorkspaceConfig {
                             template: "devdock-glean".to_string(),
                             workspace_name: workspace_name.clone(),
-                            region: region.to_string(),
+                            region: region.clone(),
                             port_base: Some(offset),
-                            profile: profile.to_string(),
+                            profile: profile.clone(),
                         };
 
                         let ws_name = workspace::provision_workspace(&config).await?;
@@ -271,7 +257,7 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
                         }
                         std::thread::sleep(std::time::Duration::from_secs(10));
                         logger.log("Waited 10s for SSH initialization")?;
-                        logger.log(&format!("Workspace SSH ready: coder ssh {}", ws_name))?;
+                        logger.log(&format!("Workspace SSH ready: coder ssh {ws_name}"))?;
                         ws_name
                     }
                     "3" | "" => {
@@ -287,17 +273,17 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
                 // Workspace doesn't exist, create it
                 logger.log_section("Creating Workspace")?;
                 logger.log("Template: devdock-glean")?;
-                logger.log(&format!("Workspace name: {}", workspace_name))?;
-                logger.log(&format!("Region: {}", region))?;
+                logger.log(&format!("Workspace name: {workspace_name}"))?;
+                logger.log(&format!("Region: {region}"))?;
 
                 // Create workspace with spinner
                 let spinner = output::create_spinner("Creating Coder workspace (1-2 minutes)...");
                 let config = CoderWorkspaceConfig {
                     template: "devdock-glean".to_string(),
                     workspace_name: workspace_name.clone(),
-                    region: region.to_string(),
+                    region: region.clone(),
                     port_base: Some(offset),
-                    profile: profile.to_string(),
+                    profile: profile.clone(),
                 };
 
                 let ws_name = workspace::provision_workspace(&config).await?;
@@ -311,7 +297,7 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
                 }
                 std::thread::sleep(std::time::Duration::from_secs(10));
                 logger.log("Waited 10s for SSH initialization")?;
-                logger.log(&format!("Workspace SSH ready: coder ssh {}", ws_name))?;
+                logger.log(&format!("Workspace SSH ready: coder ssh {ws_name}"))?;
                 ws_name
             }
         };
@@ -322,15 +308,12 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
         logger.log("Syncing profile, custom.ini, and gcloud credentials...")?;
 
         logger.log_section("Starting DevDock")?;
-        logger.log(&format!("Profile: {}", profile))?;
-        logger.log(&format!("Services filter: {:?}", services))?;
+        logger.log(&format!("Profile: {profile}"))?;
+        logger.log(&format!("Services filter: {services:?}"))?;
         logger.log(&format!(
             "Command: devdock start {} {}",
             profile,
-            services
-                .as_ref()
-                .map(|s| format!("-s {}", s))
-                .unwrap_or_default()
+            services.as_ref().map(|s| format!("-s {s}")).unwrap_or_default()
         ))?;
         logger.log(&format!(
             "Remote logs: coder ssh {} -- tail -f /tmp/devdock-start.log",
@@ -340,12 +323,12 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
         // Step 1: Config sync
         let config_start = Instant::now();
 
-        let spinner1 = if !verbose {
-            Some(output::create_spinner("Config"))
-        } else {
+        let spinner1 = if verbose {
             println!(); // Newline for substeps
             output::info("Syncing configuration files to remote...");
             None
+        } else {
+            Some(output::create_spinner("Config"))
         };
 
         // Step 2: DevDock start (spinner created by callback after config completes)
@@ -363,7 +346,7 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
                 if let Some(s) = spinner1 {
                     s.finish_with_message(format!(
                         "Config {}",
-                        format!("✓ {}s", config_duration).green()
+                        format!("✓ {config_duration}s").green()
                     ));
                 }
 
@@ -390,16 +373,16 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
         .await?;
 
         // Finish DevDock start spinner
-        if !verbose {
+        if verbose {
+            output::success("DevDock started successfully");
+        } else {
             let devdock_duration = devdock_start_time.lock().unwrap().elapsed().as_secs();
             if let Some(s) = spinner2.lock().unwrap().take() {
                 s.finish_with_message(format!(
                     "Starting {}",
-                    format!("✓ {}s", devdock_duration).green()
+                    format!("✓ {devdock_duration}s").green()
                 ));
             }
-        } else {
-            output::success("DevDock started successfully");
         }
         logger.log("DevDock started successfully")?;
 
@@ -407,11 +390,7 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
         if let Some(mgr) = &port_mgr {
             let step2_start = Instant::now();
 
-            let spinner2 = if !verbose {
-                Some(output::create_spinner("Ports"))
-            } else {
-                None
-            };
+            let spinner2 = if verbose { None } else { Some(output::create_spinner("Ports")) };
 
             let mappings: Vec<_> = mgr
                 .mappings
@@ -431,10 +410,7 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
 
             let step2_duration = step2_start.elapsed().as_secs();
             if let Some(s) = spinner2 {
-                s.finish_with_message(format!(
-                    "Ports {}",
-                    format!("✓ {}s", step2_duration).green()
-                ));
+                s.finish_with_message(format!("Ports {}", format!("✓ {step2_duration}s").green()));
             }
         }
 
@@ -444,11 +420,11 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
         // Step 3 (or 2 if no ports): Auto-start file sync (always enabled)
         let step_sync_start = Instant::now();
 
-        let spinner_sync = if !verbose {
-            Some(output::create_spinner("Sync"))
-        } else {
+        let spinner_sync = if verbose {
             println!();
             Some(output::create_spinner("Starting file sync..."))
+        } else {
+            Some(output::create_spinner("Sync"))
         };
 
         let repo_path = PathBuf::from(&worktree);
@@ -467,7 +443,7 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
                         } else {
                             s.finish_with_message(format!(
                                 "Sync {}",
-                                format!("✓ {}s", step_sync_duration).green()
+                                format!("✓ {step_sync_duration}s").green()
                             ));
                         }
                     }
@@ -494,9 +470,7 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
         let _ = sync_result;
 
         // Update instance status
-        state
-            .update_status(&instance_id, InstanceStatus::Running)
-            .await?;
+        state.update_status(&instance_id, InstanceStatus::Running).await?;
 
         // Calculate total time
         let total_seconds = overall_start.elapsed().as_secs();
@@ -504,8 +478,8 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
 
         // Log completion
         logger.log_section("Setup Complete")?;
-        logger.log(&format!("Total time: {}", total_time))?;
-        logger.log(&format!("Workspace: {}", workspace_name))?;
+        logger.log(&format!("Total time: {total_time}"))?;
+        logger.log(&format!("Workspace: {workspace_name}"))?;
         logger.log(&format!("Tilt UI: http://localhost:{}", offset + 10350))?;
 
         // Print success message (clean and actionable)
@@ -513,7 +487,7 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
 
         if verbose {
             output::header("🚀 Remote DevDock is Ready!");
-            println!("{}", format!("Total time: {}", total_time).green().bold());
+            println!("{}", format!("Total time: {total_time}").green().bold());
             println!();
             println!("Access your remote DevDock:");
             println!("  {}: {}", "Workspace".cyan(), workspace_name);
@@ -544,42 +518,33 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
         } else {
             // Compact success output
             println!("{}", "╭────────────────────────────────────────╮".green());
-            println!(
-                "{}",
-                format!("│  ✅ Ready in {}                     │", total_time).green()
-            );
+            println!("{}", format!("│  ✅ Ready in {total_time}                     │").green());
             println!("{}", "╰────────────────────────────────────────╯".green());
             println!();
             println!(
                 "{} {}",
                 "🌐 Tilt UI:".cyan(),
-                format!("http://localhost:{}", offset + 10350)
-                    .cyan()
-                    .underline()
+                format!("http://localhost:{}", offset + 10350).cyan().underline()
             );
-            println!(
-                "{} coder ssh {}",
-                "📁 SSH:    ".dimmed(),
-                workspace_name.dimmed()
-            );
+            println!("{} coder ssh {}", "📁 SSH:    ".dimmed(), workspace_name.dimmed());
             println!();
 
             // Show actionable next steps based on context
             println!("{}", "💡 Next steps:".bold());
 
-            if !auto_forward {
-                println!(
-                    "   {} {}  {}",
-                    "•".cyan(),
-                    "devdock ports forward --all".cyan(),
-                    "(forward service ports)".dimmed()
-                );
-            } else {
+            if auto_forward {
                 println!(
                     "   {} {}  {}",
                     "•".cyan(),
                     "devdock ports list".cyan(),
                     "(view port mappings)".dimmed()
+                );
+            } else {
+                println!(
+                    "   {} {}  {}",
+                    "•".cyan(),
+                    "devdock ports forward --all".cyan(),
+                    "(forward service ports)".dimmed()
                 );
             }
 
@@ -615,25 +580,24 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
 
     // Handle result and update status accordingly
     match setup_result {
-        Ok(_) => {
+        Ok(()) => {
             // Success - status already updated to Running above
             Ok(())
         }
         Err(e) => {
             // Failed - update status to Stopped
             info!("Setup failed, updating instance status to Stopped");
-            if let Err(status_err) = state
-                .update_status(&instance_id, InstanceStatus::Stopped)
-                .await
+            if let Err(status_err) =
+                state.update_status(&instance_id, InstanceStatus::Stopped).await
             {
                 warn!("Failed to update instance status: {}", status_err);
             }
 
             logger.log_section("Setup Failed")?;
-            logger.log(&format!("Error: {}", e))?;
+            logger.log(&format!("Error: {e}"))?;
             logger.log(&format!("Instance {} marked as Stopped", &instance_id[..8]))?;
 
-            output::error(&format!("DevDock setup failed: {}", e));
+            output::error(&format!("DevDock setup failed: {e}"));
             println!();
             println!("To clean up: devdock stop -i {}", &instance_id[..8]);
             Err(e)
@@ -645,9 +609,7 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
 fn get_current_worktree() -> Result<String> {
     use std::process::Command;
 
-    let output = Command::new("git")
-        .args(["rev-parse", "--show-toplevel"])
-        .output()?;
+    let output = Command::new("git").args(["rev-parse", "--show-toplevel"]).output()?;
 
     if !output.status.success() {
         return Err(anyhow!("Not in a git repository"));
@@ -660,9 +622,7 @@ fn get_current_worktree() -> Result<String> {
 fn get_current_branch() -> Result<String> {
     use std::process::Command;
 
-    let output = Command::new("git")
-        .args(["rev-parse", "--abbrev-ref", "HEAD"])
-        .output()?;
+    let output = Command::new("git").args(["rev-parse", "--abbrev-ref", "HEAD"]).output()?;
 
     if !output.status.success() {
         return Err(anyhow!("Failed to get branch name"));
@@ -675,16 +635,8 @@ fn get_current_branch() -> Result<String> {
 /// Replaces non-alphanumeric characters with hyphens and truncates to 32 chars.
 fn sanitize_workspace_name(name: &str) -> String {
     // Replace non-alphanumeric (except hyphens) with hyphens
-    let sanitized: String = name
-        .chars()
-        .map(|c| {
-            if c.is_alphanumeric() || c == '-' {
-                c
-            } else {
-                '-'
-            }
-        })
-        .collect();
+    let sanitized: String =
+        name.chars().map(|c| if c.is_alphanumeric() || c == '-' { c } else { '-' }).collect();
 
     // Truncate to 32 characters (Coder workspace name limit)
     sanitized.chars().take(32).collect()
@@ -699,34 +651,29 @@ fn find_profile(profile: &str) -> Result<PathBuf> {
     let base = PathBuf::from(devdock_root).join("devdock/profiles");
 
     // Try user_profiles first
-    let user_profile = base.join("user_profiles").join(format!("{}.yaml", profile));
+    let user_profile = base.join("user_profiles").join(format!("{profile}.yaml"));
     if user_profile.exists() {
         return Ok(user_profile);
     }
 
     // Try integration_tests
-    let test_profile = base
-        .join("integration_tests")
-        .join(format!("{}.yaml", profile));
+    let test_profile = base.join("integration_tests").join(format!("{profile}.yaml"));
     if test_profile.exists() {
         return Ok(test_profile);
     }
 
     // Try base profiles
-    let base_profile = base.join(format!("{}.yaml", profile));
+    let base_profile = base.join(format!("{profile}.yaml"));
     if base_profile.exists() {
         return Ok(base_profile);
     }
 
-    Err(anyhow!("Profile not found: {}", profile))
+    Err(anyhow!("Profile not found: {profile}"))
 }
 
 /// Get current timestamp.
 fn now() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs() as i64
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64
 }
 
 /// Clean up sync files for instances that no longer exist in the database.

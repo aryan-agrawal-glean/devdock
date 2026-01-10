@@ -21,7 +21,7 @@ pub async fn networks() -> Result<()> {
 
     // List the networks
     for network in docker::DEVDOCK_NETWORKS {
-        output::info(&format!("  • {}", network));
+        output::info(&format!("  • {network}"));
     }
 
     Ok(())
@@ -72,7 +72,7 @@ pub async fn prune() -> Result<()> {
     let removed = docker::remove_dangling_images()?;
 
     if removed > 0 {
-        output::success(&format!("✅ Removed {} dangling images", removed));
+        output::success(&format!("✅ Removed {removed} dangling images"));
     } else {
         output::info("No dangling images to remove");
     }

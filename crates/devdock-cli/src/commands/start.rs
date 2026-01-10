@@ -22,7 +22,7 @@ pub async fn execute(
     output::info("Starting DevDock...");
 
     // Step 1: Load and validate profile
-    output::info(&format!("Loading profile: {}", profile_name));
+    output::info(&format!("Loading profile: {profile_name}"));
     let loader = ProfileLoader::new();
     let (profile, profile_path) = loader.load_with_path(profile_name)?;
 
@@ -34,10 +34,7 @@ pub async fn execute(
     // Step 2: Resolve dependencies
     let resolver = DependencyResolver::new();
     let resolved_components = resolver.resolve(&profile)?;
-    output::info(&format!(
-        "Resolved {} components",
-        resolved_components.len()
-    ));
+    output::info(&format!("Resolved {} components", resolved_components.len()));
 
     // Step 3: Check Docker is running
     check_docker()?;
@@ -83,9 +80,7 @@ pub async fn execute(
     cleanup_startup_state_files()?;
 
     // Step 8: Update status and start Tilt
-    state_manager
-        .update_status(&instance.id, InstanceStatus::Running)
-        .await?;
+    state_manager.update_status(&instance.id, InstanceStatus::Running).await?;
 
     output::info("Starting Tilt...");
     let tilt_process = start_tilt(services)?;
@@ -95,7 +90,7 @@ pub async fn execute(
 
     output::success("DevDock started!");
     println!("\n  Tilt UI: http://localhost:10350");
-    println!("  Services: https://local.glean.com:{}", port_base);
+    println!("  Services: https://local.glean.com:{port_base}");
 
     if run_monitor {
         println!(
@@ -136,11 +131,8 @@ fn check_docker() -> Result<()> {
     let (tx, rx) = mpsc::channel();
 
     thread::spawn(move || {
-        let result = Command::new("docker")
-            .arg("info")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
+        let result =
+            Command::new("docker").arg("info").stdout(Stdio::null()).stderr(Stdio::null()).status();
         tx.send(result).ok();
     });
 
@@ -160,7 +152,7 @@ fn check_docker() -> Result<()> {
             )
         }
         Ok(Err(e)) => {
-            anyhow::bail!("Failed to run 'docker info': {}", e)
+            anyhow::bail!("Failed to run 'docker info': {e}")
         }
         Err(_timeout) => {
             anyhow::bail!(
@@ -286,7 +278,7 @@ fn cleanup_startup_state_files() -> Result<()> {
     }
 
     if cleaned_count > 0 {
-        output::success(&format!("Cleaned {} startup state file(s)", cleaned_count));
+        output::success(&format!("Cleaned {cleaned_count} startup state file(s)"));
     }
     Ok(())
 }
@@ -318,19 +310,11 @@ fn start_tilt(services: Option<&str>) -> Result<Child> {
             cmd.arg(service.trim());
         }
         // Add helper services
-        cmd.args([
-            "gcloud-auth",
-            "trigger-profile-update",
-            "current-config",
-            "startup-monitor",
-        ]);
+        cmd.args(["gcloud-auth", "trigger-profile-update", "current-config", "startup-monitor"]);
     }
 
     // Spawn tilt process
-    let child = cmd
-        .stdin(Stdio::null())
-        .spawn()
-        .context("Failed to start tilt")?;
+    let child = cmd.stdin(Stdio::null()).spawn().context("Failed to start tilt")?;
 
     Ok(child)
 }
@@ -482,7 +466,7 @@ async fn wait_for_tilt(
                         }
                     }
                     Err(e) => {
-                        output::warn(&format!("Monitor error: {}", e));
+                        output::warn(&format!("Monitor error: {e}"));
                     }
                 }
             }
@@ -507,7 +491,7 @@ async fn wait_for_tilt(
             // Kill Tilt process
             #[cfg(unix)]
             {
-                output::info(&format!("Terminating Tilt process: {}", tilt_pid));
+                output::info(&format!("Terminating Tilt process: {tilt_pid}"));
                 // Send SIGTERM for graceful shutdown
                 unsafe {
                     libc::kill(tilt_pid as i32, libc::SIGTERM);
@@ -550,18 +534,18 @@ async fn wait_for_tilt(
     if status.success() {
         output::success("DevDock stopped");
     } else {
-        output::warn(&format!("Tilt exited with status: {}", status));
+        output::warn(&format!("Tilt exited with status: {status}"));
                     }
                 }
                 Ok(Err(e)) => {
-                    output::warn(&format!("Tilt process error: {}", e));
+                    output::warn(&format!("Tilt process error: {e}"));
                     perform_cleanup(&instance_id, &workspace_root).await?;
                     state_manager
                         .update_status(&instance_id, InstanceStatus::Stopped)
                         .await?;
                 }
                 Err(e) => {
-                    output::warn(&format!("Failed to wait for Tilt: {}", e));
+                    output::warn(&format!("Failed to wait for Tilt: {e}"));
                     perform_cleanup(&instance_id, &workspace_root).await?;
                     state_manager
                         .update_status(&instance_id, InstanceStatus::Stopped)
@@ -655,9 +639,7 @@ fn cleanup_port_processes() -> Result<()> {
         let mut pids_to_kill = Vec::new();
 
         for port in ports {
-            let output = Command::new("lsof")
-                .args(["-i", &format!(":{}", port), "-t"])
-                .output();
+            let output = Command::new("lsof").args(["-i", &format!(":{port}"), "-t"]).output();
 
             if let Ok(output) = output {
                 if output.status.success() {
@@ -682,7 +664,7 @@ fn cleanup_port_processes() -> Result<()> {
     }
 
     if killed > 0 {
-        output::success(&format!("Stopped {} process(es) on ports", killed));
+        output::success(&format!("Stopped {killed} process(es) on ports"));
     }
 
     Ok(())
@@ -712,9 +694,8 @@ fn cleanup_dangling_images() -> Result<()> {
     #[cfg(not(unix))]
     {
         // Fallback for non-Unix systems
-        let output = Command::new("docker")
-            .args(["images", "--filter", "dangling=true", "-q"])
-            .output()?;
+        let output =
+            Command::new("docker").args(["images", "--filter", "dangling=true", "-q"]).output()?;
 
         if output.status.success() {
             let images = String::from_utf8_lossy(&output.stdout);
@@ -760,20 +741,17 @@ fn cleanup_temp_files(workspace_root: &Path) -> Result<()> {
     output::info(&format!("Workspace root: {}", workspace_root.display()));
 
     let runtime_gen = workspace_root.join("devdock/runtime_generated");
-    output::info(&format!(
-        "Looking for runtime_generated at: {}",
-        runtime_gen.display()
-    ));
+    output::info(&format!("Looking for runtime_generated at: {}", runtime_gen.display()));
 
     if runtime_gen.exists() {
         output::info("Removing runtime_generated directory...");
         match std::fs::remove_dir_all(&runtime_gen) {
-            Ok(_) => {
+            Ok(()) => {
                 output::success("Removed runtime_generated directory");
                 cleaned_count += 1;
             }
             Err(e) => {
-                output::warn(&format!("Failed to remove runtime_generated: {}", e));
+                output::warn(&format!("Failed to remove runtime_generated: {e}"));
             }
         }
     } else {
@@ -794,7 +772,7 @@ fn cleanup_temp_files(workspace_root: &Path) -> Result<()> {
         }
     }
 
-    output::success(&format!("Cleaned {} file(s)/directory(s)", cleaned_count));
+    output::success(&format!("Cleaned {cleaned_count} file(s)/directory(s)"));
     Ok(())
 }
 
@@ -842,10 +820,7 @@ async fn emit_telemetry(
         timestamp: now,
     };
 
-    let snapshot = TelemetrySnapshot {
-        session: Some(session),
-        ..Default::default()
-    };
+    let snapshot = TelemetrySnapshot { session: Some(session), ..Default::default() };
 
     // Configure BigQuery emitter
     let config = BigQueryConfig {
@@ -862,10 +837,7 @@ async fn emit_telemetry(
                 if result.is_success() {
                     tracing::info!("Telemetry emitted to BigQuery: status={}", status);
                 } else {
-                    tracing::warn!(
-                        "Partial telemetry emission: {} errors",
-                        result.failure_count
-                    );
+                    tracing::warn!("Partial telemetry emission: {} errors", result.failure_count);
                 }
             }
             Err(e) => {

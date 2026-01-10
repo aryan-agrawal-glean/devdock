@@ -111,17 +111,14 @@ pub fn get_jira_token() -> Result<String> {
             "--secret=ONCALL_USER_JIRA_TOKEN",
         ])
         .output()
-        .map_err(|e| DiagnosticsError::Jira(format!("Failed to run gcloud command: {}", e)))?;
+        .map_err(|e| DiagnosticsError::Jira(format!("Failed to run gcloud command: {e}")))?;
 
     if output.status.success() {
         let token = String::from_utf8_lossy(&output.stdout).trim().to_string();
         Ok(token)
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(DiagnosticsError::Jira(format!(
-            "Failed to fetch Jira token: {}",
-            stderr
-        )))
+        Err(DiagnosticsError::Jira(format!("Failed to fetch Jira token: {stderr}")))
     }
 }
 
@@ -130,7 +127,7 @@ pub fn get_reporter_email() -> Result<String> {
     let output = Command::new("gcloud")
         .args(["config", "get-value", "account"])
         .output()
-        .map_err(|e| DiagnosticsError::Jira(format!("Failed to run gcloud command: {}", e)))?;
+        .map_err(|e| DiagnosticsError::Jira(format!("Failed to run gcloud command: {e}")))?;
 
     if output.status.success() {
         let email = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -149,13 +146,13 @@ async fn get_user_account_id(
     email: &str,
     token: &str,
 ) -> Result<Option<String>> {
-    let url = format!("{}/rest/api/3/user/search", JIRA_URL);
-    let auth = format!("{}:{}", JIRA_EMAIL, token);
+    let url = format!("{JIRA_URL}/rest/api/3/user/search");
+    let auth = format!("{JIRA_EMAIL}:{token}");
     let encoded = base64::engine::general_purpose::STANDARD.encode(auth.as_bytes());
 
     let response = client
         .get(&url)
-        .header("Authorization", format!("Basic {}", encoded))
+        .header("Authorization", format!("Basic {encoded}"))
         .query(&[("query", email)])
         .send()
         .await?;
@@ -190,10 +187,7 @@ pub fn format_description(
     // User Description section
     content.push(JiraContent {
         content_type: "heading".to_string(),
-        attrs: Some(JiraAttrs {
-            level: Some(2),
-            language: None,
-        }),
+        attrs: Some(JiraAttrs { level: Some(2), language: None }),
         content: Some(vec![JiraText {
             text_type: "text".to_string(),
             text: "User Description".to_string(),
@@ -213,10 +207,7 @@ pub fn format_description(
     // Command Run section
     content.push(JiraContent {
         content_type: "heading".to_string(),
-        attrs: Some(JiraAttrs {
-            level: Some(2),
-            language: None,
-        }),
+        attrs: Some(JiraAttrs { level: Some(2), language: None }),
         content: Some(vec![JiraText {
             text_type: "text".to_string(),
             text: "Command Run".to_string(),
@@ -225,24 +216,15 @@ pub fn format_description(
     });
     content.push(JiraContent {
         content_type: "codeBlock".to_string(),
-        attrs: Some(JiraAttrs {
-            level: None,
-            language: Some("bash".to_string()),
-        }),
-        content: Some(vec![JiraText {
-            text_type: "text".to_string(),
-            text: command.to_string(),
-        }]),
+        attrs: Some(JiraAttrs { level: None, language: Some("bash".to_string()) }),
+        content: Some(vec![JiraText { text_type: "text".to_string(), text: command.to_string() }]),
         text: None,
     });
 
     // Git Branch section
     content.push(JiraContent {
         content_type: "heading".to_string(),
-        attrs: Some(JiraAttrs {
-            level: Some(2),
-            language: None,
-        }),
+        attrs: Some(JiraAttrs { level: Some(2), language: None }),
         content: Some(vec![JiraText {
             text_type: "text".to_string(),
             text: "Git Branch".to_string(),
@@ -262,10 +244,7 @@ pub fn format_description(
     // System Information section
     content.push(JiraContent {
         content_type: "heading".to_string(),
-        attrs: Some(JiraAttrs {
-            level: Some(2),
-            language: None,
-        }),
+        attrs: Some(JiraAttrs { level: Some(2), language: None }),
         content: Some(vec![JiraText {
             text_type: "text".to_string(),
             text: "System Information".to_string(),
@@ -288,10 +267,7 @@ pub fn format_description(
     // Docker Containers section
     content.push(JiraContent {
         content_type: "heading".to_string(),
-        attrs: Some(JiraAttrs {
-            level: Some(2),
-            language: None,
-        }),
+        attrs: Some(JiraAttrs { level: Some(2), language: None }),
         content: Some(vec![JiraText {
             text_type: "text".to_string(),
             text: "Docker Containers".to_string(),
@@ -300,10 +276,7 @@ pub fn format_description(
     });
     content.push(JiraContent {
         content_type: "codeBlock".to_string(),
-        attrs: Some(JiraAttrs {
-            level: None,
-            language: Some("json".to_string()),
-        }),
+        attrs: Some(JiraAttrs { level: None, language: Some("json".to_string()) }),
         content: Some(vec![JiraText {
             text_type: "text".to_string(),
             text: serde_json::to_string_pretty(&system_info.docker).unwrap_or_default(),
@@ -315,10 +288,7 @@ pub fn format_description(
     if !config_files.is_empty() {
         content.push(JiraContent {
             content_type: "heading".to_string(),
-            attrs: Some(JiraAttrs {
-                level: Some(2),
-                language: None,
-            }),
+            attrs: Some(JiraAttrs { level: Some(2), language: None }),
             content: Some(vec![JiraText {
                 text_type: "text".to_string(),
                 text: "Configuration Files".to_string(),
@@ -331,7 +301,7 @@ pub fn format_description(
                 attrs: None,
                 content: Some(vec![JiraText {
                     text_type: "text".to_string(),
-                    text: format!("File: {}", filename),
+                    text: format!("File: {filename}"),
                 }]),
                 text: None,
             });
@@ -350,10 +320,7 @@ pub fn format_description(
     // Full System Details section
     content.push(JiraContent {
         content_type: "heading".to_string(),
-        attrs: Some(JiraAttrs {
-            level: Some(2),
-            language: None,
-        }),
+        attrs: Some(JiraAttrs { level: Some(2), language: None }),
         content: Some(vec![JiraText {
             text_type: "text".to_string(),
             text: "Full System Details".to_string(),
@@ -362,10 +329,7 @@ pub fn format_description(
     });
     content.push(JiraContent {
         content_type: "codeBlock".to_string(),
-        attrs: Some(JiraAttrs {
-            level: None,
-            language: Some("json".to_string()),
-        }),
+        attrs: Some(JiraAttrs { level: None, language: Some("json".to_string()) }),
         content: Some(vec![JiraText {
             text_type: "text".to_string(),
             text: serde_json::to_string_pretty(system_info).unwrap_or_default(),
@@ -373,11 +337,7 @@ pub fn format_description(
         text: None,
     });
 
-    JiraDescription {
-        version: 1,
-        doc_type: "doc".to_string(),
-        content,
-    }
+    JiraDescription { version: 1, doc_type: "doc".to_string(), content }
 }
 
 /// Create a Jira subtask with the bug report.
@@ -392,38 +352,30 @@ pub async fn create_jira_ticket(
     let reporter_email = get_reporter_email()?;
 
     let client = reqwest::Client::new();
-    let auth = format!("{}:{}", JIRA_EMAIL, jira_token);
+    let auth = format!("{JIRA_EMAIL}:{jira_token}");
     let encoded = base64::engine::general_purpose::STANDARD.encode(auth.as_bytes());
 
     // Try to get reporter account ID
-    let reporter_account_id = get_user_account_id(&client, &reporter_email, &jira_token)
-        .await
-        .ok()
-        .flatten();
+    let reporter_account_id =
+        get_user_account_id(&client, &reporter_email, &jira_token).await.ok().flatten();
 
     // Create issue fields
     let fields = JiraIssueFields {
-        project: JiraProject {
-            key: "EN".to_string(),
-        },
-        summary: format!("Devdock Bug Report - {}", summary),
+        project: JiraProject { key: "EN".to_string() },
+        summary: format!("Devdock Bug Report - {summary}"),
         description,
-        issuetype: JiraIssueType {
-            name: "Sub-task".to_string(),
-        },
-        parent: JiraParent {
-            key: PARENT_ISSUE.to_string(),
-        },
+        issuetype: JiraIssueType { name: "Sub-task".to_string() },
+        parent: JiraParent { key: PARENT_ISSUE.to_string() },
         reporter: reporter_account_id.map(|id| JiraReporter { account_id: id }),
     };
 
     let issue_request = JiraCreateIssue { fields };
 
     // Create the issue
-    let url = format!("{}/rest/api/3/issue", JIRA_URL);
+    let url = format!("{JIRA_URL}/rest/api/3/issue");
     let response = client
         .post(&url)
-        .header("Authorization", format!("Basic {}", encoded))
+        .header("Authorization", format!("Basic {encoded}"))
         .header("Content-Type", "application/json")
         .json(&issue_request)
         .send()
@@ -433,8 +385,7 @@ pub async fn create_jira_ticket(
         let status = response.status();
         let body = response.text().await?;
         return Err(DiagnosticsError::Jira(format!(
-            "Failed to create issue (status {}): {}",
-            status, body
+            "Failed to create issue (status {status}): {body}"
         )));
     }
 
@@ -458,18 +409,15 @@ async fn attach_file_to_issue(
     info!("Attaching archive to Jira issue {}", issue_key);
 
     let file_content = std::fs::read(attachment_path)?;
-    let filename = attachment_path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("bug_report.zip");
+    let filename = attachment_path.file_name().and_then(|n| n.to_str()).unwrap_or("bug_report.zip");
 
     let part = multipart::Part::bytes(file_content).file_name(filename.to_string());
     let form = multipart::Form::new().part("file", part);
 
-    let url = format!("{}/rest/api/3/issue/{}/attachments", JIRA_URL, issue_key);
+    let url = format!("{JIRA_URL}/rest/api/3/issue/{issue_key}/attachments");
     let response = client
         .post(&url)
-        .header("Authorization", format!("Basic {}", auth_header))
+        .header("Authorization", format!("Basic {auth_header}"))
         .header("X-Atlassian-Token", "no-check")
         .multipart(form)
         .send()
@@ -479,8 +427,7 @@ async fn attach_file_to_issue(
         let status = response.status();
         let body = response.text().await?;
         return Err(DiagnosticsError::Jira(format!(
-            "Failed to attach file (status {}): {}",
-            status, body
+            "Failed to attach file (status {status}): {body}"
         )));
     }
 

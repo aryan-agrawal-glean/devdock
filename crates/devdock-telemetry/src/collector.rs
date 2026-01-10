@@ -1,6 +1,13 @@
 //! Telemetry collector for gathering metrics from Tilt, Docker, and the host system.
 
-use crate::{emitter::TelemetryEmitter, models::*, Result};
+use crate::{
+    emitter::TelemetryEmitter,
+    models::{
+        DockerMetrics, HealthTransitionEvent, HostMetrics, ResourceStartupMetrics,
+        ResourceStatusMetrics, SessionMetrics, TelemetrySnapshot,
+    },
+    Result,
+};
 use chrono::{DateTime, Utc};
 use devdock_monitor::{SessionTiming, TiltClient, TiltResource};
 use serde::Deserialize;
@@ -200,12 +207,10 @@ impl TelemetryCollector {
         resources
             .iter()
             .map(|r| {
-                let tracker = trackers
-                    .entry(r.name.clone())
-                    .or_insert_with(|| ResourceTracker {
-                        first_seen: Some(now),
-                        ..Default::default()
-                    });
+                let tracker = trackers.entry(r.name.clone()).or_insert_with(|| ResourceTracker {
+                    first_seen: Some(now),
+                    ..Default::default()
+                });
 
                 if tracker.first_seen.is_none() {
                     tracker.first_seen = Some(now);
@@ -255,8 +260,8 @@ impl TelemetryCollector {
                     build_id: None,
                     load_order: 0,
                     creation_time: tracker.and_then(|t| t.first_seen),
-                    restart_count: tracker.map(|t| t.restart_count).unwrap_or(0),
-                    error_count: tracker.map(|t| t.error_count).unwrap_or(0),
+                    restart_count: tracker.map_or(0, |t| t.restart_count),
+                    error_count: tracker.map_or(0, |t| t.error_count),
                 }
             })
             .collect()
@@ -273,9 +278,8 @@ impl TelemetryCollector {
         for resource in resources {
             let current_status = format!("{:?}", resource.status);
 
-            let tracker = trackers
-                .entry(resource.name.clone())
-                .or_insert_with(ResourceTracker::default);
+            let tracker =
+                trackers.entry(resource.name.clone()).or_insert_with(ResourceTracker::default);
 
             if let Some(last) = &tracker.last_status {
                 if last != &current_status {
@@ -408,11 +412,7 @@ impl TelemetryCollector {
 
                 let total = free + active + inactive + wired;
                 let used = active + wired;
-                let pct = if total > 0 {
-                    (used as f64 / total as f64) * 100.0
-                } else {
-                    0.0
-                };
+                let pct = if total > 0 { (used as f64 / total as f64) * 100.0 } else { 0.0 };
 
                 return (0.0, used, total, pct);
             }
@@ -433,11 +433,7 @@ impl TelemetryCollector {
                 }
 
                 let used = total.saturating_sub(available);
-                let pct = if total > 0 {
-                    (used as f64 / total as f64) * 100.0
-                } else {
-                    0.0
-                };
+                let pct = if total > 0 { (used as f64 / total as f64) * 100.0 } else { 0.0 };
 
                 return (0.0, used, total, pct);
             }
@@ -471,15 +467,12 @@ impl TelemetryCollector {
                     if libc::statvfs(cpath.as_ptr(), stat.as_mut_ptr()) == 0 {
                         let stat = stat.assume_init();
                         #[allow(clippy::unnecessary_cast)]
-                        let total = (stat.f_blocks as u64) * (stat.f_frsize as u64);
+                        let total = u64::from(stat.f_blocks) * (stat.f_frsize as u64);
                         #[allow(clippy::unnecessary_cast)]
-                        let free = (stat.f_bfree as u64) * (stat.f_frsize as u64);
+                        let free = u64::from(stat.f_bfree) * (stat.f_frsize as u64);
                         let used = total - free;
-                        let pct = if total > 0 {
-                            (used as f64 / total as f64) * 100.0
-                        } else {
-                            0.0
-                        };
+                        let pct =
+                            if total > 0 { (used as f64 / total as f64) * 100.0 } else { 0.0 };
                         return (used, total, pct);
                     }
                 }
@@ -507,19 +500,19 @@ impl TelemetryCollector {
     }
 
     fn parse_memory_usage(s: &str) -> u64 {
-        s.split('/').next().map(Self::parse_size).unwrap_or(0)
+        s.split('/').next().map_or(0, Self::parse_size)
     }
 
     fn parse_memory_limit(s: &str) -> u64 {
-        s.split('/').nth(1).map(Self::parse_size).unwrap_or(0)
+        s.split('/').nth(1).map_or(0, Self::parse_size)
     }
 
     fn parse_io_input(s: &str) -> u64 {
-        s.split('/').next().map(Self::parse_size).unwrap_or(0)
+        s.split('/').next().map_or(0, Self::parse_size)
     }
 
     fn parse_io_output(s: &str) -> u64 {
-        s.split('/').nth(1).map(Self::parse_size).unwrap_or(0)
+        s.split('/').nth(1).map_or(0, Self::parse_size)
     }
 
     fn parse_size(s: &str) -> u64 {

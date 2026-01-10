@@ -449,7 +449,7 @@ async fn main() {
         let devdock_id = &args[2];
         let workspace_name = &args[3];
         let repo_path = std::path::PathBuf::from(&args[4]);
-        let full_mode = args.get(5).map(|s| s == "true").unwrap_or(false);
+        let full_mode = args.get(5).is_some_and(|s| s == "true");
 
         if let Err(e) = devdock_sync::daemon::run_daemon_process(
             devdock_id,
@@ -457,7 +457,7 @@ async fn main() {
             &repo_path,
             full_mode,
         ) {
-            eprintln!("Daemon process error: {}", e);
+            eprintln!("Daemon process error: {e}");
             process::exit(1);
         }
         process::exit(0);
@@ -473,10 +473,7 @@ async fn main() {
         _ => "trace",
     };
 
-    tracing_subscriber::fmt()
-        .with_env_filter(log_level)
-        .with_target(false)
-        .init();
+    tracing_subscriber::fmt().with_env_filter(log_level).with_target(false).init();
 
     // Run command
     let result = match cli.command {
@@ -558,11 +555,9 @@ async fn main() {
 
         Commands::Ports { command } => match command {
             PortCommands::List { instance } => commands::ports::list(instance).await,
-            PortCommands::Forward {
-                all,
-                service,
-                custom,
-            } => commands::ports::forward(all, service.as_deref(), custom.as_deref()).await,
+            PortCommands::Forward { all, service, custom } => {
+                commands::ports::forward(all, service.as_deref(), custom.as_deref()).await
+            }
             PortCommands::Stop { all, service } => {
                 commands::ports::stop(all, service.as_deref()).await
             }
@@ -574,20 +569,15 @@ async fn main() {
             SyncCommands::Status => commands::sync::status().await,
         },
 
-        Commands::Report {
-            summary,
-            description,
-            command,
-        } => match (summary, description, command) {
+        Commands::Report { summary, description, command } => match (summary, description, command)
+        {
             (Some(s), Some(d), Some(c)) => commands::report::report_bug_with_details(s, d, c).await,
             _ => commands::report::report_bug().await,
         },
 
-        Commands::Monitor {
-            timeout,
-            interval,
-            no_notify,
-        } => commands::monitor::execute(timeout, interval, no_notify).await,
+        Commands::Monitor { timeout, interval, no_notify } => {
+            commands::monitor::execute(timeout, interval, no_notify).await
+        }
 
         Commands::Service { command } => match command {
             ServiceCommands::Enable { name } => commands::service::enable(&name).await,
@@ -631,21 +621,15 @@ async fn main() {
                     )
                     .await
                 }
-                InfraSqlCommands::Clean {
-                    project,
-                    platform,
-                    region,
-                    db_tables,
-                } => commands::infra::sql_clean(&project, &platform, &region, &db_tables).await,
+                InfraSqlCommands::Clean { project, platform, region, db_tables } => {
+                    commands::infra::sql_clean(&project, &platform, &region, &db_tables).await
+                }
             },
 
             InfraCommands::Opensearch { command } => match command {
-                InfraOpenSearchCommands::Copy {
-                    project,
-                    indexes,
-                    query,
-                    max_docs,
-                } => commands::infra::opensearch_copy(&project, &indexes, &query, max_docs).await,
+                InfraOpenSearchCommands::Copy { project, indexes, query, max_docs } => {
+                    commands::infra::opensearch_copy(&project, &indexes, &query, max_docs).await
+                }
                 InfraOpenSearchCommands::Health => commands::infra::opensearch_health().await,
             },
         },

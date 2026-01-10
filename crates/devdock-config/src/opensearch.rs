@@ -48,7 +48,7 @@ fn get_namespace_to_node_pool() -> HashMap<String, String> {
 /// Returns:
 /// - "elastic-node-pool-1" through "elastic-node-pool-12" on GCP
 fn get_elastic_node_pool_name_from_number(number: usize) -> String {
-    format!("elastic-node-pool-{}", number)
+    format!("elastic-node-pool-{number}")
 }
 
 /// Get namespace from node pool name
@@ -129,12 +129,7 @@ impl OpenSearchConfig {
             node_pool, namespace, server_url
         );
 
-        Ok(Self {
-            node_pool,
-            namespace,
-            server_url,
-            is_staging,
-        })
+        Ok(Self { node_pool, namespace, server_url, is_staging })
     }
 }
 
@@ -184,14 +179,8 @@ mod tests {
 
     #[test]
     fn test_node_pool_name_from_number() {
-        assert_eq!(
-            get_elastic_node_pool_name_from_number(1),
-            "elastic-node-pool-1"
-        );
-        assert_eq!(
-            get_elastic_node_pool_name_from_number(12),
-            "elastic-node-pool-12"
-        );
+        assert_eq!(get_elastic_node_pool_name_from_number(1), "elastic-node-pool-1");
+        assert_eq!(get_elastic_node_pool_name_from_number(12), "elastic-node-pool-12");
     }
 
     #[test]
@@ -236,20 +225,17 @@ mod tests {
 
     #[test]
     fn test_opensearch_config_from_ini() {
-        let ini = r#"
+        let ini = r"
 [indexing]
 index.nodePool = elastic-node-pool-3
 index.serverUrl = http://localhost:9200
-"#;
+";
         let config = ParsedIniConfig::parse_str(ini).unwrap();
         let os_config = OpenSearchConfig::from_config(&config, false).unwrap();
 
         assert_eq!(os_config.node_pool, "elastic-node-pool-3");
         assert_eq!(os_config.namespace, "elasticsearch-3-namespace");
-        assert_eq!(
-            os_config.server_url,
-            Some("http://localhost:9200".to_string())
-        );
+        assert_eq!(os_config.server_url, Some("http://localhost:9200".to_string()));
     }
 
     #[test]

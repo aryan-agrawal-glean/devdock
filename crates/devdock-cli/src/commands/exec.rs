@@ -9,7 +9,7 @@ pub async fn execute(container: &str, command: &str) -> Result<()> {
     // Check Docker is running
     docker::check_docker()?;
 
-    output::info(&format!("Connecting to container: {}", container));
+    output::info(&format!("Connecting to container: {container}"));
 
     // Execute the command
     docker::exec_container(container, command)?;

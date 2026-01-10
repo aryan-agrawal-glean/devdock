@@ -93,10 +93,7 @@ impl ServiceConfig {
 
     /// Get the target directory flag
     pub fn is_target_directory(&self) -> bool {
-        self.target_is_directory
-            .as_ref()
-            .map(|s| s.to_lowercase() == "true")
-            .unwrap_or(true)
+        self.target_is_directory.as_ref().map_or(true, |s| s.to_lowercase() == "true")
     }
 }
 

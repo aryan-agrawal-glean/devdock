@@ -71,10 +71,7 @@ fn read_service_config_port(service_name: &str) -> Option<u16> {
             .join("devdock_config.json");
 
     if !config_path.exists() {
-        debug!(
-            "No config found for service: {} at {:?}",
-            service_name, config_path
-        );
+        debug!("No config found for service: {} at {:?}", service_name, config_path);
         return None;
     }
 
@@ -166,10 +163,10 @@ impl PortForwardManager {
         info!("Parsing profile for port mappings: {:?}", profile_path);
 
         let contents = fs::read_to_string(profile_path)
-            .map_err(|e| RemoteError::ConfigSyncError(format!("Failed to read profile: {}", e)))?;
+            .map_err(|e| RemoteError::ConfigSyncError(format!("Failed to read profile: {e}")))?;
 
         let profile: Profile = serde_yaml::from_str(&contents)
-            .map_err(|e| RemoteError::ConfigSyncError(format!("Failed to parse profile: {}", e)))?;
+            .map_err(|e| RemoteError::ConfigSyncError(format!("Failed to parse profile: {e}")))?;
 
         let mut mappings = Vec::new();
 
@@ -194,9 +191,7 @@ impl PortForwardManager {
                 }
 
                 // Add main service port (priority: explicit > config file)
-                let port = service
-                    .port
-                    .or_else(|| read_service_config_port(&service_name));
+                let port = service.port.or_else(|| read_service_config_port(&service_name));
                 if let Some(port) = port {
                     mappings.push(PortMapping {
                         service_name: service_name.clone(),
@@ -205,20 +200,14 @@ impl PortForwardManager {
                         remote_port: port,
                         process_pid: None,
                     });
-                    debug!(
-                        "Added port mapping for {}: {}->{}",
-                        service_name,
-                        offset + port,
-                        port
-                    );
+                    debug!("Added port mapping for {}: {}->{}", service_name, offset + port, port);
                 } else {
                     debug!("No port mapping found for service: {}", service_name);
                 }
 
                 // Add debug port if present (priority: explicit > config file)
-                let debug_port = service
-                    .debug_port
-                    .or_else(|| read_service_config_debug_port(&service_name));
+                let debug_port =
+                    service.debug_port.or_else(|| read_service_config_debug_port(&service_name));
                 if let Some(debug_port) = debug_port {
                     mappings.push(PortMapping {
                         service_name: service_name.clone(),
@@ -252,9 +241,8 @@ impl PortForwardManager {
         info!("Starting {} port forwards", self.mappings.len());
 
         let pid_dir = Self::get_pid_dir(&self.devdock_id)?;
-        fs::create_dir_all(&pid_dir).map_err(|e| {
-            RemoteError::PortForwardError(format!("Failed to create PID dir: {}", e))
-        })?;
+        fs::create_dir_all(&pid_dir)
+            .map_err(|e| RemoteError::PortForwardError(format!("Failed to create PID dir: {e}")))?;
 
         for mapping in &mut self.mappings {
             match coder::port_forward_single(
@@ -267,10 +255,8 @@ impl PortForwardManager {
                     mapping.process_pid = Some(pid);
 
                     // Write PID file
-                    let pid_file = pid_dir.join(format!(
-                        "{}_{:?}.pid",
-                        mapping.service_name, mapping.port_type
-                    ));
+                    let pid_file = pid_dir
+                        .join(format!("{}_{:?}.pid", mapping.service_name, mapping.port_type));
                     let _ = fs::write(&pid_file, pid.to_string());
 
                     debug!(
@@ -282,10 +268,7 @@ impl PortForwardManager {
                     std::mem::forget(child);
                 }
                 Err(e) => {
-                    warn!(
-                        "Failed to start port forward for {}: {}",
-                        mapping.service_name, e
-                    );
+                    warn!("Failed to start port forward for {}: {}", mapping.service_name, e);
                 }
             }
         }

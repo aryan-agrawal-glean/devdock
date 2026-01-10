@@ -46,7 +46,8 @@ impl ParsedIniConfig {
         let mut sections = HashMap::new();
 
         for (section_name, properties) in &ini {
-            let section_key = section_name.map(|s| s.to_string()).unwrap_or_default();
+            let section_key =
+                section_name.map(std::string::ToString::to_string).unwrap_or_default();
             let mut section_map = HashMap::new();
 
             for (key, value) in properties {
@@ -66,9 +67,7 @@ impl ParsedIniConfig {
 
     /// Get a value with a default
     pub fn get_or_default<'a>(&'a self, section: &str, key: &str, default: &'a str) -> &'a str {
-        self.get(section, key)
-            .map(|s| s.as_str())
-            .unwrap_or(default)
+        self.get(section, key).map_or(default, std::string::String::as_str)
     }
 
     /// Check if a section exists
@@ -93,10 +92,7 @@ impl ParsedIniConfig {
 
     /// Set a value (for merging configs)
     pub fn set(&mut self, section: &str, key: &str, value: impl Into<String>) {
-        self.sections
-            .entry(section.to_string())
-            .or_default()
-            .insert(key.to_string(), value.into());
+        self.sections.entry(section.to_string()).or_default().insert(key.to_string(), value.into());
     }
 
     /// Merge another config into this one (other takes precedence)
@@ -164,7 +160,7 @@ impl ParsedIniConfig {
         for section in section_names {
             if let Some(keys) = self.sections.get(section) {
                 if !section.is_empty() {
-                    result.push_str(&format!("[{}]\n", section));
+                    result.push_str(&format!("[{section}]\n"));
                 }
 
                 // Sort keys for deterministic output
@@ -173,7 +169,7 @@ impl ParsedIniConfig {
 
                 for key in key_names {
                     if let Some(value) = keys.get(key) {
-                        result.push_str(&format!("{} = {}\n", key, value));
+                        result.push_str(&format!("{key} = {value}\n"));
                     }
                 }
 
@@ -190,13 +186,9 @@ impl ParsedIniConfig {
 pub fn parse_db_tables_query(db_tables_query: &str) -> (String, String, Option<String>) {
     let parts: Vec<&str> = db_tables_query.split(':').collect();
 
-    let db = parts.first().map(|s| s.to_string()).unwrap_or_default();
-    let tables = parts.get(1).map(|s| s.to_string()).unwrap_or_default();
-    let query = if parts.len() >= 3 {
-        Some(parts[2..].join(":"))
-    } else {
-        None
-    };
+    let db = parts.first().map(|s| (*s).to_string()).unwrap_or_default();
+    let tables = parts.get(1).map(|s| (*s).to_string()).unwrap_or_default();
+    let query = if parts.len() >= 3 { Some(parts[2..].join(":")) } else { None };
 
     (db, tables, query)
 }
@@ -215,7 +207,7 @@ pub fn parse_db_specs(specs: &str) -> Vec<(String, String, Option<String>)> {
 mod tests {
     use super::*;
 
-    const SAMPLE_INI: &str = r#"
+    const SAMPLE_INI: &str = r"
 [sql]
 useSecretsManagerForPassword = false
 frontend_keyval.db.instance = frontendInstance
@@ -228,7 +220,7 @@ apps.useCentralApp = false
 
 [memcached]
 discoveryEndpoints = memcached.devdock.local:11211
-"#;
+";
 
     #[test]
     fn test_parse_ini_string() {
@@ -238,10 +230,7 @@ discoveryEndpoints = memcached.devdock.local:11211
         assert!(config.has_section("google"));
         assert!(config.has_section("memcached"));
 
-        assert_eq!(
-            config.get("sql", "useSecretsManagerForPassword"),
-            Some(&"false".to_string())
-        );
+        assert_eq!(config.get("sql", "useSecretsManagerForPassword"), Some(&"false".to_string()));
         assert_eq!(
             config.get("google", "storage.configbucket"),
             Some(&"config-glean-prod".to_string())
@@ -291,30 +280,27 @@ discoveryEndpoints = memcached.devdock.local:11211
     #[test]
     fn test_merge_configs() {
         let mut base = ParsedIniConfig::parse_str(
-            r#"
+            r"
 [section1]
 key1 = value1
 key2 = value2
-"#,
+",
         )
         .unwrap();
 
         let override_config = ParsedIniConfig::parse_str(
-            r#"
+            r"
 [section1]
 key2 = overridden
 key3 = new_value
-"#,
+",
         )
         .unwrap();
 
         base.merge(&override_config);
 
         assert_eq!(base.get("section1", "key1"), Some(&"value1".to_string()));
-        assert_eq!(
-            base.get("section1", "key2"),
-            Some(&"overridden".to_string())
-        );
+        assert_eq!(base.get("section1", "key2"), Some(&"overridden".to_string()));
         assert_eq!(base.get("section1", "key3"), Some(&"new_value".to_string()));
     }
 

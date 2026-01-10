@@ -47,7 +47,7 @@ impl HealthMonitor {
             .arg("echo")
             .arg("test")
             .output()
-            .map_err(|e| SyncError::HealthCheckFailed(format!("SSH check failed: {}", e)))?;
+            .map_err(|e| SyncError::HealthCheckFailed(format!("SSH check failed: {e}")))?;
 
         Ok(output.status.success())
     }
@@ -61,10 +61,7 @@ impl HealthMonitor {
     pub fn should_restart(&self) -> bool {
         // Restart if too many consecutive failures
         if self.failed_syncs >= self.max_failures {
-            warn!(
-                "Too many consecutive failures ({}), should restart",
-                self.failed_syncs
-            );
+            warn!("Too many consecutive failures ({}), should restart", self.failed_syncs);
             return true;
         }
 

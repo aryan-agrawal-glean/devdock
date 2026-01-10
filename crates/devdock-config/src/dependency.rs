@@ -13,16 +13,12 @@ pub struct DependencyResolver {
 impl DependencyResolver {
     /// Create a new dependency resolver.
     pub fn new() -> Self {
-        Self {
-            monorepo_root: None,
-        }
+        Self { monorepo_root: None }
     }
 
     /// Create a resolver with a monorepo root path.
     pub fn with_monorepo_root(root: PathBuf) -> Self {
-        Self {
-            monorepo_root: Some(root),
-        }
+        Self { monorepo_root: Some(root) }
     }
 
     /// Resolve all dependencies in a profile and return ordered components.
@@ -80,10 +76,8 @@ impl DependencyResolver {
         let json: serde_json::Value = serde_json::from_str(&content)?;
 
         if let Some(deps) = json.get("dependencies").and_then(|d| d.as_array()) {
-            let dep_names: Vec<ComponentName> = deps
-                .iter()
-                .filter_map(|v| v.as_str().map(String::from))
-                .collect();
+            let dep_names: Vec<ComponentName> =
+                deps.iter().filter_map(|v| v.as_str().map(String::from)).collect();
             Ok(dep_names)
         } else {
             Ok(Vec::new())
@@ -104,10 +98,7 @@ impl DependencyResolver {
                     devdock_core::types::DeploymentType::Remote
                 ) && profile.infra.contains_key("bastion")
                 {
-                    graph
-                        .entry("opensearch".to_string())
-                        .or_default()
-                        .push("bastion".to_string());
+                    graph.entry("opensearch".to_string()).or_default().push("bastion".to_string());
                 }
             }
         }
@@ -115,15 +106,10 @@ impl DependencyResolver {
         // sql remote depends on bastion
         if profile.infra.contains_key("sql") {
             if let Some(sql_config) = profile.infra.get("sql") {
-                if matches!(
-                    sql_config.deployment_type,
-                    devdock_core::types::DeploymentType::Remote
-                ) && profile.infra.contains_key("bastion")
+                if matches!(sql_config.deployment_type, devdock_core::types::DeploymentType::Remote)
+                    && profile.infra.contains_key("bastion")
                 {
-                    graph
-                        .entry("sql".to_string())
-                        .or_default()
-                        .push("bastion".to_string());
+                    graph.entry("sql".to_string()).or_default().push("bastion".to_string());
                 }
             }
         }
@@ -200,10 +186,7 @@ mod tests {
         let mut infra = HashMap::new();
         infra.insert(
             "sql".to_string(),
-            InfraConfig {
-                deployment_type: DeploymentType::Local,
-                config: HashMap::new(),
-            },
+            InfraConfig { deployment_type: DeploymentType::Local, config: HashMap::new() },
         );
 
         let mut services = HashMap::new();

@@ -47,7 +47,7 @@ pub async fn list(instance: Option<String>) -> Result<()> {
             println!(
                 "  {} {}",
                 service_name.cyan(),
-                format!("http://localhost:{}", local_port).green()
+                format!("http://localhost:{local_port}").green()
             );
         }
     }
@@ -61,20 +61,11 @@ fn print_port_table(mappings: &[(String, String, u16, u16, Option<u32>)]) {
     table.set_format(*format::consts::FORMAT_BOX_CHARS);
 
     // Add header row
-    table.add_row(row![
-        "Service",
-        "Type",
-        "Local Port",
-        "Remote Port",
-        "Status"
-    ]);
+    table.add_row(row!["Service", "Type", "Local Port", "Remote Port", "Status"]);
 
     for (service_name, port_type, local_port, remote_port, pid) in mappings {
-        let status = if pid.is_some() {
-            "Active".green().to_string()
-        } else {
-            "Inactive".red().to_string()
-        };
+        let status =
+            if pid.is_some() { "Active".green().to_string() } else { "Inactive".red().to_string() };
 
         table.add_row(row![
             service_name,
@@ -93,7 +84,7 @@ fn get_current_worktree() -> Result<String> {
     let output = Command::new("git")
         .args(["rev-parse", "--show-toplevel"])
         .output()
-        .map_err(|e| anyhow!("Failed to get git worktree: {}", e))?;
+        .map_err(|e| anyhow!("Failed to get git worktree: {e}"))?;
 
     if !output.status.success() {
         return Err(anyhow!("Not in a git repository"));
@@ -116,9 +107,7 @@ pub async fn forward(all: bool, service: Option<&str>, custom: Option<&str>) -> 
     } else if let Some(custom_mapping) = custom {
         forward_custom_port(&state, &devdock_id, &workspace_name, custom_mapping).await
     } else {
-        Err(anyhow!(
-            "Please specify --all, --service <name>, or --custom <local:remote>"
-        ))
+        Err(anyhow!("Please specify --all, --service <name>, or --custom <local:remote>"))
     }
 }
 
@@ -177,10 +166,7 @@ async fn forward_all_ports(
     workspace_name: &str,
     port_base: u16,
 ) -> Result<()> {
-    println!(
-        "{}",
-        "Setting up port forwarding for all services...".cyan()
-    );
+    println!("{}", "Setting up port forwarding for all services...".cyan());
 
     let services = get_service_ports();
     let mut success_count = 0;
@@ -198,7 +184,7 @@ async fn forward_all_ports(
         )
         .await
         {
-            Ok(_) => {
+            Ok(()) => {
                 println!(
                     "  ✅ {}: localhost:{} → remote:{}",
                     service_name.cyan(),
@@ -214,12 +200,7 @@ async fn forward_all_ports(
     }
 
     println!();
-    println!(
-        "{} {}/{} port forwards established",
-        "✅".green(),
-        success_count,
-        services.len()
-    );
+    println!("{} {}/{} port forwards established", "✅".green(), success_count, services.len());
     println!("View mappings: {}", "devdock ports list".cyan());
 
     Ok(())
@@ -235,35 +216,20 @@ async fn forward_service_port(
 ) -> Result<()> {
     let services = get_service_ports();
 
-    let (_, local_offset, remote_port) = services
-        .iter()
-        .find(|(name, _, _)| *name == service_name)
-        .ok_or_else(|| {
+    let (_, local_offset, remote_port) =
+        services.iter().find(|(name, _, _)| *name == service_name).ok_or_else(|| {
             anyhow!(
-                "Unknown service: {}. Available: tilt, qe, fe, opensearch, mysql, redis",
-                service_name
+                "Unknown service: {service_name}. Available: tilt, qe, fe, opensearch, mysql, redis"
             )
         })?;
 
     let local_port = port_base + local_offset;
 
-    println!("{}", format!("Forwarding {} port...", service_name).cyan());
-    start_port_forward(
-        state,
-        devdock_id,
-        workspace_name,
-        service_name,
-        local_port,
-        *remote_port,
-    )
-    .await?;
+    println!("{}", format!("Forwarding {service_name} port...").cyan());
+    start_port_forward(state, devdock_id, workspace_name, service_name, local_port, *remote_port)
+        .await?;
 
-    println!(
-        "  ✅ {}: localhost:{} → remote:{}",
-        service_name.cyan(),
-        local_port,
-        remote_port
-    );
+    println!("  ✅ {}: localhost:{} → remote:{}", service_name.cyan(), local_port, remote_port);
     println!();
     println!("View mappings: {}", "devdock ports list".cyan());
 
@@ -279,33 +245,19 @@ async fn forward_custom_port(
 ) -> Result<()> {
     let parts: Vec<&str> = mapping.split(':').collect();
     if parts.len() != 2 {
-        return Err(anyhow!(
-            "Invalid port mapping format. Use: local:remote (e.g., 8888:8888)"
-        ));
+        return Err(anyhow!("Invalid port mapping format. Use: local:remote (e.g., 8888:8888)"));
     }
 
-    let local_port: u16 = parts[0]
-        .parse()
-        .map_err(|_| anyhow!("Invalid local port: {}", parts[0]))?;
-    let remote_port: u16 = parts[1]
-        .parse()
-        .map_err(|_| anyhow!("Invalid remote port: {}", parts[1]))?;
+    let local_port: u16 =
+        parts[0].parse().map_err(|_| anyhow!("Invalid local port: {}", parts[0]))?;
+    let remote_port: u16 =
+        parts[1].parse().map_err(|_| anyhow!("Invalid remote port: {}", parts[1]))?;
 
     println!("{}", "Forwarding custom port...".cyan());
-    start_port_forward(
-        state,
-        devdock_id,
-        workspace_name,
-        "custom",
-        local_port,
-        remote_port,
-    )
-    .await?;
+    start_port_forward(state, devdock_id, workspace_name, "custom", local_port, remote_port)
+        .await?;
 
-    println!(
-        "  ✅ Custom: localhost:{} → remote:{}",
-        local_port, remote_port
-    );
+    println!("  ✅ Custom: localhost:{local_port} → remote:{remote_port}");
     println!();
     println!("View mappings: {}", "devdock ports list".cyan());
 
@@ -328,7 +280,7 @@ async fn start_port_forward(
         .join("ports");
     std::fs::create_dir_all(&log_dir)?;
 
-    let log_file = log_dir.join(format!("{}_{}.log", devdock_id, service_name));
+    let log_file = log_dir.join(format!("{devdock_id}_{service_name}.log"));
     let log_handle = File::create(&log_file)?;
 
     // Start port forward process
@@ -336,12 +288,12 @@ async fn start_port_forward(
         .arg("port-forward")
         .arg(workspace_name)
         .arg("--tcp")
-        .arg(format!("{}:{}", local_port, remote_port))
+        .arg(format!("{local_port}:{remote_port}"))
         .stdin(Stdio::null())
         .stdout(log_handle.try_clone()?)
         .stderr(log_handle)
         .spawn()
-        .map_err(|e| anyhow!("Failed to start port forward: {}", e))?;
+        .map_err(|e| anyhow!("Failed to start port forward: {e}"))?;
 
     let pid = child.id();
 
@@ -350,14 +302,7 @@ async fn start_port_forward(
 
     // Save port mapping to state
     state
-        .save_port_mapping(
-            devdock_id,
-            service_name,
-            "service",
-            local_port,
-            remote_port,
-            Some(pid),
-        )
+        .save_port_mapping(devdock_id, service_name, "service", local_port, remote_port, Some(pid))
         .await?;
 
     Ok(())
@@ -403,18 +348,15 @@ async fn stop_service_port_forward(
     let mapping = mappings
         .iter()
         .find(|(name, _, _, _, _)| name == service_name)
-        .ok_or_else(|| anyhow!("No port forward found for service: {}", service_name))?;
+        .ok_or_else(|| anyhow!("No port forward found for service: {service_name}"))?;
 
-    println!(
-        "{}",
-        format!("Stopping {} port forward...", service_name).cyan()
-    );
+    println!("{}", format!("Stopping {service_name} port forward...").cyan());
 
     if let Some(pid) = mapping.4 {
         if kill_process(pid) {
             println!("  ✅ Stopped: {} (PID: {})", service_name.cyan(), pid);
         } else {
-            println!("  ⚠️  Process {} not found (may have already exited)", pid);
+            println!("  ⚠️  Process {pid} not found (may have already exited)");
         }
     }
 

@@ -115,7 +115,7 @@ impl ConfigGenerator {
         println!("⏩ Authenticating with platform...");
         let step_start = std::time::Instant::now();
         if let Err(e) = platform.authenticate().await {
-            eprintln!("Warning: Platform authentication failed: {}", e);
+            eprintln!("Warning: Platform authentication failed: {e}");
         } else {
             println!(
                 "✅ Platform authenticated in {:.2}s (total: {:.2}s)",
@@ -174,7 +174,7 @@ impl ConfigGenerator {
         let devdock_ini = devdock_ini?;
         let temp_profile = temp_profile?;
         if let Err(e) = watch_result {
-            eprintln!("   └─ Warning: watch file generation failed: {}", e);
+            eprintln!("   └─ Warning: watch file generation failed: {e}");
         }
 
         println!(
@@ -187,15 +187,9 @@ impl ConfigGenerator {
         println!("⏩ Writing config files...");
         let step_start = std::time::Instant::now();
         tokio::try_join!(
-            tokio::fs::write(
-                self.workspace_root.join("devdock/devdock.ini"),
-                &devdock_ini
-            ),
+            tokio::fs::write(self.workspace_root.join("devdock/devdock.ini"), &devdock_ini),
             tokio::fs::write(self.workspace_root.join("config/devdock.ini"), &devdock_ini),
-            tokio::fs::write(
-                self.workspace_root.join("config/run_local.ini"),
-                &devdock_ini
-            ),
+            tokio::fs::write(self.workspace_root.join("config/run_local.ini"), &devdock_ini),
             tokio::fs::write(runtime_gen.join("temp_profile.yaml"), &temp_profile),
         )?;
 
@@ -259,22 +253,8 @@ impl ConfigGenerator {
 
         // 3. Auto-inject SQL if not present (matches Python behavior)
         let has_sql = multi_config.infra.contains_key("sql");
-        if !has_sql {
-            use devdock_core::types::DeploymentType;
-            use devdock_core::InfraConfig;
-
-            multi_profile.infra.insert(
-                "sql".to_string(),
-                InfraConfig {
-                    deployment_type: DeploymentType::Remote,
-                    config: HashMap::new(),
-                },
-            );
-
-            // Rebuild graph with SQL included
-            let multi_graph = DependencyGraph::build(&multi_profile, &self.workspace_root).await?;
-
-            // Generate scio_apps.ini with SQL
+        if has_sql {
+            // Generate scio_apps.ini without auto-injecting SQL
             self.generate_multi_project_ini(
                 &multi_profile,
                 multi_platform.as_ref(),
@@ -283,7 +263,18 @@ impl ConfigGenerator {
             )
             .await?;
         } else {
-            // Generate scio_apps.ini without auto-injecting SQL
+            use devdock_core::types::DeploymentType;
+            use devdock_core::InfraConfig;
+
+            multi_profile.infra.insert(
+                "sql".to_string(),
+                InfraConfig { deployment_type: DeploymentType::Remote, config: HashMap::new() },
+            );
+
+            // Rebuild graph with SQL included
+            let multi_graph = DependencyGraph::build(&multi_profile, &self.workspace_root).await?;
+
+            // Generate scio_apps.ini with SQL
             self.generate_multi_project_ini(
                 &multi_profile,
                 multi_platform.as_ref(),
@@ -331,9 +322,7 @@ impl ConfigGenerator {
         for node in graph.nodes() {
             // Inject USE_DEVDOCK_INI env var for all services
             let mut node_config = node.config.clone();
-            node_config
-                .env
-                .insert("USE_DEVDOCK_INI".to_string(), "true".to_string());
+            node_config.env.insert("USE_DEVDOCK_INI".to_string(), "true".to_string());
 
             generator.apply_service(&node.name, &node_config);
             generator.apply_dependency(node);
@@ -371,12 +360,12 @@ impl ConfigGenerator {
                     config
                 }
                 Err(e) => {
-                    eprintln!("Warning: Failed to fetch dynamic.ini: {}", e);
+                    eprintln!("Warning: Failed to fetch dynamic.ini: {e}");
                     None
                 }
             },
             Err(e) => {
-                eprintln!("Warning: Failed to create INI loader: {}", e);
+                eprintln!("Warning: Failed to create INI loader: {e}");
                 None
             }
         }
@@ -502,21 +491,12 @@ impl ConfigGenerator {
             if node.component_type == crate::dependency_graph::ComponentType::Service {
                 let profile_service = multi_profile.services.get(&node.name);
 
-                let service_type = if node.config.is_local() {
-                    "local".to_string()
-                } else {
-                    "remote".to_string()
-                };
+                let service_type =
+                    if node.config.is_local() { "local".to_string() } else { "remote".to_string() };
 
                 // Get env from profile and add USE_DEVDOCK_INI
                 let mut env = profile_service
-                    .and_then(|s| {
-                        if s.env.is_empty() {
-                            None
-                        } else {
-                            Some(s.env.clone())
-                        }
-                    })
+                    .and_then(|s| if s.env.is_empty() { None } else { Some(s.env.clone()) })
                     .unwrap_or_default();
 
                 env.insert("USE_DEVDOCK_INI".to_string(), "true".to_string());
@@ -534,9 +514,7 @@ impl ConfigGenerator {
                     })
                 });
 
-                let extra = profile_service
-                    .map(|s| s.config.clone())
-                    .unwrap_or_default();
+                let extra = profile_service.map(|s| s.config.clone()).unwrap_or_default();
 
                 generator.add_service(
                     &node.name,
@@ -591,10 +569,7 @@ impl ConfigGenerator {
 
             infra.insert(
                 "sql".to_string(),
-                InfraProfileEntry {
-                    infra_type,
-                    extra: sql_config.config.clone(),
-                },
+                InfraProfileEntry { infra_type, extra: sql_config.config.clone() },
             );
         }
 
@@ -700,12 +675,7 @@ impl ConfigGenerator {
                 // Must have a bazel target
                 && n.config.bazel_target.is_some()
             })
-            .filter_map(|n| {
-                n.config
-                    .bazel_target
-                    .as_ref()
-                    .map(|t| (n.name.clone(), t.clone()))
-            })
+            .filter_map(|n| n.config.bazel_target.as_ref().map(|t| (n.name.clone(), t.clone())))
             .collect();
 
         if services_with_targets.is_empty() {
@@ -738,12 +708,7 @@ impl ConfigGenerator {
                 // Must have a bazel target
                 && n.config.bazel_target.is_some()
             })
-            .filter_map(|n| {
-                n.config
-                    .bazel_target
-                    .as_ref()
-                    .map(|t| (n.name.clone(), t.clone()))
-            })
+            .filter_map(|n| n.config.bazel_target.as_ref().map(|t| (n.name.clone(), t.clone())))
             .collect();
 
         if services_with_targets.is_empty() {
@@ -766,26 +731,21 @@ impl ConfigGenerator {
             // Helper to log to file
             let log = |msg: String| {
                 if let Some(ref path) = log_file {
-                    if let Ok(mut file) = std::fs::OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open(path)
+                    if let Ok(mut file) =
+                        std::fs::OpenOptions::new().create(true).append(true).open(path)
                     {
                         let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
-                        let _ = writeln!(file, "[{}] {}", timestamp, msg);
+                        let _ = writeln!(file, "[{timestamp}] {msg}");
                     }
                 }
             };
 
-            log(format!(
-                "Starting cquery for {} local service(s)",
-                service_count
-            ));
+            log(format!("Starting cquery for {service_count} local service(s)"));
 
             // Use silent engine to avoid console spam
             let engine = BazelQueryEngine::new_silent(workspace_root);
             match engine.generate_watch_files(services_with_targets).await {
-                Ok(_) => {
+                Ok(()) => {
                     let msg = format!(
                         "✅ Refined watch files with cquery in {:.2}s",
                         start.elapsed().as_secs_f64()
@@ -794,7 +754,7 @@ impl ConfigGenerator {
                     // Success is silent - no console output to avoid cluttering Tilt UI
                 }
                 Err(e) => {
-                    let msg = format!("❌ Cquery refinement failed: {}", e);
+                    let msg = format!("❌ Cquery refinement failed: {e}");
                     log(msg.clone());
                     // Only print errors to console (after Tilt starts, but important to see)
                     eprintln!("\n⚠️  Background cquery failed (static patterns still active). Check ~/.devdock/background-cquery.log");

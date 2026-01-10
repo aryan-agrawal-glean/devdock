@@ -11,13 +11,10 @@ pub fn get_config_files() -> Result<HashMap<String, String>> {
     let mut config_files = HashMap::new();
 
     // Get DEVDOCK_ROOT or fallback to current directory
-    let devdock_root = std::env::var("DEVDOCK_ROOT")
-        .ok()
-        .map(PathBuf::from)
-        .or_else(|| {
-            // Fallback: try current directory (matches Python behavior)
-            std::env::current_dir().ok()
-        });
+    let devdock_root = std::env::var("DEVDOCK_ROOT").ok().map(PathBuf::from).or_else(|| {
+        // Fallback: try current directory (matches Python behavior)
+        std::env::current_dir().ok()
+    });
 
     if let Some(devdock_root) = devdock_root {
         // Check for devdock.ini
@@ -52,9 +49,7 @@ pub fn get_config_files() -> Result<HashMap<String, String>> {
 pub fn get_current_git_branch() -> Result<String> {
     use std::process::Command;
 
-    let output = Command::new("git")
-        .args(["rev-parse", "--abbrev-ref", "HEAD"])
-        .output()?;
+    let output = Command::new("git").args(["rev-parse", "--abbrev-ref", "HEAD"]).output()?;
 
     if output.status.success() {
         let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();

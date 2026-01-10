@@ -55,11 +55,7 @@ impl SyncDaemon {
         // Perform initial sync
         info!(
             "Performing initial sync (mode: {})",
-            if self.full_mode {
-                "full"
-            } else {
-                "git-tracked"
-            }
+            if self.full_mode { "full" } else { "git-tracked" }
         );
         eprintln!("[SYNC] About to call initial_sync()");
         self.initial_sync()?;
@@ -85,18 +81,15 @@ impl SyncDaemon {
         for dir in &monitored_dirs {
             let dir_path = self.repo_path.join(dir);
             if dir_path.exists() {
-                eprintln!("[SYNC] Watching directory: {}", dir);
+                eprintln!("[SYNC] Watching directory: {dir}");
                 self.file_watcher.watch(&dir_path)?;
                 watched_count += 1;
             } else {
-                eprintln!("[SYNC] Skipping non-existent directory: {}", dir);
+                eprintln!("[SYNC] Skipping non-existent directory: {dir}");
             }
         }
 
-        eprintln!(
-            "[SYNC] File watcher setup complete, watching {} directories",
-            watched_count
-        );
+        eprintln!("[SYNC] File watcher setup complete, watching {watched_count} directories");
 
         // Main event loop
         info!("File sync daemon running, watching for changes...");
@@ -106,7 +99,7 @@ impl SyncDaemon {
         loop {
             iteration += 1;
             if iteration % 100 == 0 {
-                eprintln!("[SYNC] Event loop iteration {}, daemon is alive", iteration);
+                eprintln!("[SYNC] Event loop iteration {iteration}, daemon is alive");
             }
 
             // Check health
@@ -114,7 +107,7 @@ impl SyncDaemon {
                 error!("Sync daemon unhealthy, exiting");
                 eprintln!("[SYNC] ❌ Health check failed!");
                 if let Some(lag) = self.health_monitor.sync_lag() {
-                    eprintln!("[SYNC] Time since last sync: {:?}", lag);
+                    eprintln!("[SYNC] Time since last sync: {lag:?}");
                 } else {
                     eprintln!("[SYNC] No successful syncs yet");
                 }
@@ -137,19 +130,18 @@ impl SyncDaemon {
                         // Filter files based on mode
                         let files_to_sync = self.filter_files(&files)?;
 
-                        eprintln!(
-                            "[SYNC] After filtering: {} files to sync",
-                            files_to_sync.len()
-                        );
+                        eprintln!("[SYNC] After filtering: {} files to sync", files_to_sync.len());
 
-                        if !files_to_sync.is_empty() {
+                        if files_to_sync.is_empty() {
+                            eprintln!("[SYNC] All detected files were filtered out (not in monitored dirs or wrong extension)");
+                        } else {
                             for file in files_to_sync.iter().take(5) {
-                                eprintln!("[SYNC]   Syncing: {:?}", file);
+                                eprintln!("[SYNC]   Syncing: {file:?}");
                             }
 
                             // Sync changed files
                             match self.rsync_client.sync_files(&files_to_sync, self.full_mode) {
-                                Ok(_) => {
+                                Ok(()) => {
                                     self.health_monitor.record_success();
                                     info!("Synced {} files", files_to_sync.len());
                                     eprintln!(
@@ -160,11 +152,9 @@ impl SyncDaemon {
                                 Err(e) => {
                                     self.health_monitor.record_failure();
                                     error!("Sync failed: {}", e);
-                                    eprintln!("[SYNC] ❌ Sync failed: {}", e);
+                                    eprintln!("[SYNC] ❌ Sync failed: {e}");
                                 }
                             }
-                        } else {
-                            eprintln!("[SYNC] All detected files were filtered out (not in monitored dirs or wrong extension)");
                         }
                     }
                 }
@@ -172,7 +162,7 @@ impl SyncDaemon {
                     // Watcher errors are usually just timeouts (no changes), not real failures
                     // Only log as debug, don't count as health failure
                     debug!("Watcher timeout or error: {}", e);
-                    eprintln!("[SYNC] Watcher timeout (no changes): {}", e);
+                    eprintln!("[SYNC] Watcher timeout (no changes): {e}");
                     // Don't record as failure - this is normal when there are no file changes
                 }
             }
@@ -225,7 +215,7 @@ impl SyncDaemon {
                     );
 
                     match self.rsync_client.sync_files(chunk, false) {
-                        Ok(_) => {
+                        Ok(()) => {
                             eprintln!(
                                 "[SYNC] Batch {}/{} completed successfully",
                                 batch_num + 1,
@@ -242,11 +232,7 @@ impl SyncDaemon {
                             return Err(e);
                         }
                     }
-                    eprintln!(
-                        "[SYNC] After batch {}/{} sync",
-                        batch_num + 1,
-                        total_batches
-                    );
+                    eprintln!("[SYNC] After batch {}/{} sync", batch_num + 1, total_batches);
                 }
                 info!("Modified files sync completed successfully");
                 eprintln!("[SYNC] All batches completed!");
@@ -270,14 +256,12 @@ impl SyncDaemon {
         for file in files {
             // Convert absolute path to relative path
             let relative_path = if file.starts_with(&self.repo_path) {
-                file.strip_prefix(&self.repo_path)
-                    .unwrap_or(file.as_path())
-                    .to_path_buf()
+                file.strip_prefix(&self.repo_path).unwrap_or(file.as_path()).to_path_buf()
             } else {
                 file.clone()
             };
 
-            eprintln!("[SYNC-FILTER] Checking file: {:?}", relative_path);
+            eprintln!("[SYNC-FILTER] Checking file: {relative_path:?}");
 
             // Check if file matches sync patterns (monitored dirs + extensions)
             if !git::should_sync_file_by_pattern(&relative_path) {
@@ -293,7 +277,7 @@ impl SyncDaemon {
                 continue;
             }
 
-            eprintln!("[SYNC-FILTER]   ✅ Will sync: {:?}", relative_path);
+            eprintln!("[SYNC-FILTER]   ✅ Will sync: {relative_path:?}");
             filtered.push(relative_path);
         }
 
@@ -338,9 +322,7 @@ impl SyncDaemon {
 
     /// Get PID directory.
     fn get_pid_dir() -> PathBuf {
-        dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("/tmp"))
-            .join(".devdock/sync")
+        dirs::home_dir().unwrap_or_else(|| PathBuf::from("/tmp")).join(".devdock/sync")
     }
 }
 
@@ -391,7 +373,7 @@ pub fn start_daemon(
 
     // Get the current executable path
     let exe_path = std::env::current_exe()
-        .map_err(|e| SyncError::DaemonError(format!("Failed to get current exe: {}", e)))?;
+        .map_err(|e| SyncError::DaemonError(format!("Failed to get current exe: {e}")))?;
 
     // Get PID directory and ensure it exists
     let pid_dir = SyncDaemon::get_pid_dir();
@@ -401,8 +383,8 @@ pub fn start_daemon(
     let log_file = OpenOptions::new()
         .create(true)
         .append(true)
-        .open(pid_dir.join(format!("{}.log", devdock_id)))
-        .map_err(|e| SyncError::DaemonError(format!("Failed to open log file: {}", e)))?;
+        .open(pid_dir.join(format!("{devdock_id}.log")))
+        .map_err(|e| SyncError::DaemonError(format!("Failed to open log file: {e}")))?;
 
     // Spawn daemon as a separate process using a hidden subcommand
     let mut cmd = Command::new(exe_path);
@@ -424,7 +406,7 @@ pub fn start_daemon(
 
     let child = cmd
         .spawn()
-        .map_err(|e| SyncError::DaemonError(format!("Failed to spawn daemon process: {}", e)))?;
+        .map_err(|e| SyncError::DaemonError(format!("Failed to spawn daemon process: {e}")))?;
 
     let pid = child.id();
     // Debug output now goes to log file via stderr redirect, not to console
@@ -450,8 +432,8 @@ pub fn run_daemon_process(
 
     // Print startup info (will be captured in log file via stderr redirect from parent)
     eprintln!("\n=== Sync daemon process started ===");
-    eprintln!("DevDock ID: {}", devdock_id);
-    eprintln!("Workspace: {}", workspace_name);
+    eprintln!("DevDock ID: {devdock_id}");
+    eprintln!("Workspace: {workspace_name}");
     eprintln!("Repo: {}", repo_path.display());
     eprintln!("Time: {:?}\n", std::time::SystemTime::now());
 
@@ -466,14 +448,14 @@ pub fn run_daemon_process(
             d
         }
         Err(e) => {
-            eprintln!("ERROR: Failed to create sync daemon: {}", e);
+            eprintln!("ERROR: Failed to create sync daemon: {e}");
             return Err(e);
         }
     };
 
     eprintln!("Starting daemon main loop...");
     if let Err(e) = daemon.start() {
-        eprintln!("ERROR: Sync daemon error: {}", e);
+        eprintln!("ERROR: Sync daemon error: {e}");
         Err(e)
     } else {
         eprintln!("Sync daemon stopped normally");
@@ -489,7 +471,7 @@ pub fn stop_daemon(devdock_id: &str) -> Result<()> {
 /// Clean up all sync files for a specific devdock instance.
 pub fn cleanup_sync_files(devdock_id: &str) -> Result<()> {
     let pid_dir = SyncDaemon::get_pid_dir();
-    let pid_file = pid_dir.join(format!("{}.pid", devdock_id));
+    let pid_file = pid_dir.join(format!("{devdock_id}.pid"));
 
     if pid_file.exists() {
         let pid_str = fs::read_to_string(&pid_file)?;
@@ -504,11 +486,8 @@ pub fn cleanup_sync_files(devdock_id: &str) -> Result<()> {
             #[cfg(windows)]
             {
                 use std::process::Command;
-                let _ = Command::new("taskkill")
-                    .arg("/PID")
-                    .arg(pid.to_string())
-                    .arg("/F")
-                    .output();
+                let _ =
+                    Command::new("taskkill").arg("/PID").arg(pid.to_string()).arg("/F").output();
             }
         }
     }

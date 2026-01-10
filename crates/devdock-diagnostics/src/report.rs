@@ -16,12 +16,7 @@ pub struct BugReporter {
 impl BugReporter {
     /// Create a new bug reporter in interactive mode.
     pub fn new() -> Self {
-        Self {
-            summary: None,
-            description: None,
-            command: None,
-            interactive: true,
-        }
+        Self { summary: None, description: None, command: None, interactive: true }
     }
 
     /// Create a bug reporter with pre-filled information (non-interactive).
@@ -80,11 +75,7 @@ impl BugReporter {
         let config_files = if snapshot_file.is_some() {
             println!("\n{}", "📁 Collecting configuration files...".yellow());
             let files = config::get_config_files()?;
-            println!(
-                "  {} {} configuration file(s) collected",
-                "✓".green(),
-                files.len()
-            );
+            println!("  {} {} configuration file(s) collected", "✓".green(), files.len());
             files
         } else {
             Default::default()
@@ -112,17 +103,13 @@ impl BugReporter {
         println!("\n{}", "📝 Creating Jira ticket...".yellow());
         let ticket_key =
             jira::create_jira_ticket(&summary, full_description, &archive_path).await?;
-        println!(
-            "  {} Jira ticket created: {}",
-            "✓".green(),
-            ticket_key.bold()
-        );
+        println!("  {} Jira ticket created: {}", "✓".green(), ticket_key.bold());
 
         // Post to Slack
         println!("\n{}", "💬 Posting to Slack...".yellow());
         let reporter_email = jira::get_reporter_email().unwrap_or_else(|_| "unknown".to_string());
         match slack::post_to_slack(&ticket_key, &summary, &reporter_email).await {
-            Ok(_) => println!("  {} Slack notification sent", "✓".green()),
+            Ok(()) => println!("  {} Slack notification sent", "✓".green()),
             Err(e) => warn!("  {} Slack notification failed: {}", "⚠".yellow(), e),
         }
 
@@ -132,10 +119,7 @@ impl BugReporter {
 
         println!("\n{}", "✅ Bug report successfully created!".bold().green());
         println!("\n{}", "View ticket:".bold());
-        println!(
-            "  {}",
-            format!("https://askscio.atlassian.net/browse/{}", ticket_key).cyan()
-        );
+        println!("  {}", format!("https://askscio.atlassian.net/browse/{ticket_key}").cyan());
 
         Ok(ticket_key)
     }
@@ -143,41 +127,32 @@ impl BugReporter {
     fn collect_user_input(&mut self) -> Result<()> {
         // Get summary
         if self.summary.is_none() {
-            println!(
-                "\n{}",
-                "Please provide a brief summary of the issue:".bold()
-            );
+            println!("\n{}", "Please provide a brief summary of the issue:".bold());
             let summary: String = Input::new()
                 .with_prompt(">")
                 .interact_text()
-                .map_err(|e| DiagnosticsError::SystemInfo(format!("Input error: {}", e)))?;
+                .map_err(|e| DiagnosticsError::SystemInfo(format!("Input error: {e}")))?;
             self.summary = Some(summary);
         }
 
         // Get detailed description
         if self.description.is_none() {
-            println!(
-                "\n{}",
-                "Please provide a detailed description of the issue:".bold()
-            );
+            println!("\n{}", "Please provide a detailed description of the issue:".bold());
             let description: String = Input::new()
                 .with_prompt(">")
                 .interact_text()
-                .map_err(|e| DiagnosticsError::SystemInfo(format!("Input error: {}", e)))?;
+                .map_err(|e| DiagnosticsError::SystemInfo(format!("Input error: {e}")))?;
             self.description = Some(description);
         }
 
         // Get command
         if self.command.is_none() {
-            println!(
-                "\n{}",
-                "What command did you run when this issue occurred?".bold()
-            );
+            println!("\n{}", "What command did you run when this issue occurred?".bold());
             let command: String = Input::new()
                 .with_prompt(">")
                 .default("N/A".to_string())
                 .interact_text()
-                .map_err(|e| DiagnosticsError::SystemInfo(format!("Input error: {}", e)))?;
+                .map_err(|e| DiagnosticsError::SystemInfo(format!("Input error: {e}")))?;
             self.command = Some(command);
         }
 
@@ -190,12 +165,10 @@ impl BugReporter {
             .with_prompt("Create bug report?")
             .default(true)
             .interact()
-            .map_err(|e| DiagnosticsError::SystemInfo(format!("Input error: {}", e)))?;
+            .map_err(|e| DiagnosticsError::SystemInfo(format!("Input error: {e}")))?;
 
         if !confirmed {
-            return Err(DiagnosticsError::SystemInfo(
-                "Bug report cancelled by user".to_string(),
-            ));
+            return Err(DiagnosticsError::SystemInfo("Bug report cancelled by user".to_string()));
         }
 
         Ok(())

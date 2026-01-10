@@ -70,11 +70,7 @@ impl ProfileLoader {
     /// Load a profile from a specific path.
     pub fn load_from_path(&self, path: &Path) -> Result<Profile> {
         let content = std::fs::read_to_string(path).map_err(|e| {
-            Error::InvalidProfile(format!(
-                "Failed to read profile file {}: {}",
-                path.display(),
-                e
-            ))
+            Error::InvalidProfile(format!("Failed to read profile file {}: {}", path.display(), e))
         })?;
 
         let profile: Profile = serde_yaml::from_str(&content).map_err(|e| {
@@ -91,19 +87,16 @@ impl ProfileLoader {
     /// 2. integration_tests/<name>.yaml
     /// 3. <name>.yaml (root profiles directory)
     fn find_profile(&self, name: &str) -> Result<PathBuf> {
-        let filename_yaml = format!("{}.yaml", name);
-        let filename_yml = format!("{}.yml", name);
+        let filename_yaml = format!("{name}.yaml");
+        let filename_yml = format!("{name}.yml");
 
         // Subdirectories to check in priority order
         let subdirs = ["user_profiles", "integration_tests", ""];
 
         for base_path in &self.base_paths {
             for subdir in &subdirs {
-                let search_path = if subdir.is_empty() {
-                    base_path.clone()
-                } else {
-                    base_path.join(subdir)
-                };
+                let search_path =
+                    if subdir.is_empty() { base_path.clone() } else { base_path.join(subdir) };
 
                 // Try .yaml extension
                 let yaml_path = search_path.join(&filename_yaml);
@@ -131,11 +124,8 @@ impl ProfileLoader {
             let subdirs = ["user_profiles", "integration_tests", ""];
 
             for subdir in &subdirs {
-                let search_path = if subdir.is_empty() {
-                    base_path.clone()
-                } else {
-                    base_path.join(subdir)
-                };
+                let search_path =
+                    if subdir.is_empty() { base_path.clone() } else { base_path.join(subdir) };
 
                 if !search_path.exists() {
                     continue;
@@ -144,7 +134,7 @@ impl ProfileLoader {
                 for entry in walkdir::WalkDir::new(&search_path)
                     .max_depth(1)
                     .into_iter()
-                    .filter_map(|e| e.ok())
+                    .filter_map(std::result::Result::ok)
                 {
                     let path = entry.path();
                     if let Some(ext) = path.extension() {
@@ -177,11 +167,8 @@ impl ProfileLoader {
             ];
 
             for (subdir, category) in &categories {
-                let search_path = if subdir.is_empty() {
-                    base_path.clone()
-                } else {
-                    base_path.join(subdir)
-                };
+                let search_path =
+                    if subdir.is_empty() { base_path.clone() } else { base_path.join(subdir) };
 
                 if !search_path.exists() {
                     continue;
@@ -190,14 +177,14 @@ impl ProfileLoader {
                 for entry in walkdir::WalkDir::new(&search_path)
                     .max_depth(1)
                     .into_iter()
-                    .filter_map(|e| e.ok())
+                    .filter_map(std::result::Result::ok)
                 {
                     let path = entry.path();
                     if let Some(ext) = path.extension() {
                         if ext == "yaml" || ext == "yml" {
                             if let Some(stem) = path.file_stem() {
                                 if let Some(name) = stem.to_str() {
-                                    profiles.push((name.to_string(), category.to_string()));
+                                    profiles.push((name.to_string(), (*category).to_string()));
                                 }
                             }
                         }
@@ -226,7 +213,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let profile_path = temp_dir.path().join("test_profile.yaml");
 
-        let profile_content = r#"
+        let profile_content = r"
 project: test-project
 platform: google
 infra:
@@ -235,7 +222,7 @@ infra:
 services:
   qe:
     type: local
-"#;
+";
         std::fs::write(&profile_path, profile_content).unwrap();
 
         let loader = ProfileLoader::with_paths(vec![temp_dir.path().to_path_buf()]);

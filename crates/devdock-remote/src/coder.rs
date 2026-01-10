@@ -57,7 +57,7 @@ pub fn create_workspace(config: &CoderWorkspaceConfig) -> Result<String> {
 
     let output = cmd
         .output()
-        .map_err(|e| RemoteError::CommandFailed(format!("Failed to run coder create: {}", e)))?;
+        .map_err(|e| RemoteError::CommandFailed(format!("Failed to run coder create: {e}")))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -79,7 +79,7 @@ pub fn start_workspace(name: &str) -> Result<String> {
         .arg(name)
         .arg("--yes")
         .output()
-        .map_err(|e| RemoteError::CommandFailed(format!("Failed to start workspace: {}", e)))?;
+        .map_err(|e| RemoteError::CommandFailed(format!("Failed to start workspace: {e}")))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -101,7 +101,7 @@ pub fn stop_workspace(name: &str) -> Result<()> {
         .arg(name)
         .arg("--yes")
         .output()
-        .map_err(|e| RemoteError::CommandFailed(format!("Failed to stop workspace: {}", e)))?;
+        .map_err(|e| RemoteError::CommandFailed(format!("Failed to stop workspace: {e}")))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -122,7 +122,7 @@ pub fn delete_workspace(name: &str) -> Result<()> {
         .arg(name)
         .arg("--yes")
         .output()
-        .map_err(|e| RemoteError::CommandFailed(format!("Failed to delete workspace: {}", e)))?;
+        .map_err(|e| RemoteError::CommandFailed(format!("Failed to delete workspace: {e}")))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -139,7 +139,7 @@ pub fn workspace_exists(name: &str) -> Result<bool> {
     let output = Command::new("coder")
         .arg("list")
         .output()
-        .map_err(|e| RemoteError::CommandFailed(format!("Failed to list workspaces: {}", e)))?;
+        .map_err(|e| RemoteError::CommandFailed(format!("Failed to list workspaces: {e}")))?;
 
     if !output.status.success() {
         return Ok(false);
@@ -152,7 +152,7 @@ pub fn workspace_exists(name: &str) -> Result<bool> {
     Ok(stdout.lines().any(|line| {
         let first_col = line.split_whitespace().next().unwrap_or("");
         // Match either "username/workspace-name" or just "workspace-name"
-        first_col == name || first_col.ends_with(&format!("/{}", name))
+        first_col == name || first_col.ends_with(&format!("/{name}"))
     }))
 }
 
@@ -165,46 +165,34 @@ pub fn get_workspace_status(name: &str) -> Result<String> {
         .arg("--output")
         .arg("json")
         .output()
-        .map_err(|e| RemoteError::CommandFailed(format!("Failed to list workspaces: {}", e)))?;
+        .map_err(|e| RemoteError::CommandFailed(format!("Failed to list workspaces: {e}")))?;
 
     if !output.status.success() {
-        return Err(RemoteError::CommandFailed(
-            "Failed to get workspace status".to_string(),
-        ));
+        return Err(RemoteError::CommandFailed("Failed to get workspace status".to_string()));
     }
 
     // Parse JSON output and find workspace
     let stdout = String::from_utf8_lossy(&output.stdout);
     // For now, return simple status - can be enhanced with proper JSON parsing
-    Ok(if stdout.contains(name) {
-        "running"
-    } else {
-        "stopped"
-    }
-    .to_string())
+    Ok(if stdout.contains(name) { "running" } else { "stopped" }.to_string())
 }
 
 /// Start a single port forward for a workspace.
 pub fn port_forward_single(workspace: &str, local_port: u16, remote_port: u16) -> Result<Child> {
     check_coder_installed()?;
 
-    info!(
-        "Port forwarding {}:{} -> {}",
-        workspace, remote_port, local_port
-    );
+    info!("Port forwarding {}:{} -> {}", workspace, remote_port, local_port);
 
     let child = Command::new("coder")
         .arg("port-forward")
         .arg(workspace)
         .arg("--tcp")
-        .arg(format!("{}:{}", local_port, remote_port))
+        .arg(format!("{local_port}:{remote_port}"))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .map_err(|e| {
-            RemoteError::PortForwardError(format!("Failed to start port forward: {}", e))
-        })?;
+        .map_err(|e| RemoteError::PortForwardError(format!("Failed to start port forward: {e}")))?;
 
     debug!("Port forward started with PID: {}", child.id());
     Ok(child)
@@ -221,11 +209,7 @@ pub fn kill_port_forward(pid: u32) -> Result<()> {
     #[cfg(windows)]
     {
         use std::process::Command;
-        let _ = Command::new("taskkill")
-            .arg("/PID")
-            .arg(pid.to_string())
-            .arg("/F")
-            .output();
+        let _ = Command::new("taskkill").arg("/PID").arg(pid.to_string()).arg("/F").output();
     }
 
     Ok(())

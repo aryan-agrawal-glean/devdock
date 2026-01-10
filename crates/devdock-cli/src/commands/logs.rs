@@ -98,7 +98,7 @@ pub async fn enable() -> Result<()> {
     output::step(3, 4, "Loading images...");
     for image in docker::RICH_LOGGING_IMAGES {
         if !docker::load_cached_image(image)? {
-            output::info(&format!("Pulling {}...", image));
+            output::info(&format!("Pulling {image}..."));
             docker::pull_images(&[image], false)?;
         }
     }
@@ -195,15 +195,14 @@ pub async fn status() -> Result<()> {
             .args(["inspect", "-f", "{{.State.Running}}", container])
             .output();
 
-        let is_running = output
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "true")
-            .unwrap_or(false);
+        let is_running =
+            output.map(|o| String::from_utf8_lossy(&o.stdout).trim() == "true").unwrap_or(false);
 
         if is_running {
-            output::success(&format!("✅ {} is running: {}", name, url));
+            output::success(&format!("✅ {name} is running: {url}"));
             running += 1;
         } else {
-            output::warn(&format!("❌ {} is not running", name));
+            output::warn(&format!("❌ {name} is not running"));
         }
     }
 
@@ -211,11 +210,7 @@ pub async fn status() -> Result<()> {
     if running == containers.len() {
         output::success("All rich logging services are running");
     } else if running > 0 {
-        output::warn(&format!(
-            "{}/{} services running",
-            running,
-            containers.len()
-        ));
+        output::warn(&format!("{}/{} services running", running, containers.len()));
     } else {
         output::info("Rich logging is not enabled. Use 'devdock logs enable' to start.");
     }

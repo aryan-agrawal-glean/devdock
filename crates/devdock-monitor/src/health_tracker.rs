@@ -56,13 +56,10 @@ impl ResourceHealthHistory {
     fn record(&mut self, status: ResourceStatus, config: &StabilityConfig) {
         let now = Instant::now();
 
-        self.observations.push_back(HealthObservation {
-            status: status.clone(),
-            timestamp: now,
-        });
+        self.observations.push_back(HealthObservation { status: status.clone(), timestamp: now });
 
         // Remove observations outside the window
-        let cutoff = now - config.window_duration;
+        let cutoff = now.checked_sub(config.window_duration).unwrap();
         while let Some(front) = self.observations.front() {
             if front.timestamp < cutoff {
                 self.observations.pop_front();
@@ -87,11 +84,7 @@ impl ResourceHealthHistory {
         let now = Instant::now();
 
         // Count recent healthy observations
-        let healthy_count = self
-            .observations
-            .iter()
-            .filter(|obs| obs.status.is_healthy())
-            .count();
+        let healthy_count = self.observations.iter().filter(|obs| obs.status.is_healthy()).count();
 
         if healthy_count < config.required_successes {
             return false;
@@ -120,11 +113,7 @@ impl ResourceHealthHistory {
     }
 
     fn consecutive_healthy_count(&self) -> usize {
-        self.observations
-            .iter()
-            .rev()
-            .take_while(|obs| obs.status.is_healthy())
-            .count()
+        self.observations.iter().rev().take_while(|obs| obs.status.is_healthy()).count()
     }
 
     fn time_healthy(&self) -> Option<Duration> {
@@ -141,10 +130,7 @@ pub struct HealthTracker {
 
 impl HealthTracker {
     pub fn new(config: StabilityConfig) -> Self {
-        HealthTracker {
-            config,
-            resources: HashMap::new(),
-        }
+        HealthTracker { config, resources: HashMap::new() }
     }
 
     pub fn with_defaults() -> Self {
@@ -153,19 +139,14 @@ impl HealthTracker {
 
     /// Record a health observation for a resource.
     pub fn record(&mut self, name: &str, status: ResourceStatus) {
-        let history = self
-            .resources
-            .entry(name.to_string())
-            .or_insert_with(ResourceHealthHistory::new);
+        let history =
+            self.resources.entry(name.to_string()).or_insert_with(ResourceHealthHistory::new);
         history.record(status, &self.config);
     }
 
     /// Check if a resource is stably healthy.
     pub fn is_stable(&self, name: &str) -> bool {
-        self.resources
-            .get(name)
-            .map(|h| h.is_stable(&self.config))
-            .unwrap_or(false)
+        self.resources.get(name).is_some_and(|h| h.is_stable(&self.config))
     }
 
     /// Get the effective status for a resource (considering stability).
@@ -230,12 +211,8 @@ impl StabilityInfo {
         } else if self.consecutive_healthy > 0 {
             let time_str = self
                 .time_healthy
-                .map(|d| format!("{:.1}s", d.as_secs_f64()))
-                .unwrap_or_else(|| "0s".to_string());
-            format!(
-                "{}/{} checks, {}",
-                self.consecutive_healthy, self.required, time_str
-            )
+                .map_or_else(|| "0s".to_string(), |d| format!("{:.1}s", d.as_secs_f64()));
+            format!("{}/{} checks, {}", self.consecutive_healthy, self.required, time_str)
         } else {
             "waiting".to_string()
         }

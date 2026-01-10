@@ -32,10 +32,7 @@ pub struct SessionTiming {
 
 impl SessionTiming {
     pub fn new() -> Self {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
 
         SessionTiming {
             command_start_time: Self::read_command_start_time(),
@@ -56,10 +53,7 @@ impl SessionTiming {
     /// Mark tilt as ready (first successful tilt command).
     pub fn mark_tilt_up(&mut self) {
         if self.tilt_up_time.is_none() {
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_secs();
+            let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
             self.tilt_up_time = Some(now);
 
             if let Some(cmd_start) = self.command_start_time {
@@ -70,10 +64,7 @@ impl SessionTiming {
 
     /// Mark startup as complete.
     pub fn mark_complete(&mut self) {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
         self.startup_complete_time = Some(now);
         self.total_startup_seconds = Some((now - self.watch_start_time) as f64);
     }
@@ -121,9 +112,7 @@ pub struct SessionState {
 impl SessionState {
     pub fn new() -> Self {
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-        SessionState {
-            state_file: home.join(STATE_FILE),
-        }
+        SessionState { state_file: home.join(STATE_FILE) }
     }
 
     /// Check if startup has already completed (state file exists).
