@@ -95,7 +95,8 @@ regex = "1.10"
 rust-ini = "0.21"
 chrono = { version = "0.4", features = ["serde"] }
 
-# Database - pin to older version to avoid home crate issue
+# Database - pinned to 0.7.3 due to home crate compatibility issue in newer versions
+# RUSTSEC-2024-0363 does NOT apply: that vuln affects Postgres/MySQL binary protocols, we use SQLite only
 sqlx = { version = "=0.7.3", features = ["sqlite", "runtime-tokio-native-tls", "migrate"] }
 
 # Logging
