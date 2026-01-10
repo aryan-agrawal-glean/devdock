@@ -64,6 +64,7 @@ ref_option = "allow"
 assigning_clones = "allow"
 format_push_string = "allow"
 unsafe_derive_deserialize = "allow"
+useless_conversion = "allow"
 
 [workspace.dependencies]
 # Core dependencies
