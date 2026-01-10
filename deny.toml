@@ -12,11 +12,8 @@ version = 2
 db-path = "~/.cargo/advisory-db"
 ignore = [
     # Transitive deps we can't easily update - unmaintained but still functional
-    "RUSTSEC-2024-0388",  # number_prefix (via indicatif)
-    "RUSTSEC-2024-0436",  # paste (via sqlx)
-    "RUSTSEC-2024-0421",  # rustls-pemfile (via reqwest)
-    # sqlx pinned to 0.7.3 for home crate compatibility (see Cargo.toml comment)
-    "RUSTSEC-2024-0363",  # sqlx vulnerability
+    "RUSTSEC-2025-0119",  # number_prefix (via indicatif)
+    "RUSTSEC-2025-0134",  # rustls-pemfile (via reqwest)
 ]
 
 [licenses]
