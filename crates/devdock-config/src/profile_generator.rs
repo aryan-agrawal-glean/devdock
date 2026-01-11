@@ -1,6 +1,6 @@
 //! Temporary profile generator for Tilt.
 
-use crate::dependency_graph::{DependencyGraph, ComponentType};
+use crate::dependency_graph::{ComponentType, DependencyGraph};
 use crate::ini_parser::ParsedIniConfig;
 use crate::opensearch::get_elastic_namespace;
 use crate::platform::{Platform, TempProfile};
@@ -77,7 +77,7 @@ pub struct ServiceProfileEntry {
     pub env: Option<HashMap<String, String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hot_reload: Option<String>,
-    
+
     // Hook-specific fields (for pre_setup and post_setup)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub script: Option<String>,
@@ -87,7 +87,7 @@ pub struct ServiceProfileEntry {
     pub depends_on_services: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timeout: Option<String>,
-    
+
     // Allow any additional fields from the profile to pass through
     #[serde(flatten, skip_serializing_if = "HashMap::is_empty")]
     pub extra: HashMap<String, serde_json::Value>,
@@ -128,7 +128,7 @@ impl TempProfileGenerator {
             architecture,
             project_number: String::new(),
             enable_service_metrics: "True".to_string(),
-            current_profile: profile_path.map(|s| s.to_string()),
+            current_profile: profile_path.map(std::string::ToString::to_string),
             dns_kubectl: Some("disabled".to_string()),
             k8s_service_account: None,
             debug_mode: "False".to_string(),
@@ -162,7 +162,7 @@ impl TempProfileGenerator {
     }
 
     /// Get OpenSearch namespace from dynamic.ini
-    /// 
+    ///
     /// Reads indexing.index.nodePool from dynamic.ini and converts to namespace.
     /// Falls back to elasticsearch-1-namespace if not found.
     fn get_opensearch_namespace(&self, staging: bool) -> String {
@@ -173,11 +173,7 @@ impl TempProfileGenerator {
         };
 
         // Get the nodepool key based on staging flag
-        let nodepool_key = if staging {
-            "index.staging.nodePool"
-        } else {
-            "index.nodePool"
-        };
+        let nodepool_key = if staging { "index.staging.nodePool" } else { "index.nodePool" };
 
         // Try to read nodepool from dynamic.ini
         let nodepool = match dynamic_ini.get("indexing", nodepool_key) {
@@ -196,7 +192,7 @@ impl TempProfileGenerator {
     }
 
     /// Get AWS bastion instance ID
-    /// 
+    ///
     /// Queries AWS EC2 for the bastion instance in the specified region.
     fn get_aws_bastion_instance_id(&self, region: &str) -> Option<String> {
         // Use AWS CLI to describe instances
@@ -205,12 +201,15 @@ impl TempProfileGenerator {
             .args([
                 "ec2",
                 "describe-instances",
-                "--region", region,
+                "--region",
+                region,
                 "--filters",
                 "Name=tag:Name,Values=bastion",
                 "Name=instance-state-name,Values=running",
-                "--query", "Reservations[0].Instances[0].InstanceId",
-                "--output", "text",
+                "--query",
+                "Reservations[0].Instances[0].InstanceId",
+                "--output",
+                "text",
             ])
             .output();
 
@@ -292,7 +291,10 @@ impl TempProfileGenerator {
             let mut pipelines_map = HashMap::new();
             for (name, config) in &profile.pipelines {
                 let mut value = serde_json::Map::new();
-                value.insert("type".to_string(), serde_json::Value::String(config.pipeline_type.clone()));
+                value.insert(
+                    "type".to_string(),
+                    serde_json::Value::String(config.pipeline_type.clone()),
+                );
                 for (k, v) in &config.config {
                     value.insert(k.clone(), v.clone());
                 }
@@ -306,7 +308,10 @@ impl TempProfileGenerator {
             let mut test_suite_map = HashMap::new();
             for (name, config) in &profile.test_suite {
                 let mut value = serde_json::Map::new();
-                value.insert("type".to_string(), serde_json::Value::String(config.test_type.clone()));
+                value.insert(
+                    "type".to_string(),
+                    serde_json::Value::String(config.test_type.clone()),
+                );
                 for (k, v) in &config.config {
                     value.insert(k.clone(), v.clone());
                 }
@@ -317,15 +322,21 @@ impl TempProfileGenerator {
     }
 
     /// Apply services from dependency graph and original profile
-    pub fn apply_services(&mut self, graph: &DependencyGraph, profile: &Profile, active_services: Option<&str>) {
+    pub fn apply_services(
+        &mut self,
+        graph: &DependencyGraph,
+        profile: &Profile,
+        active_services: Option<&str>,
+    ) {
         // Parse active services list
-        let active_set: Option<HashSet<&str>> = active_services
-            .map(|s| s.split(',').map(|s| s.trim()).collect());
+        let active_set: Option<HashSet<&str>> =
+            active_services.map(|s| s.split(',').map(str::trim).collect());
 
         // Check if SQL is local (for docbuilder special case)
-        let sql_is_local = profile.infra.get("sql")
-            .map(|c| c.deployment_type == devdock_core::types::DeploymentType::Local)
-            .unwrap_or(false);
+        let sql_is_local = profile
+            .infra
+            .get("sql")
+            .is_some_and(|c| c.deployment_type == devdock_core::types::DeploymentType::Local);
 
         // Track if QE is in the graph
         let has_qe = graph.nodes().any(|n| n.name == "qe");
@@ -352,8 +363,7 @@ impl TempProfileGenerator {
             };
 
             // Get port from env if available (not used in temp_profile but kept for reference)
-            let _port: Option<u16> = node.config.env.get("PORT")
-                .and_then(|p| p.parse().ok());
+            let _port: Option<u16> = node.config.env.get("PORT").and_then(|p| p.parse().ok());
 
             match node.component_type {
                 ComponentType::Service => {
@@ -374,22 +384,28 @@ impl TempProfileGenerator {
 
                     // Only include env from the PROFILE, not from devdock_config.json
                     let env = profile_service.and_then(|s| {
-                        if s.env.is_empty() { None } else { Some(s.env.clone()) }
+                        if s.env.is_empty() {
+                            None
+                        } else {
+                            Some(s.env.clone())
+                        }
                     });
 
                     let hot_reload = profile_service.and_then(|s| {
                         s.hot_reload.as_ref().map(|hr| match hr {
                             devdock_core::profile::HotReloadConfig::Enabled(b) => {
-                                if *b { "enable".to_string() } else { "disable".to_string() }
+                                if *b {
+                                    "enable".to_string()
+                                } else {
+                                    "disable".to_string()
+                                }
                             }
                             devdock_core::profile::HotReloadConfig::Setting(s) => s.clone(),
                         })
                     });
 
                     // Extract any extra fields from the profile (like tick_type)
-                    let extra = profile_service
-                        .map(|s| s.config.clone())
-                        .unwrap_or_default();
+                    let extra = profile_service.map(|s| s.config.clone()).unwrap_or_default();
 
                     let mut entry = ServiceProfileEntry {
                         service_type,
@@ -407,7 +423,8 @@ impl TempProfileGenerator {
                     // Special case: Docbuilder with local SQL - add ENABLE_WRITES env
                     if node.name == "docbuilder" && sql_is_local {
                         let env_map = entry.env.get_or_insert_with(HashMap::new);
-                        env_map.insert("ENABLE_WRITES".to_string(), "--allWritesEnabled".to_string());
+                        env_map
+                            .insert("ENABLE_WRITES".to_string(), "--allWritesEnabled".to_string());
                     }
 
                     self.profile.services.insert(node.name.clone(), entry);
@@ -425,18 +442,21 @@ impl TempProfileGenerator {
         // Only add QE if the profile already has services AND QE wasn't resolved via dependencies
         let has_services = !profile.services.is_empty();
         if has_services && !has_qe {
-            self.profile.services.insert("qe".to_string(), ServiceProfileEntry {
-                service_type: "remote".to_string(),
-                active: true,  // Remote services are always active
-                port: None,
-                env: None,
-                hot_reload: None,
-                script: None,
-                service: None,
-                depends_on_services: None,
-                timeout: None,
-                extra: HashMap::new(),
-            });
+            self.profile.services.insert(
+                "qe".to_string(),
+                ServiceProfileEntry {
+                    service_type: "remote".to_string(),
+                    active: true, // Remote services are always active
+                    port: None,
+                    env: None,
+                    hot_reload: None,
+                    script: None,
+                    service: None,
+                    depends_on_services: None,
+                    timeout: None,
+                    extra: HashMap::new(),
+                },
+            );
         }
     }
 
@@ -450,7 +470,8 @@ impl TempProfileGenerator {
         let infra_type = match infra_config.deployment_type {
             devdock_core::types::DeploymentType::Local => "local",
             devdock_core::types::DeploymentType::Remote => "remote",
-        }.to_string();
+        }
+        .to_string();
 
         let mut extra = HashMap::new();
 
@@ -499,15 +520,11 @@ impl TempProfileGenerator {
             let platform = self.profile.platform.as_str();
             if infra_type == "remote" && platform != "azure" && !extra.contains_key("namespace") {
                 // Check if staging mode from config
-                let staging = extra.get("staging")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false);
-                
+                let staging =
+                    extra.get("staging").and_then(serde_json::Value::as_bool).unwrap_or(false);
+
                 let namespace = self.get_opensearch_namespace(staging);
-                extra.insert(
-                    "namespace".to_string(),
-                    serde_json::Value::String(namespace),
-                );
+                extra.insert("namespace".to_string(), serde_json::Value::String(namespace));
             }
         }
 
@@ -516,10 +533,8 @@ impl TempProfileGenerator {
             // Add local_to_remote_ports for port forwarding
             // Default ports: [7972, 8888] for Tilt UI forwarding
             if !extra.contains_key("local_to_remote_ports") {
-                extra.insert(
-                    "local_to_remote_ports".to_string(),
-                    serde_json::json!([[7972, 8888]]),
-                );
+                extra
+                    .insert("local_to_remote_ports".to_string(), serde_json::json!([[7972, 8888]]));
             }
 
             // For AWS platform, get bastion instance ID
@@ -540,16 +555,13 @@ impl TempProfileGenerator {
             // Redis doesn't need extra fields, just type
         }
 
-        let entry = InfraProfileEntry {
-            infra_type,
-            extra,
-        };
+        let entry = InfraProfileEntry { infra_type, extra };
 
         self.profile.infra.insert(name.to_string(), entry);
     }
 
     /// Apply service hook configuration (pre_setup or post_setup)
-    /// 
+    ///
     /// These hooks are special "services" that Tilt's service_hooks/Tiltfile handles.
     /// We pass them through to temp_profile.yaml with all their configuration intact.
     fn apply_service_hook(&mut self, hook_name: &str, hook_config: &devdock_core::ServiceConfig) {
@@ -557,14 +569,14 @@ impl TempProfileGenerator {
 
         // Create a JSON object with all the hook configuration
         let mut hook_data = serde_json::Map::new();
-        
+
         // Always set type (usually "local")
         hook_data.insert(
             "type".to_string(),
             json!(match hook_config.deployment_type {
                 devdock_core::types::DeploymentType::Local => "local",
                 devdock_core::types::DeploymentType::Remote => "remote",
-            })
+            }),
         );
 
         // Add script if present
@@ -603,7 +615,7 @@ impl TempProfileGenerator {
         // Note: We can't use ServiceProfileEntry directly because it doesn't have all the hook fields
         // So we'll store it as a JSON value in the services map
         let entry_json = serde_json::Value::Object(hook_data);
-        
+
         // Deserialize into a ServiceProfileEntry with extra fields flattened
         // This is a bit of a hack but allows us to preserve all hook configuration
         if let Ok(_hook_value) = serde_json::from_value::<serde_json::Value>(entry_json.clone()) {
@@ -616,34 +628,25 @@ impl TempProfileGenerator {
     /// Store hook configuration as raw JSON (workaround for hook-specific fields)
     fn store_hook_config(&mut self, hook_name: &str, hook_data: serde_json::Value) {
         // Extract all fields from the hook configuration
-        let service_type = hook_data
-            .get("type")
-            .and_then(|v| v.as_str())
-            .unwrap_or("local")
-            .to_string();
-        
+        let service_type =
+            hook_data.get("type").and_then(|v| v.as_str()).unwrap_or("local").to_string();
+
         let env = hook_data
             .get("env")
             .and_then(|v| serde_json::from_value::<HashMap<String, String>>(v.clone()).ok());
 
-        let script = hook_data
-            .get("script")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
+        let script =
+            hook_data.get("script").and_then(|v| v.as_str()).map(std::string::ToString::to_string);
 
-        let service = hook_data
-            .get("service")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
+        let service =
+            hook_data.get("service").and_then(|v| v.as_str()).map(std::string::ToString::to_string);
 
         let depends_on_services = hook_data
             .get("depends_on_services")
             .and_then(|v| serde_json::from_value::<Vec<String>>(v.clone()).ok());
 
-        let timeout = hook_data
-            .get("timeout")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
+        let timeout =
+            hook_data.get("timeout").and_then(|v| v.as_str()).map(std::string::ToString::to_string);
 
         // Collect any extra fields that aren't in the standard set
         let standard_keys = ["type", "env", "script", "service", "depends_on_services", "timeout"];
@@ -850,7 +853,6 @@ impl TempProfileGenerator {
     /// Generate the final YAML string
     pub fn generate(self) -> Result<String> {
         serde_yaml::to_string(&self.profile)
-            .map_err(|e| anyhow::anyhow!("Failed to serialize temp profile: {}", e))
+            .map_err(|e| anyhow::anyhow!("Failed to serialize temp profile: {e}"))
     }
 }
-

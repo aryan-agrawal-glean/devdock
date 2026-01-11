@@ -8,9 +8,8 @@ pub use crate::system::DockerInfo;
 
 /// Get information about running Docker containers.
 pub fn get_docker_info() -> Result<DockerInfo> {
-    let output = Command::new("docker")
-        .args(["ps", "--format", "{{.Names}}\t{{.Status}}"])
-        .output();
+    let output =
+        Command::new("docker").args(["ps", "--format", "{{.Names}}\t{{.Status}}"]).output();
 
     match output {
         Ok(output) if output.status.success() => {
@@ -33,17 +32,11 @@ pub fn get_docker_info() -> Result<DockerInfo> {
         Ok(_) => Ok(DockerInfo {
             containers: {
                 let mut map = HashMap::new();
-                map.insert(
-                    "error".to_string(),
-                    "Docker command failed".to_string(),
-                );
+                map.insert("error".to_string(), "Docker command failed".to_string());
                 map
             },
         }),
-        Err(e) => Err(DiagnosticsError::SystemInfo(format!(
-            "Failed to run docker command: {}",
-            e
-        ))),
+        Err(e) => Err(DiagnosticsError::SystemInfo(format!("Failed to run docker command: {e}"))),
     }
 }
 
@@ -63,4 +56,3 @@ pub fn check_tilt_running() -> Result<Option<u32>> {
 
     Ok(None)
 }
-

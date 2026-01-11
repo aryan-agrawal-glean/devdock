@@ -5,7 +5,7 @@ use anyhow::Result;
 use devdock_config::{DependencyResolver, ProfileLoader, ProfileValidator};
 
 pub async fn execute(profile_name: &str) -> Result<()> {
-    output::info(&format!("Validating profile: {}", profile_name));
+    output::info(&format!("Validating profile: {profile_name}"));
 
     // Load profile
     let loader = ProfileLoader::new();
@@ -21,7 +21,7 @@ pub async fn execute(profile_name: &str) -> Result<()> {
     let resolved = resolver.resolve(&profile)?;
 
     // Print results
-    output::success(&format!("Profile: {}", profile_name));
+    output::success(&format!("Profile: {profile_name}"));
     println!("  Project: {}", profile.project);
     println!("  Platform: {:?}", profile.platform);
     println!("  Services: {}", profile.services.len());
@@ -39,4 +39,3 @@ pub async fn execute(profile_name: &str) -> Result<()> {
     output::success("All validations passed");
     Ok(())
 }
-

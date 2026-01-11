@@ -2,9 +2,13 @@
 name = "devdock-cli"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
+
+[lints]
+workspace = true
 
 [[bin]]
 name = "devdock"
@@ -18,6 +22,8 @@ devdock-codegen = { path = "../devdock-codegen" }
 devdock-remote = { path = "../devdock-remote" }
 devdock-sync = { path = "../devdock-sync" }
 devdock-diagnostics = { path = "../devdock-diagnostics" }
+devdock-monitor = { path = "../devdock-monitor" }
+devdock-telemetry = { path = "../devdock-telemetry" }
 
 anyhow.workspace = true
 clap.workspace = true

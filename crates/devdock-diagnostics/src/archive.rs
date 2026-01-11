@@ -17,12 +17,13 @@ pub fn create_report_archive(
     config_files: &HashMap<String, String>,
 ) -> Result<PathBuf> {
     // Create temp directory for archive
-    let temp_dir = std::env::temp_dir().join(format!("devdock_bug_report_{}", uuid::Uuid::new_v4()));
+    let temp_dir =
+        std::env::temp_dir().join(format!("devdock_bug_report_{}", uuid::Uuid::new_v4()));
     fs::create_dir_all(&temp_dir)?;
 
     // Create archive filename
     let timestamp = Local::now().format("%Y%m%d_%H%M%S");
-    let archive_name = format!("devdock_bug_report_{}.zip", timestamp);
+    let archive_name = format!("devdock_bug_report_{timestamp}.zip");
     let archive_path = temp_dir.join(&archive_name);
 
     info!("Creating bug report archive: {:?}", archive_path);
@@ -50,7 +51,7 @@ pub fn create_report_archive(
 
     // Add configuration files
     for (filename, content) in config_files {
-        let safe_filename = filename.replace("/", "_");
+        let safe_filename = filename.replace('/', "_");
         zip.start_file(&safe_filename, options)?;
         zip.write_all(content.as_bytes())?;
     }
@@ -80,4 +81,3 @@ fn remove_path(path: &Path) -> std::io::Result<()> {
         Ok(())
     }
 }
-

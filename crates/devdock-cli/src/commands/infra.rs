@@ -13,8 +13,8 @@ use crate::output;
 use anyhow::{Context, Result};
 use devdock_config::gcs_storage::DynamicIniLoader;
 use devdock_config::opensearch_import::OpenSearchCopier;
-use std::path::Path;
 use devdock_config::sql_import::SqlOperationsManager;
+use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
@@ -82,29 +82,24 @@ impl SqlState {
 
 /// Wait for MySQL container to be healthy
 fn wait_for_mysql(container: &str, timeout: Duration) -> Result<()> {
-    output::info(&format!("Waiting for {} to be healthy...", container));
+    output::info(&format!("Waiting for {container} to be healthy..."));
 
     let start = std::time::Instant::now();
     while start.elapsed() < timeout {
         let output = Command::new("docker")
-            .args([
-                "container",
-                "inspect",
-                "--format={{.State.Health.Status}}",
-                container,
-            ])
+            .args(["container", "inspect", "--format={{.State.Health.Status}}", container])
             .output()?;
 
         let status = String::from_utf8_lossy(&output.stdout);
         if status.trim() == "healthy" {
-            output::success(&format!("{} is healthy", container));
+            output::success(&format!("{container} is healthy"));
             return Ok(());
         }
 
         std::thread::sleep(Duration::from_secs(2));
     }
 
-    anyhow::bail!("Timeout waiting for {} to be healthy", container)
+    anyhow::bail!("Timeout waiting for {container} to be healthy")
 }
 
 /// Execute SQL command in container
@@ -141,7 +136,7 @@ fn docker_mysql_import(container: &str, sql_file: &PathBuf) -> Result<()> {
 
     let status = child.wait()?;
     if !status.success() {
-        anyhow::bail!("Failed to import SQL file: {:?}", sql_file);
+        anyhow::bail!("Failed to import SQL file: {sql_file:?}");
     }
 
     Ok(())
@@ -170,18 +165,15 @@ pub async fn sql_setup(
     full_cleanup: bool,
     copy_keyval: bool,
 ) -> Result<()> {
-    output::info(&format!("Setting up SQL for project {} ({})", project, platform));
+    output::info(&format!("Setting up SQL for project {project} ({platform})"));
 
-    let devdock_root = std::env::var("DEVDOCK_ROOT")
-        .context("DEVDOCK_ROOT environment variable not set")?;
+    let devdock_root =
+        std::env::var("DEVDOCK_ROOT").context("DEVDOCK_ROOT environment variable not set")?;
     let devdock_root = PathBuf::from(&devdock_root);
 
     // Determine container name
-    let container = if project == "glean-apps-canary" {
-        "devdock-mysql-gac"
-    } else {
-        "devdock-mysql"
-    };
+    let container =
+        if project == "glean-apps-canary" { "devdock-mysql-gac" } else { "devdock-mysql" };
 
     // Wait for MySQL
     wait_for_mysql(container, Duration::from_secs(120))?;
@@ -213,10 +205,7 @@ pub async fn sql_setup(
 
     // Handle project change
     if project != prev_project && !prev_project.is_empty() {
-        output::info(&format!(
-            "Project changed from {} to {}, cleaning up...",
-            prev_project, project
-        ));
+        output::info(&format!("Project changed from {prev_project} to {project}, cleaning up..."));
         state.clear_scripts()?;
         manager.clean_sql("")?;
         update_project = true;
@@ -234,9 +223,10 @@ pub async fn sql_setup(
     // Handle table comparison
     else {
         let mut prev_sorted: Vec<&str> = prev_tables.split(';').filter(|s| !s.is_empty()).collect();
-        let mut curr_sorted: Vec<&str> = tables_to_copy.split(';').filter(|s| !s.is_empty()).collect();
-        prev_sorted.sort();
-        curr_sorted.sort();
+        let mut curr_sorted: Vec<&str> =
+            tables_to_copy.split(';').filter(|s| !s.is_empty()).collect();
+        prev_sorted.sort_unstable();
+        curr_sorted.sort_unstable();
 
         if prev_sorted == curr_sorted && !force_copy {
             if copy_keyval {
@@ -262,7 +252,7 @@ pub async fn sql_setup(
     std::fs::create_dir_all(&target_scripts)?;
 
     if source_scripts.exists() {
-        output::info(&format!("Copying SQL scripts from {:?}", source_scripts));
+        output::info(&format!("Copying SQL scripts from {source_scripts:?}"));
         for entry in std::fs::read_dir(&source_scripts)? {
             let entry = entry?;
             let path = entry.path();
@@ -276,11 +266,10 @@ pub async fn sql_setup(
     // Run schema files
     output::info("Running schema hydration...");
     let mut sql_files: Vec<_> = std::fs::read_dir(&target_scripts)?
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .map(|e| e.path())
         .filter(|p| {
-            p.extension().map(|e| e == "sql").unwrap_or(false)
-                && !p.to_string_lossy().ends_with(".template")
+            p.extension().is_some_and(|e| e == "sql") && !p.to_string_lossy().ends_with(".template")
         })
         .collect();
     sql_files.sort();
@@ -295,7 +284,7 @@ pub async fn sql_setup(
 
     // Export data from cloud
     if !tables_to_copy.is_empty() {
-        output::info(&format!("Exporting tables: {}", tables_to_copy));
+        output::info(&format!("Exporting tables: {tables_to_copy}"));
 
         let export_dir = state.scripts_dir();
         std::fs::create_dir_all(&export_dir)?;
@@ -305,17 +294,17 @@ pub async fn sql_setup(
             if entry.is_empty() {
                 continue;
             }
-            output::info(&format!("Processing: {}", entry));
+            output::info(&format!("Processing: {entry}"));
             manager.export_from_cloud(entry, &export_dir, mode).await?;
         }
 
         // Import exported dumps
         output::info("Importing exported data...");
         let mut dump_files: Vec<_> = std::fs::read_dir(&export_dir)?
-            .filter_map(|e| e.ok())
+            .filter_map(std::result::Result::ok)
             .map(|e| e.path())
             .filter(|p| {
-                p.extension().map(|e| e == "sql").unwrap_or(false)
+                p.extension().is_some_and(|e| e == "sql")
                     && !p.to_string_lossy().ends_with(".template")
             })
             .collect();
@@ -344,16 +333,11 @@ pub async fn sql_setup(
 }
 
 /// SQL cleanup
-pub async fn sql_clean(
-    project: &str,
-    platform: &str,
-    region: &str,
-    db_tables: &str,
-) -> Result<()> {
-    output::info(&format!("Cleaning SQL for project {}", project));
+pub async fn sql_clean(project: &str, platform: &str, region: &str, db_tables: &str) -> Result<()> {
+    output::info(&format!("Cleaning SQL for project {project}"));
 
-    let devdock_root = std::env::var("DEVDOCK_ROOT")
-        .context("DEVDOCK_ROOT environment variable not set")?;
+    let devdock_root =
+        std::env::var("DEVDOCK_ROOT").context("DEVDOCK_ROOT environment variable not set")?;
     let devdock_root = PathBuf::from(devdock_root);
 
     // Load merged config (default.ini + dynamic.ini from GCS)
@@ -374,18 +358,12 @@ pub async fn opensearch_copy(
     query: &str,
     max_docs: usize,
 ) -> Result<()> {
-    output::info(&format!(
-        "Copying OpenSearch indexes for project {}: {}",
-        project, indexes
-    ));
+    output::info(&format!("Copying OpenSearch indexes for project {project}: {indexes}"));
 
     let copier = OpenSearchCopier::new(project).await?;
 
-    let index_list: Vec<String> = indexes
-        .split(',')
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect();
+    let index_list: Vec<String> =
+        indexes.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
 
     if index_list.is_empty() {
         output::warn("No indexes specified");
@@ -395,13 +373,10 @@ pub async fn opensearch_copy(
     let results = copier.copy_indexes(&index_list, query, max_docs)?;
 
     for (index, count) in &results {
-        output::success(&format!("Copied {} documents for {}", count, index));
+        output::success(&format!("Copied {count} documents for {index}"));
     }
 
-    output::success(&format!(
-        "✅ Completed copying {} index(es)",
-        results.len()
-    ));
+    output::success(&format!("✅ Completed copying {} index(es)", results.len()));
 
     Ok(())
 }
@@ -411,23 +386,17 @@ pub async fn opensearch_health() -> Result<()> {
     output::info("Checking local OpenSearch health...");
 
     let client = reqwest::Client::new();
-    let response = client
-        .get("http://localhost:9200/_cluster/health")
-        .send()
-        .await?;
+    let response = client.get("http://localhost:9200/_cluster/health").send().await?;
 
     if response.status().is_success() {
         let health: serde_json::Value = response.json().await?;
-        let status = health
-            .get("status")
-            .and_then(|s| s.as_str())
-            .unwrap_or("unknown");
+        let status = health.get("status").and_then(|s| s.as_str()).unwrap_or("unknown");
 
         match status {
             "green" => output::success("OpenSearch cluster is healthy (green)"),
             "yellow" => output::warn("OpenSearch cluster is degraded (yellow)"),
             "red" => output::warn("OpenSearch cluster is unhealthy (red)"),
-            _ => output::info(&format!("OpenSearch cluster status: {}", status)),
+            _ => output::info(&format!("OpenSearch cluster status: {status}")),
         }
     } else {
         output::warn("Failed to get cluster health");
@@ -435,4 +404,3 @@ pub async fn opensearch_health() -> Result<()> {
 
     Ok(())
 }
-

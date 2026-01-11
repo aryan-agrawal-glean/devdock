@@ -54,11 +54,7 @@ impl Instance {
     /// Generate a new instance ID.
     pub fn generate_id() -> String {
         use std::time::{SystemTime, UNIX_EPOCH};
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_millis();
-        format!("{:x}", timestamp)
+        let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis();
+        format!("{timestamp:x}")
     }
 }
-

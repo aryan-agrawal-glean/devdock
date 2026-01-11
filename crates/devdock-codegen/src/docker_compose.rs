@@ -19,7 +19,7 @@ impl DockerComposeGenerator {
 
         // Placeholder - will be implemented with actual service definitions
         for name in profile.services.keys() {
-            compose.push_str(&format!("  {}:\n", name));
+            compose.push_str(&format!("  {name}:\n"));
             compose.push_str("    image: placeholder\n");
         }
 
@@ -32,4 +32,3 @@ impl Default for DockerComposeGenerator {
         Self::new()
     }
 }
-

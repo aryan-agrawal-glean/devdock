@@ -26,18 +26,18 @@ pub async fn execute(soft: bool, clean_logs: bool) -> Result<()> {
     output::step(1, 6, "Cleaning service containers...");
     let containers = docker::get_devdock_containers()?;
     let mut cleaned = 0;
-    
+
     for container in &containers {
         // In soft mode, skip infra containers
         if soft && is_infra_container(container) {
             continue;
         }
-        
-        output::info(&format!("Removing {}...", container));
+
+        output::info(&format!("Removing {container}..."));
         docker::remove_container(container)?;
         cleaned += 1;
     }
-    output::success(&format!("Cleaned {} containers", cleaned));
+    output::success(&format!("Cleaned {cleaned} containers"));
 
     // Step 2: Clean up generated files
     output::step(2, 6, "Cleaning generated files...");
@@ -53,7 +53,7 @@ pub async fn execute(soft: bool, clean_logs: bool) -> Result<()> {
     output::step(4, 6, "Cleaning dangling images...");
     let removed = docker::remove_dangling_images()?;
     if removed > 0 {
-        output::success(&format!("Removed {} dangling images", removed));
+        output::success(&format!("Removed {removed} dangling images"));
     } else {
         output::info("No dangling images found");
     }
@@ -62,7 +62,7 @@ pub async fn execute(soft: bool, clean_logs: bool) -> Result<()> {
     output::step(5, 6, "Cleaning up ports...");
     let killed = docker::cleanup_ports(CLEANUP_PORTS)?;
     if killed > 0 {
-        output::success(&format!("Killed {} processes on ports", killed));
+        output::success(&format!("Killed {killed} processes on ports"));
     } else {
         output::info("No processes to kill");
     }
@@ -72,13 +72,13 @@ pub async fn execute(soft: bool, clean_logs: bool) -> Result<()> {
     match clean_stale_instances().await {
         Ok(count) => {
             if count > 0 {
-                output::success(&format!("Cleaned {} stale instance record(s)", count));
+                output::success(&format!("Cleaned {count} stale instance record(s)"));
             } else {
                 output::info("No stale instances found");
             }
         }
         Err(e) => {
-            output::warn(&format!("Failed to clean instance records: {}", e));
+            output::warn(&format!("Failed to clean instance records: {e}"));
         }
     }
 
@@ -98,10 +98,18 @@ pub async fn execute(soft: bool, clean_logs: bool) -> Result<()> {
 
 fn is_infra_container(name: &str) -> bool {
     let infra_names = [
-        "mysql", "sql", "redis", "opensearch", "elasticsearch",
-        "memcached", "nginx", "pubsub", "rabbitmq", "servicebus",
+        "mysql",
+        "sql",
+        "redis",
+        "opensearch",
+        "elasticsearch",
+        "memcached",
+        "nginx",
+        "pubsub",
+        "rabbitmq",
+        "servicebus",
     ];
-    
+
     infra_names.iter().any(|n| name.contains(n))
 }
 
@@ -176,35 +184,27 @@ fn clean_old_logs(devdock_dir: &PathBuf) -> Result<()> {
     for entry in std::fs::read_dir(devdock_dir)? {
         let entry = entry?;
         let path = entry.path();
-        
+
         if !path.is_dir() {
             continue;
         }
 
-        let dir_name = path.file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("");
+        let dir_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
         if skip_dirs.contains(&dir_name) {
             continue;
         }
 
         // Remove log files and empty directories
-        for file in walkdir::WalkDir::new(&path)
-            .into_iter()
-            .filter_map(|e| e.ok())
-        {
+        for file in walkdir::WalkDir::new(&path).into_iter().filter_map(std::result::Result::ok) {
             let file_path = file.path();
-            if file_path.extension().map(|e| e == "log").unwrap_or(false) {
+            if file_path.extension().is_some_and(|e| e == "log") {
                 let _ = std::fs::remove_file(file_path);
             }
         }
 
         // Remove symlinks
-        for file in walkdir::WalkDir::new(&path)
-            .into_iter()
-            .filter_map(|e| e.ok())
-        {
+        for file in walkdir::WalkDir::new(&path).into_iter().filter_map(std::result::Result::ok) {
             if file.path_is_symlink() {
                 let _ = std::fs::remove_file(file.path());
             }
@@ -215,7 +215,7 @@ fn clean_old_logs(devdock_dir: &PathBuf) -> Result<()> {
 }
 
 /// Clean up stale instance records from the database
-/// 
+///
 /// This removes:
 /// - Instances marked as Running/Starting but without active Tilt processes
 /// - Instances in Stopping state that never completed
@@ -223,9 +223,9 @@ fn clean_old_logs(devdock_dir: &PathBuf) -> Result<()> {
 async fn clean_stale_instances() -> Result<usize> {
     let state_manager = StateManager::new().await?;
     let instances = state_manager.list_instances().await?;
-    
+
     let mut cleaned_count = 0;
-    
+
     for instance in instances {
         // Check if instance should be cleaned up
         let should_clean = match instance.status {
@@ -242,13 +242,14 @@ async fn clean_stale_instances() -> Result<usize> {
                 true
             }
         };
-        
+
         if should_clean {
-            output::info(&format!("  Removing instance {} ({})", 
-                &instance.id[..8], 
+            output::info(&format!(
+                "  Removing instance {} ({})",
+                &instance.id[..8],
                 instance.status.as_str()
             ));
-            
+
             if let Err(e) = state_manager.delete_instance(&instance.id).await {
                 output::warn(&format!("  Failed to delete instance {}: {}", &instance.id[..8], e));
             } else {
@@ -256,12 +257,12 @@ async fn clean_stale_instances() -> Result<usize> {
             }
         }
     }
-    
+
     Ok(cleaned_count)
 }
 
 /// Check if Tilt is running in a specific workspace
-/// 
+///
 /// This checks for:
 /// 1. A Tilt process with the workspace path as current directory
 /// 2. Any devdock containers for this workspace
@@ -270,7 +271,7 @@ fn is_tilt_running(workspace_path: &str) -> bool {
     if is_process_running_in_workspace("tilt", workspace_path) {
         return true;
     }
-    
+
     // Check for DevDock containers (as a backup check)
     if let Ok(containers) = docker::get_devdock_containers() {
         if !containers.is_empty() {
@@ -279,7 +280,7 @@ fn is_tilt_running(workspace_path: &str) -> bool {
             return true;
         }
     }
-    
+
     false
 }
 
@@ -288,13 +289,11 @@ fn is_process_running_in_workspace(process_name: &str, workspace_path: &str) -> 
     #[cfg(target_os = "macos")]
     {
         // Use ps to find processes with matching name
-        let output = Command::new("ps")
-            .args(["-ax", "-o", "pid,command"])
-            .output();
-        
+        let output = Command::new("ps").args(["-ax", "-o", "pid,command"]).output();
+
         if let Ok(output) = output {
             let stdout = String::from_utf8_lossy(&output.stdout);
-            
+
             for line in stdout.lines() {
                 if line.contains(process_name) {
                     // Extract PID from the line
@@ -312,18 +311,15 @@ fn is_process_running_in_workspace(process_name: &str, workspace_path: &str) -> 
             }
         }
     }
-    
+
     #[cfg(target_os = "linux")]
     {
         // Use pgrep to find processes with matching name
-        let output = Command::new("pgrep")
-            .arg("-f")
-            .arg(process_name)
-            .output();
-        
+        let output = Command::new("pgrep").arg("-f").arg(process_name).output();
+
         if let Ok(output) = output {
             let stdout = String::from_utf8_lossy(&output.stdout);
-            
+
             for pid_str in stdout.lines() {
                 if let Ok(pid) = pid_str.parse::<i32>() {
                     if let Ok(cwd) = get_process_cwd(pid) {
@@ -335,26 +331,25 @@ fn is_process_running_in_workspace(process_name: &str, workspace_path: &str) -> 
             }
         }
     }
-    
+
     false
 }
 
 /// Get the current working directory of a process
 #[cfg(target_os = "macos")]
 fn get_process_cwd(pid: i32) -> Result<String> {
-    let output = Command::new("lsof")
-        .args(["-p", &pid.to_string(), "-a", "-d", "cwd", "-Fn"])
-        .output()?;
-    
+    let output =
+        Command::new("lsof").args(["-p", &pid.to_string(), "-a", "-d", "cwd", "-Fn"]).output()?;
+
     let stdout = String::from_utf8_lossy(&output.stdout);
-    
+
     for line in stdout.lines() {
         if let Some(stripped) = line.strip_prefix('n') {
             return Ok(stripped.to_string());
         }
     }
-    
-    anyhow::bail!("Could not determine cwd for process {}", pid)
+
+    anyhow::bail!("Could not determine cwd for process {pid}")
 }
 
 /// Get the current working directory of a process
@@ -370,5 +365,3 @@ fn get_process_cwd(pid: i32) -> Result<String> {
 fn get_process_cwd(_pid: i32) -> Result<String> {
     anyhow::bail!("get_process_cwd not supported on this platform")
 }
-
-

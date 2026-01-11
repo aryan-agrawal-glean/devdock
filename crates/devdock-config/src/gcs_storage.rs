@@ -23,10 +23,7 @@ pub struct GcsStorage {
 impl GcsStorage {
     /// Create a new GCS storage client
     pub fn new(project: &str, cache_dir: PathBuf) -> Self {
-        Self {
-            project: project.to_string(),
-            cache_dir,
-        }
+        Self { project: project.to_string(), cache_dir }
     }
 
     /// Create with default cache directory ($DEVDOCK_ROOT/cache or temp)
@@ -67,7 +64,7 @@ impl GcsStorage {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("gcloud storage cp failed: {}", stderr);
+            anyhow::bail!("gcloud storage cp failed: {stderr}");
         }
 
         Ok(local_path)
@@ -90,7 +87,7 @@ impl GcsStorage {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("gcloud storage cp failed: {}", stderr);
+            anyhow::bail!("gcloud storage cp failed: {stderr}");
         }
 
         Ok(())
@@ -101,9 +98,9 @@ impl GcsStorage {
         let temp_name = format!("temp_{}", uuid_simple());
         let local_path = self.fetch_file(gcs_path, &temp_name).await?;
 
-        let bytes = tokio::fs::read(&local_path).await.with_context(|| {
-            format!("Failed to read fetched file: {}", local_path.display())
-        })?;
+        let bytes = tokio::fs::read(&local_path)
+            .await
+            .with_context(|| format!("Failed to read fetched file: {}", local_path.display()))?;
 
         // Clean up temp file
         let _ = tokio::fs::remove_file(&local_path).await;
@@ -162,11 +159,11 @@ impl GcsStorage {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("gcloud storage ls failed: {}", stderr);
+            anyhow::bail!("gcloud storage ls failed: {stderr}");
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        Ok(stdout.lines().map(|s| s.to_string()).collect())
+        Ok(stdout.lines().map(std::string::ToString::to_string).collect())
     }
 
     /// Check if a GCS path exists
@@ -190,18 +187,12 @@ impl DynamicIniLoader {
     /// Create a new dynamic INI loader
     pub fn new(project: &str, devdock_root: PathBuf) -> Result<Self> {
         let storage = GcsStorage::with_default_cache(project)?;
-        Ok(Self {
-            storage,
-            devdock_root,
-        })
+        Ok(Self { storage, devdock_root })
     }
 
     /// Create with custom storage
     pub fn with_storage(storage: GcsStorage, devdock_root: PathBuf) -> Self {
-        Self {
-            storage,
-            devdock_root,
-        }
+        Self { storage, devdock_root }
     }
 
     /// Get the path to the local default.ini
@@ -310,7 +301,7 @@ impl SqlDumpFetcher {
     /// Fetch a SQL dump file for a database
     pub async fn fetch_sql_dump(&self, db_name: &str, target_dir: &Path) -> Result<PathBuf> {
         let gcs_path = format!("{}/{}.sql", self.storage.sql_bucket(), db_name);
-        let target_path = target_dir.join(format!("{}.sql", db_name));
+        let target_path = target_dir.join(format!("{db_name}.sql"));
 
         info!("Fetching SQL dump for {} from {}", db_name, gcs_path);
         self.storage.fetch_to_path(&gcs_path, &target_path).await?;
@@ -324,10 +315,8 @@ impl SqlDumpFetcher {
         db_names: &[String],
         target_dir: &Path,
     ) -> Result<Vec<PathBuf>> {
-        let gcs_files: Vec<String> = db_names
-            .iter()
-            .map(|db| format!("{}/{}.sql", self.storage.sql_bucket(), db))
-            .collect();
+        let gcs_files: Vec<String> =
+            db_names.iter().map(|db| format!("{}/{}.sql", self.storage.sql_bucket(), db)).collect();
 
         self.storage.fetch_files_parallel(&gcs_files, target_dir).await
     }
@@ -343,15 +332,9 @@ impl SqlDumpFetcher {
 fn uuid_simple() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    let duration = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
+    let duration = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
 
-    format!(
-        "{:x}{:x}",
-        duration.as_secs(),
-        duration.subsec_nanos()
-    )
+    format!("{:x}{:x}", duration.as_secs(), duration.subsec_nanos())
 }
 
 #[cfg(test)]
@@ -374,8 +357,3 @@ mod tests {
         assert!(!uuid2.is_empty());
     }
 }
-
-
-
-
-

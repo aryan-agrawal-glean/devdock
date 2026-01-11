@@ -16,36 +16,28 @@ pub async fn execute(detailed: bool) -> Result<()> {
     // Try to find instance for current workspace
     let instance = state_manager.get_instance_by_workspace(&workspace_path).await?;
 
-    match instance {
-        Some(instance) => {
-            print_instance_status(&state_manager, &instance, detailed).await?;
-        }
-        None => {
-            // Check if there are any running instances
-            let all_instances = state_manager.list_instances().await?;
-            let running: Vec<_> = all_instances
-                .iter()
-                .filter(|i| matches!(i.status, InstanceStatus::Running | InstanceStatus::Starting))
-                .collect();
+    if let Some(instance) = instance {
+        print_instance_status(&state_manager, &instance, detailed).await?;
+    } else {
+        // Check if there are any running instances
+        let all_instances = state_manager.list_instances().await?;
+        let running: Vec<_> = all_instances
+            .iter()
+            .filter(|i| matches!(i.status, InstanceStatus::Running | InstanceStatus::Starting))
+            .collect();
 
-            if running.is_empty() {
-                println!("\n{}", "No DevDock instance running for this workspace.".yellow());
-                println!("\nTo start DevDock:");
-                println!("  devdock start <profile_name>");
-            } else {
-                println!(
-                    "\n{} No instance for current workspace, but {} other instance(s) running:",
-                    "Note:".yellow(),
-                    running.len()
-                );
-                for inst in running {
-                    println!(
-                        "  • {} ({}) - {}",
-                        &inst.id[..8],
-                        inst.branch,
-                        inst.workspace_path
-                    );
-                }
+        if running.is_empty() {
+            println!("\n{}", "No DevDock instance running for this workspace.".yellow());
+            println!("\nTo start DevDock:");
+            println!("  devdock start <profile_name>");
+        } else {
+            println!(
+                "\n{} No instance for current workspace, but {} other instance(s) running:",
+                "Note:".yellow(),
+                running.len()
+            );
+            for inst in running {
+                println!("  • {} ({}) - {}", &inst.id[..8], inst.branch, inst.workspace_path);
             }
         }
     }
@@ -53,7 +45,11 @@ pub async fn execute(detailed: bool) -> Result<()> {
     Ok(())
 }
 
-async fn print_instance_status(state_manager: &StateManager, instance: &Instance, detailed: bool) -> Result<()> {
+async fn print_instance_status(
+    state_manager: &StateManager,
+    instance: &Instance,
+    detailed: bool,
+) -> Result<()> {
     let status_str = match instance.status {
         InstanceStatus::Running => "● Running".green(),
         InstanceStatus::Starting => "◐ Starting".yellow(),
@@ -64,7 +60,7 @@ async fn print_instance_status(state_manager: &StateManager, instance: &Instance
 
     println!("\n{}", "DevDock Status".bold());
     println!("{}", "═".repeat(50));
-    println!("  Status:     {}", status_str);
+    println!("  Status:     {status_str}");
     println!("  Instance:   {}", &instance.id[..8]);
     println!("  Profile:    {}", instance.profile);
     println!("  Branch:     {}", instance.branch);
@@ -76,14 +72,8 @@ async fn print_instance_status(state_manager: &StateManager, instance: &Instance
         println!("{}", "─".repeat(50));
         println!("  Workspace:  {}", instance.workspace_path);
         println!("  Full ID:    {}", instance.id);
-        println!(
-            "  Created:    {}",
-            format_timestamp(instance.created_at)
-        );
-        println!(
-            "  Updated:    {}",
-            format_timestamp(instance.updated_at)
-        );
+        println!("  Created:    {}", format_timestamp(instance.created_at));
+        println!("  Updated:    {}", format_timestamp(instance.updated_at));
 
         // Check Docker containers (only for local mode)
         if instance.mode == "local" {
@@ -101,36 +91,30 @@ async fn print_instance_status(state_manager: &StateManager, instance: &Instance
     // Always show quick access info
     println!("\n{}", "Quick Access".bold());
     println!("{}", "─".repeat(50));
-    println!(
-        "  Tilt UI:    {}",
-        format!("http://localhost:{}", instance.port_base + 10350).cyan()
-    );
-    println!(
-        "  Services:   {}",
-        format!("https://local.glean.com:{}", instance.port_base).cyan()
-    );
+    println!("  Tilt UI:    {}", format!("http://localhost:{}", instance.port_base + 10350).cyan());
+    println!("  Services:   {}", format!("https://local.glean.com:{}", instance.port_base).cyan());
 
     // Show port mappings for remote instances
     if instance.mode == "remote" {
         let mappings = state_manager.get_port_mappings(&instance.id).await?;
-        
+
         if !mappings.is_empty() {
             println!("\n{}", "Port Mappings".bold());
             println!("{}", "─".repeat(50));
-            
+
             let mut table = Table::new();
             table.set_format(*format::consts::FORMAT_CLEAN);
-            
+
             // Add header row
             table.add_row(row!["Service", "Type", "Local", "Remote", "Status"]);
-            
+
             for (service_name, port_type, local_port, remote_port, pid) in &mappings {
                 let status = if pid.is_some() {
                     "Active".green().to_string()
                 } else {
                     "Inactive".red().to_string()
                 };
-                
+
                 table.add_row(row![
                     service_name,
                     port_type,
@@ -139,9 +123,9 @@ async fn print_instance_status(state_manager: &StateManager, instance: &Instance
                     status
                 ]);
             }
-            
+
             table.printstd();
-            
+
             println!("\n  Run {} to see all port mappings", "devdock ports".cyan());
         }
     }
@@ -168,7 +152,7 @@ fn print_docker_status() -> Result<()> {
             println!("  {}", "No DevDock containers running".yellow());
         } else {
             for line in lines {
-                println!("  {}", line);
+                println!("  {line}");
             }
         }
     } else {
@@ -182,16 +166,15 @@ async fn print_tilt_status(mode: &str, state_manager: &StateManager) -> Result<(
     if mode == "remote" {
         // For remote mode, check Tilt on the remote workspace
         let workspace_path = std::env::current_dir()?.display().to_string();
-        
+
         if let Ok(Some(instance)) = state_manager.get_instance_by_workspace(&workspace_path).await {
-            if let Ok(Some((workspace_name, _, _, _))) = state_manager.get_sync_session(&instance.id).await {
+            if let Ok(Some((workspace_name, _, _, _))) =
+                state_manager.get_sync_session(&instance.id).await
+            {
                 // Check Tilt on remote using lsof
-                let check_cmd = format!("coder ssh {} -- 'lsof -i:10350 >/dev/null 2>&1 && echo running || echo stopped'", workspace_name);
-                
-                if let Ok(output) = Command::new("bash")
-                    .args(["-c", &check_cmd])
-                    .output()
-                {
+                let check_cmd = format!("coder ssh {workspace_name} -- 'lsof -i:10350 >/dev/null 2>&1 && echo running || echo stopped'");
+
+                if let Ok(output) = Command::new("bash").args(["-c", &check_cmd]).output() {
                     let result = String::from_utf8_lossy(&output.stdout).trim().to_string();
                     if result == "running" {
                         println!("  {} (on remote workspace)", "Tilt is running".green());
@@ -200,13 +183,11 @@ async fn print_tilt_status(mode: &str, state_manager: &StateManager) -> Result<(
                 }
             }
         }
-        
+
         println!("  {} (on remote workspace)", "Tilt status unknown".yellow());
     } else {
         // Local mode - check local process
-        let output = Command::new("pgrep")
-            .args(["-f", "tilt up"])
-            .output();
+        let output = Command::new("pgrep").args(["-f", "tilt up"]).output();
 
         match output {
             Ok(output) if output.status.success() => {
@@ -238,7 +219,7 @@ fn format_timestamp(ts: i64) -> String {
         Ok(elapsed) => {
             let secs = elapsed.as_secs();
             if secs < 60 {
-                format!("{} seconds ago", secs)
+                format!("{secs} seconds ago")
             } else if secs < 3600 {
                 format!("{} minutes ago", secs / 60)
             } else if secs < 86400 {

@@ -16,7 +16,7 @@ pub async fn list() -> Result<()> {
     }
 
     for profile in profiles {
-        println!("  • {}", profile);
+        println!("  • {profile}");
     }
 
     Ok(())
@@ -26,7 +26,7 @@ pub async fn show(name: &str) -> Result<()> {
     let loader = ProfileLoader::new();
     let profile = loader.load(name)?;
 
-    output::header(&format!("Profile: {}", name));
+    output::header(&format!("Profile: {name}"));
     println!("Project: {}", profile.project);
     println!("Platform: {:?}", profile.platform);
 
@@ -51,4 +51,3 @@ pub async fn create() -> Result<()> {
     output::warn("Profile create not yet implemented - coming soon!");
     Ok(())
 }
-

@@ -30,19 +30,14 @@ pub fn header(msg: &str) {
     let line = "═".repeat(60);
     println!();
     println!("{}", line.blue());
-    println!("{}", format!("  {}", msg).bold());
+    println!("{}", format!("  {msg}").bold());
     println!("{}", line.blue());
     println!();
 }
 
 /// Print a step in a multi-step process.
 pub fn step(current: usize, total: usize, msg: &str) {
-    println!(
-        "{} {} {}",
-        format!("[{}/{}]", current, total).purple().bold(),
-        "▶".cyan(),
-        msg
-    );
+    println!("{} {} {}", format!("[{current}/{total}]").purple().bold(), "▶".cyan(), msg);
 }
 
 /// Create a progress bar with time estimate.
@@ -77,7 +72,7 @@ pub fn create_spinner(message: &str) -> ProgressBar {
 /// Format elapsed time as human-readable string.
 pub fn format_elapsed(seconds: u64) -> String {
     if seconds < 60 {
-        format!("{}s", seconds)
+        format!("{seconds}s")
     } else if seconds < 3600 {
         format!("{}m {}s", seconds / 60, seconds % 60)
     } else {
@@ -92,10 +87,7 @@ pub fn notify(title: &str, message: &str) {
     let _ = Command::new("osascript")
         .args([
             "-e",
-            &format!(
-                r#"display notification "{}" with title "{}" sound name "Glass""#,
-                message, title
-            ),
+            &format!(r#"display notification "{message}" with title "{title}" sound name "Glass""#),
         ])
         .output();
 }
@@ -104,9 +96,7 @@ pub fn notify(title: &str, message: &str) {
 #[cfg(target_os = "linux")]
 pub fn notify(title: &str, message: &str) {
     use std::process::Command;
-    let _ = Command::new("notify-send")
-        .args([title, message])
-        .output();
+    let _ = Command::new("notify-send").args([title, message]).output();
 }
 
 /// Send desktop notification (Windows - no-op for now).
@@ -114,4 +104,3 @@ pub fn notify(title: &str, message: &str) {
 pub fn notify(_title: &str, _message: &str) {
     // Windows notification support can be added later
 }
-

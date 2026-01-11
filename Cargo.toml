@@ -6,16 +6,65 @@ members = [
     "crates/devdock-state",
     "crates/devdock-codegen",
     "crates/devdock-remote",
-    "crates/devdock-sync", "crates/devdock-diagnostics",
+    "crates/devdock-sync",
+    "crates/devdock-diagnostics",
+    "crates/devdock-monitor",
+    "crates/devdock-telemetry",
 ]
 resolver = "2"
 
 [workspace.package]
 version = "0.2.4"
 edition = "2021"
+rust-version = "1.74"
 authors = ["Glean DevDock Team"]
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/rahul-roy-glean/devdock"
+repository = "https://github.com/askscio/devdock"
+
+[workspace.lints.rust]
+unsafe_code = "allow"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+# Pedantic is too strict for now - enable selectively later
+# pedantic = { level = "warn", priority = -1 }
+
+# Allow common patterns
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+doc_markdown = "allow"
+struct_excessive_bools = "allow"
+fn_params_excessive_bools = "allow"
+too_many_lines = "allow"
+similar_names = "allow"
+unwrap_used = "allow"
+expect_used = "allow"
+
+# Allow patterns that exist in the codebase (can tighten later)
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+cast_possible_wrap = "allow"
+cast_precision_loss = "allow"
+implicit_hasher = "allow"
+needless_pass_by_value = "allow"
+unused_self = "allow"
+unused_async = "allow"
+unnecessary_wraps = "allow"
+return_self_not_must_use = "allow"
+items_after_statements = "allow"
+match_same_arms = "allow"
+match_wildcard_for_single_variants = "allow"
+manual_let_else = "allow"
+unnecessary_debug_formatting = "allow"
+default_trait_access = "allow"
+ref_option = "allow"
+assigning_clones = "allow"
+format_push_string = "allow"
+unsafe_derive_deserialize = "allow"
+useless_conversion = "allow"
 
 [workspace.dependencies]
 # Core dependencies
@@ -44,9 +93,10 @@ dirs = "5.0"
 futures = "0.3"
 regex = "1.10"
 rust-ini = "0.21"
-chrono = "0.4"
+chrono = { version = "0.4", features = ["serde"] }
 
-# Database - pin to older version to avoid home crate issue
+# Database - pinned to 0.7.3 due to home crate compatibility issue in newer versions
+# RUSTSEC-2024-0363 does NOT apply: that vuln affects Postgres/MySQL binary protocols, we use SQLite only
 sqlx = { version = "=0.7.3", features = ["sqlite", "runtime-tokio-native-tls", "migrate"] }
 
 # Logging

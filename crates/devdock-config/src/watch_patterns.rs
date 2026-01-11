@@ -116,12 +116,7 @@ impl WatchPatternConfig {
             ],
         );
 
-        map.insert(
-            "java".to_string(),
-            vec![
-                "java/com/askscio/".to_string(),
-            ],
-        );
+        map.insert("java".to_string(), vec!["java/com/askscio/".to_string()]);
 
         map.insert(
             "frontend".to_string(),
@@ -167,11 +162,7 @@ impl WatchPatternGenerator {
         let cache_dir = PathBuf::from(home).join(".devdock/cache/watch_patterns");
         std::fs::create_dir_all(&cache_dir)?;
 
-        Ok(Self {
-            workspace_root,
-            config,
-            cache_dir,
-        })
+        Ok(Self { workspace_root, config, cache_dir })
     }
 
     /// Generate watch patterns for a service without running cquery
@@ -229,17 +220,13 @@ impl WatchPatternGenerator {
         let target = target.strip_prefix("//").unwrap_or(target);
 
         // Handle targets with explicit names (//path:name)
-        let package = if target.contains(':') {
-            target.split(':').next()?
-        } else {
-            target
-        };
+        let package = if target.contains(':') { target.split(':').next()? } else { target };
 
         // Return as directory pattern
         if package.is_empty() {
             None
         } else {
-            Some(format!("{}/", package))
+            Some(format!("{package}/"))
         }
     }
 
@@ -279,7 +266,7 @@ impl WatchPatternGenerator {
         let watch_file = self
             .workspace_root
             .join("devdock/runtime_generated")
-            .join(format!("watch_file_{}.yaml", service_name));
+            .join(format!("watch_file_{service_name}.yaml"));
 
         // Ensure directory exists
         if let Some(parent) = watch_file.parent() {
@@ -308,8 +295,12 @@ impl WatchPatternGenerator {
     }
 
     /// Check if we have a cached cquery result that's still valid
-    pub fn get_cached_patterns(&self, service_name: &str, target_hash: &str) -> Option<Vec<String>> {
-        let cache_file = self.cache_dir.join(format!("{}_{}.yaml", service_name, target_hash));
+    pub fn get_cached_patterns(
+        &self,
+        service_name: &str,
+        target_hash: &str,
+    ) -> Option<Vec<String>> {
+        let cache_file = self.cache_dir.join(format!("{service_name}_{target_hash}.yaml"));
 
         if !cache_file.exists() {
             return None;
@@ -318,9 +309,7 @@ impl WatchPatternGenerator {
         // Check if cache is less than 24 hours old
         if let Ok(metadata) = std::fs::metadata(&cache_file) {
             if let Ok(modified) = metadata.modified() {
-                let age = std::time::SystemTime::now()
-                    .duration_since(modified)
-                    .unwrap_or_default();
+                let age = std::time::SystemTime::now().duration_since(modified).unwrap_or_default();
 
                 if age.as_secs() > 24 * 60 * 60 {
                     return None; // Cache too old
@@ -341,7 +330,7 @@ impl WatchPatternGenerator {
         target_hash: &str,
         patterns: &[String],
     ) -> Result<()> {
-        let cache_file = self.cache_dir.join(format!("{}_{}.yaml", service_name, target_hash));
+        let cache_file = self.cache_dir.join(format!("{service_name}_{target_hash}.yaml"));
 
         let mut map = HashMap::new();
         map.insert(service_name.to_string(), patterns.to_vec());
@@ -425,8 +414,11 @@ mod tests {
 
         // The patterns are compressed, so we should have go/ directories (not the specific subdirectory)
         // because go/platform/ already covers go/platform/gcp/query_endpoint/
-        assert!(patterns.iter().any(|p| p.starts_with("go/")), "Should have go patterns: {:?}", patterns);
-        assert!(patterns.contains(&"config/".to_string()), "Should have config/: {:?}", patterns);
+        assert!(
+            patterns.iter().any(|p| p.starts_with("go/")),
+            "Should have go patterns: {patterns:?}"
+        );
+        assert!(patterns.contains(&"config/".to_string()), "Should have config/: {patterns:?}");
     }
 
     #[test]
@@ -457,4 +449,3 @@ mod tests {
         assert_eq!(compressed, vec!["go/".to_string()]);
     }
 }
-

@@ -28,8 +28,8 @@ pub struct OpenSearchCopier {
 impl OpenSearchCopier {
     /// Create a new OpenSearch copier from project config
     pub async fn new(project: &str) -> Result<Self> {
-        let devdock_root = std::env::var("DEVDOCK_ROOT")
-            .context("DEVDOCK_ROOT environment variable not set")?;
+        let devdock_root =
+            std::env::var("DEVDOCK_ROOT").context("DEVDOCK_ROOT environment variable not set")?;
         let devdock_root = PathBuf::from(devdock_root);
 
         let ini_loader = DynamicIniLoader::new(project, devdock_root)?;
@@ -42,29 +42,20 @@ impl OpenSearchCopier {
 
         let private_setup = config
             .get("deploy", "deploy_service.private_setup")
-            .map(|s| s.to_lowercase() == "true")
-            .unwrap_or(false);
+            .is_some_and(|s| s.to_lowercase() == "true");
 
-        Ok(Self {
-            project: project.to_string(),
-            server_url,
-            private_setup,
-        })
+        Ok(Self { project: project.to_string(), server_url, private_setup })
     }
 
     /// Create with explicit config
     pub fn with_config(project: &str, server_url: &str, private_setup: bool) -> Self {
-        Self {
-            project: project.to_string(),
-            server_url: server_url.to_string(),
-            private_setup,
-        }
+        Self { project: project.to_string(), server_url: server_url.to_string(), private_setup }
     }
 
     /// Check if Elasticsearch is healthy on a given port
     fn health_check(port: u16) -> bool {
-        let url = format!("http://localhost:{}/", port);
-        
+        let url = format!("http://localhost:{port}/");
+
         match reqwest::blocking::get(&url) {
             Ok(resp) => resp.status().is_success(),
             Err(_) => false,
@@ -82,7 +73,7 @@ impl OpenSearchCopier {
             std::thread::sleep(Duration::from_secs(1));
         }
 
-        anyhow::bail!("Timeout waiting for Elasticsearch on port {}", port)
+        anyhow::bail!("Timeout waiting for Elasticsearch on port {port}")
     }
 
     /// Start SSH tunnel to remote Elasticsearch
@@ -93,11 +84,7 @@ impl OpenSearchCopier {
             .or_else(|| self.server_url.strip_prefix("https://"))
             .unwrap_or(&self.server_url);
 
-        let tunnel_arg = if self.private_setup {
-            "--internal-ip"
-        } else {
-            "--tunnel-through-iap"
-        };
+        let tunnel_arg = if self.private_setup { "--internal-ip" } else { "--tunnel-through-iap" };
 
         info!("Starting SSH tunnel to {} ({})", host, tunnel_arg);
 
@@ -111,7 +98,7 @@ impl OpenSearchCopier {
                 "bastion",
                 "--",
                 "-NL",
-                &format!("localhost:{}:{}", TUNNEL_PORT, host),
+                &format!("localhost:{TUNNEL_PORT}:{host}"),
             ])
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -141,7 +128,7 @@ impl OpenSearchCopier {
         scroll_id: Option<&str>,
     ) -> Result<serde_json::Value> {
         let client = reqwest::blocking::Client::new();
-        let source_url = format!("http://localhost:{}", TUNNEL_PORT);
+        let source_url = format!("http://localhost:{TUNNEL_PORT}");
 
         let response = if let Some(sid) = scroll_id {
             // Continue scroll
@@ -151,7 +138,7 @@ impl OpenSearchCopier {
             });
 
             client
-                .post(format!("{}/_search/scroll", source_url))
+                .post(format!("{source_url}/_search/scroll"))
                 .header("Content-Type", "application/json")
                 .json(&body)
                 .send()?
@@ -162,7 +149,7 @@ impl OpenSearchCopier {
             });
 
             client
-                .post(format!("{}/_search?scroll={}&size={}", source_url, scroll, size))
+                .post(format!("{source_url}/_search?scroll={scroll}&size={size}"))
                 .header("Content-Type", "application/json")
                 .json(&body)
                 .send()?
@@ -178,15 +165,12 @@ impl OpenSearchCopier {
         }
 
         let client = reqwest::blocking::Client::new();
-        let dest_url = format!("http://localhost:{}", LOCAL_ELASTICSEARCH_PORT);
+        let dest_url = format!("http://localhost:{LOCAL_ELASTICSEARCH_PORT}");
 
         // Build bulk request body
         let mut bulk_data = String::new();
         for doc in docs {
-            let id = doc
-                .get("_id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown");
+            let id = doc.get("_id").and_then(|v| v.as_str()).unwrap_or("unknown");
             let source = doc.get("_source").unwrap_or(doc);
 
             let action = serde_json::json!({
@@ -204,7 +188,7 @@ impl OpenSearchCopier {
         bulk_data.push('\n');
 
         let response = client
-            .post(format!("{}/_bulk", dest_url))
+            .post(format!("{dest_url}/_bulk"))
             .header("Content-Type", "application/x-ndjson")
             .body(bulk_data)
             .send()?;
@@ -228,19 +212,12 @@ impl OpenSearchCopier {
         max_docs: usize,
     ) -> Result<usize> {
         let mut total_docs = 0;
-        let max_chunks = if max_docs > 0 {
-            max_docs.div_ceil(size)
-        } else {
-            usize::MAX
-        };
+        let max_chunks = if max_docs > 0 { max_docs.div_ceil(size) } else { usize::MAX };
 
         // Initial fetch
         let response = self.fetch_data_chunk(source_index, query, size, scroll, None)?;
 
-        let mut scroll_id = response
-            .get("_scroll_id")
-            .and_then(|v| v.as_str())
-            .map(String::from);
+        let mut scroll_id = response.get("_scroll_id").and_then(|v| v.as_str()).map(String::from);
 
         let mut docs: Vec<serde_json::Value> = response
             .get("hits")
@@ -263,12 +240,10 @@ impl OpenSearchCopier {
 
             // Get next chunk
             if let Some(ref sid) = scroll_id {
-                let response = self.fetch_data_chunk(source_index, query, size, scroll, Some(sid))?;
+                let response =
+                    self.fetch_data_chunk(source_index, query, size, scroll, Some(sid))?;
 
-                scroll_id = response
-                    .get("_scroll_id")
-                    .and_then(|v| v.as_str())
-                    .map(String::from);
+                scroll_id = response.get("_scroll_id").and_then(|v| v.as_str()).map(String::from);
 
                 docs = response
                     .get("hits")
@@ -296,22 +271,19 @@ impl OpenSearchCopier {
             "Copying index {} -> {} (max_docs: {})",
             remote_index,
             local_index,
-            if max_docs == 0 {
-                "unlimited".to_string()
-            } else {
-                max_docs.to_string()
-            }
+            if max_docs == 0 { "unlimited".to_string() } else { max_docs.to_string() }
         );
 
         // Start tunnel
         let tunnel = self.start_tunnel()?;
 
         // Parse query
-        let query_json: serde_json::Value = serde_json::from_str(query)
-            .unwrap_or_else(|_| serde_json::json!({"match_all": {}}));
+        let query_json: serde_json::Value =
+            serde_json::from_str(query).unwrap_or_else(|_| serde_json::json!({"match_all": {}}));
 
         // Perform chunked reindex
-        let result = self.chunked_reindex(remote_index, local_index, &query_json, 500, "2m", max_docs);
+        let result =
+            self.chunked_reindex(remote_index, local_index, &query_json, 500, "2m", max_docs);
 
         // Stop tunnel
         Self::stop_tunnel(tunnel);
@@ -350,14 +322,10 @@ mod tests {
 
     #[test]
     fn test_copier_creation() {
-        let copier = OpenSearchCopier::with_config(
-            "test-project",
-            "http://elasticsearch:9200",
-            false,
-        );
+        let copier =
+            OpenSearchCopier::with_config("test-project", "http://elasticsearch:9200", false);
         assert_eq!(copier.project, "test-project");
         assert_eq!(copier.server_url, "http://elasticsearch:9200");
         assert!(!copier.private_setup);
     }
 }
-

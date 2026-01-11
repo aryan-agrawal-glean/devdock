@@ -129,7 +129,9 @@ pub fn get_zones_for_region(region: &str) -> &'static [&'static str] {
         "europe-west2" => &["europe-west2-a", "europe-west2-b", "europe-west2-c"],
         "asia-east1" => &["asia-east1-a", "asia-east1-b", "asia-east1-c"],
         "asia-northeast1" => &["asia-northeast1-a", "asia-northeast1-b", "asia-northeast1-c"],
-        "australia-southeast1" => &["australia-southeast1-a", "australia-southeast1-b", "australia-southeast1-c"],
+        "australia-southeast1" => {
+            &["australia-southeast1-a", "australia-southeast1-b", "australia-southeast1-c"]
+        }
         _ => &[],
     }
 }
@@ -179,4 +181,3 @@ mod tests {
         assert!(zones.contains(&"us-central1-c"));
     }
 }
-

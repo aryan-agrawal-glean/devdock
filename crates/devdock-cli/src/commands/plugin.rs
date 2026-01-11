@@ -17,4 +17,3 @@ pub async fn remove(_name: &str) -> Result<()> {
     output::warn("Plugin remove not yet implemented - coming soon!");
     Ok(())
 }
-

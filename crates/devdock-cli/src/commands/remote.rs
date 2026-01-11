@@ -1,14 +1,18 @@
 //! Remote DevDock workflow implementation.
 
+use crate::{logging::OperationLogger, output};
 use anyhow::{anyhow, Result};
 use colored::Colorize;
 use devdock_remote::{coder, workspace, CoderWorkspaceConfig};
-use devdock_state::{instance::{Instance, InstanceStatus}, ports::PortAllocator, StateManager};
+use devdock_state::{
+    instance::{Instance, InstanceStatus},
+    ports::PortAllocator,
+    StateManager,
+};
 use devdock_sync::daemon as sync_daemon;
 use std::path::PathBuf;
 use std::time::Instant;
 use tracing::{info, warn};
-use crate::{output, logging::OperationLogger};
 
 /// Configuration for starting remote DevDock.
 pub struct RemoteStartConfig {
@@ -25,7 +29,7 @@ pub struct RemoteStartConfig {
 /// Start remote DevDock workflow.
 pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
     info!("Starting remote DevDock workflow");
-    
+
     let RemoteStartConfig {
         profile,
         workspace_name,
@@ -36,24 +40,22 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
         services,
         verbose,
     } = config;
-    
+
     // Get current git info
     let worktree = get_current_worktree()?;
     let branch = get_current_branch()?;
-    
+
     // Determine workspace name and sanitize it (replace slashes and special chars)
-    let workspace_name = workspace_name
-        .or_else(|| vm.clone())
-        .unwrap_or_else(|| branch.clone());
+    let workspace_name = workspace_name.or_else(|| vm.clone()).unwrap_or_else(|| branch.clone());
     let workspace_name = sanitize_workspace_name(&workspace_name);
-    
+
     // Find profile path
     let profile_path = find_profile(&profile)?;
-    
+
     // Register instance in database
     let state = StateManager::new().await?;
     let instance_id = uuid::Uuid::new_v4().to_string();
-    
+
     // Calculate port offset
     let offset = if let Some(base) = port_base {
         base
@@ -61,38 +63,38 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
         let port_allocator = PortAllocator::new(state.clone()).await;
         port_allocator.allocate().await?
     };
-    
+
     let instance = Instance {
         id: instance_id.clone(),
         workspace_path: worktree.clone(),
         workspace_name: Some(workspace_name.clone()),
         branch: branch.clone(),
-        profile: profile.to_string(),
+        profile: profile.clone(),
         mode: "remote".to_string(),
         status: InstanceStatus::Starting,
         port_base: offset,
         created_at: now(),
         updated_at: now(),
     };
-    
+
     state.register_instance(&instance).await?;
-    
+
     // Track total time
     let overall_start = Instant::now();
-    
+
     // Create operation logger
     let logger = OperationLogger::new(&instance_id)?;
     logger.log_section("Configuration")?;
-    logger.log(&format!("Profile: {}", profile))?;
-    logger.log(&format!("Branch: {}", branch))?;
-    logger.log(&format!("Workspace: {}", workspace_name))?;
-    logger.log(&format!("Region: {}", region))?;
-    logger.log(&format!("Port Base: {}", offset))?;
-    logger.log(&format!("Auto-forward: {}", auto_forward))?;
-    logger.log(&format!("Verbose: {}", verbose))?;
-    
+    logger.log(&format!("Profile: {profile}"))?;
+    logger.log(&format!("Branch: {branch}"))?;
+    logger.log(&format!("Workspace: {workspace_name}"))?;
+    logger.log(&format!("Region: {region}"))?;
+    logger.log(&format!("Port Base: {offset}"))?;
+    logger.log(&format!("Auto-forward: {auto_forward}"))?;
+    logger.log(&format!("Verbose: {verbose}"))?;
+
     // Progress will be shown via spinners for non-verbose mode
-    
+
     // Display initial info (cleaner, more compact)
     println!();
     if verbose {
@@ -115,428 +117,487 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
     } else {
         // Compact header
         println!("{}", "╭───────────────────────────────────────────╮".cyan());
-        println!("{}", format!("│  🚀 Remote DevDock: {}@{}", profile, workspace_name).cyan());
+        println!("{}", format!("│  🚀 Remote DevDock: {profile}@{workspace_name}").cyan());
         println!("{}", "╰───────────────────────────────────────────╯".cyan());
         println!();
         println!(
             "{} | {} | {}",
-            format!("Profile: {}", profile).dimmed(),
-            format!("Branch: {}", branch).dimmed(),
+            format!("Profile: {profile}").dimmed(),
+            format!("Branch: {branch}").dimmed(),
             format!("ID: {}", &instance_id[..8]).dimmed()
         );
         println!();
         println!("⏱️  Expected: ~2-3 min");
         println!();
     }
-    
+
     // Execute main setup logic with error handling to update status on failure
     let setup_result = async {
         // Create or start workspace
         let workspace_name = if let Some(existing) = vm {
-        logger.log_section("Using Existing Workspace")?;
-        logger.log(&format!("Workspace: {}", existing))?;
-        output::info(&format!("Using existing workspace: {}", existing));
-        coder::start_workspace(&existing)?;
-        logger.log("Workspace started successfully")?;
-        existing
-    } else {
-        // Check if workspace already exists
-        logger.log(&format!("Checking if workspace '{}' exists...", workspace_name))?;
-        let exists = coder::workspace_exists(&workspace_name)?;
-        logger.log(&format!("Workspace exists: {}", exists))?;
-        
-        if exists {
-            if verbose {
-                println!();
-                output::warn(&format!("Workspace '{}' already exists!", workspace_name));
-                println!();
-            } else {
-                println!("{}", "⚠️  Existing workspace - restarting (use --recreate to start fresh)".to_string().yellow());
-                println!();
-            }
-            
-            if verbose {
-                println!("  What would you like to do?");
-                println!("  1) Continue with existing workspace (clean and restart DevDock)");
-                println!("  2) Delete workspace and create fresh");
-                println!("  3) Cancel");
-                println!();
-            } else {
-                println!("  1) Continue with existing (clean and restart)");
-                println!("  2) Delete and recreate");
-                println!("  3) Cancel");
-                println!();
-            }
-            print!("  Enter choice (1-3): ");
-            use std::io::{self, Write};
-            io::stdout().flush()?;
-            
-            let mut choice = String::new();
-            io::stdin().read_line(&mut choice)?;
-            let choice = choice.trim();
-            
-            match choice {
-                "1" => {
-                    logger.log_section("Using Existing Workspace")?;
-                    logger.log(&format!("Workspace: {}", workspace_name))?;
-                    logger.log("User chose to continue with existing workspace")?;
-                    
-                    if !verbose {
-                        println!();
-                    }
-                    
-                    // Start workspace if stopped (silent in non-verbose mode)
-                    if verbose {
-                        output::info(&format!("Using existing workspace: {}", workspace_name));
-                    }
-                    coder::start_workspace(&workspace_name)?;
-                    logger.log("Workspace started")?;
-                    
-                    // Cleanup existing DevDock session
-                    if verbose {
-                        output::info("Cleaning up existing DevDock session...");
-                    }
-                    workspace::cleanup_existing_devdock(&workspace_name, Some(logger.path()))?;
-                    logger.log("Existing DevDock session cleaned up")?;
-                    
-                    // Wait for cleanup to settle and SSH to stabilize
-                    if verbose {
-                        println!("  Waiting for workspace to stabilize...");
-                    }
-                    std::thread::sleep(std::time::Duration::from_secs(5));
-                    logger.log("Waited 5s for workspace stabilization")?;
-                    
-                    // Note: Gcloud credentials will be re-synced in workspace::start_remote_devdock
-                    // No need to sync them here
-                    
-                    workspace_name.clone()
-                },
-                "2" => {
-                    logger.log_section("Deleting and Recreating Workspace")?;
-                    logger.log(&format!("Workspace: {}", workspace_name))?;
-                    logger.log("User chose to delete and recreate workspace")?;
-                    
-                    output::info(&format!("Deleting existing workspace: {}", workspace_name));
-                    coder::delete_workspace(&workspace_name)?;
-                    logger.log("Workspace deleted")?;
-                    
-                    // Wait a moment for deletion to complete
-                    std::thread::sleep(std::time::Duration::from_secs(2));
-                    
-                    // Create new workspace
-                    logger.log_section("Creating Workspace")?;
-                    logger.log("Template: devdock-glean")?;
-                    logger.log(&format!("Workspace name: {}", workspace_name))?;
-                    logger.log(&format!("Region: {}", region))?;
-                    
-                    let spinner = output::create_spinner("Creating Coder workspace (1-2 minutes)...");
-                    let config = CoderWorkspaceConfig {
-                        template: "devdock-glean".to_string(),
-                        workspace_name: workspace_name.clone(),
-                        region: region.to_string(),
-                        port_base: Some(offset),
-                        profile: profile.to_string(),
-                    };
-                    
-                    let ws_name = workspace::provision_workspace(&config).await?;
-                    spinner.finish_and_clear();
-                    output::success("Workspace created");
-                    logger.log("Workspace created successfully")?;
-                    
-                    // Wait for SSH to become available (new workspace needs time to initialize)
-                    if verbose {
-                        println!("  Waiting for SSH to become ready...");
-                    }
-                    std::thread::sleep(std::time::Duration::from_secs(10));
-                    logger.log("Waited 10s for SSH initialization")?;
-                    logger.log(&format!("Workspace SSH ready: coder ssh {}", ws_name))?;
-                    ws_name
-                },
-                "3" | "" => {
-                    output::info("Cancelled");
-                    return Err(anyhow!("User cancelled workspace setup"));
-                },
-                _ => {
-                    output::error("Invalid choice. Cancelled.");
-                    return Err(anyhow!("Invalid choice - setup cancelled"));
+            logger.log_section("Using Existing Workspace")?;
+            logger.log(&format!("Workspace: {existing}"))?;
+            output::info(&format!("Using existing workspace: {existing}"));
+            coder::start_workspace(&existing)?;
+            logger.log("Workspace started successfully")?;
+            existing
+        } else {
+            // Check if workspace already exists
+            logger.log(&format!("Checking if workspace '{workspace_name}' exists..."))?;
+            let exists = coder::workspace_exists(&workspace_name)?;
+            logger.log(&format!("Workspace exists: {exists}"))?;
+
+            if exists {
+                if verbose {
+                    println!();
+                    output::warn(&format!("Workspace '{workspace_name}' already exists!"));
+                    println!();
+                } else {
+                    println!(
+                        "{}",
+                        "⚠️  Existing workspace - restarting (use --recreate to start fresh)"
+                            .to_string()
+                            .yellow()
+                    );
+                    println!();
                 }
+
+                if verbose {
+                    println!("  What would you like to do?");
+                    println!("  1) Continue with existing workspace (clean and restart DevDock)");
+                    println!("  2) Delete workspace and create fresh");
+                    println!("  3) Cancel");
+                    println!();
+                } else {
+                    println!("  1) Continue with existing (clean and restart)");
+                    println!("  2) Delete and recreate");
+                    println!("  3) Cancel");
+                    println!();
+                }
+                print!("  Enter choice (1-3): ");
+                use std::io::{self, Write};
+                io::stdout().flush()?;
+
+                let mut choice = String::new();
+                io::stdin().read_line(&mut choice)?;
+                let choice = choice.trim();
+
+                match choice {
+                    "1" => {
+                        logger.log_section("Using Existing Workspace")?;
+                        logger.log(&format!("Workspace: {workspace_name}"))?;
+                        logger.log("User chose to continue with existing workspace")?;
+
+                        if !verbose {
+                            println!();
+                        }
+
+                        // Start workspace if stopped (silent in non-verbose mode)
+                        if verbose {
+                            output::info(&format!("Using existing workspace: {workspace_name}"));
+                        }
+                        coder::start_workspace(&workspace_name)?;
+                        logger.log("Workspace started")?;
+
+                        // Cleanup existing DevDock session
+                        if verbose {
+                            output::info("Cleaning up existing DevDock session...");
+                        }
+                        workspace::cleanup_existing_devdock(&workspace_name, Some(logger.path()))?;
+                        logger.log("Existing DevDock session cleaned up")?;
+
+                        // Wait for cleanup to settle and SSH to stabilize
+                        if verbose {
+                            println!("  Waiting for workspace to stabilize...");
+                        }
+                        std::thread::sleep(std::time::Duration::from_secs(5));
+                        logger.log("Waited 5s for workspace stabilization")?;
+
+                        // Note: Gcloud credentials will be re-synced in workspace::start_remote_devdock
+                        // No need to sync them here
+
+                        workspace_name.clone()
+                    }
+                    "2" => {
+                        logger.log_section("Deleting and Recreating Workspace")?;
+                        logger.log(&format!("Workspace: {workspace_name}"))?;
+                        logger.log("User chose to delete and recreate workspace")?;
+
+                        output::info(&format!("Deleting existing workspace: {workspace_name}"));
+                        coder::delete_workspace(&workspace_name)?;
+                        logger.log("Workspace deleted")?;
+
+                        // Wait a moment for deletion to complete
+                        std::thread::sleep(std::time::Duration::from_secs(2));
+
+                        // Create new workspace
+                        logger.log_section("Creating Workspace")?;
+                        logger.log("Template: devdock-glean")?;
+                        logger.log(&format!("Workspace name: {workspace_name}"))?;
+                        logger.log(&format!("Region: {region}"))?;
+
+                        let spinner =
+                            output::create_spinner("Creating Coder workspace (1-2 minutes)...");
+                        let config = CoderWorkspaceConfig {
+                            template: "devdock-glean".to_string(),
+                            workspace_name: workspace_name.clone(),
+                            region: region.clone(),
+                            port_base: Some(offset),
+                            profile: profile.clone(),
+                        };
+
+                        let ws_name = workspace::provision_workspace(&config).await?;
+                        spinner.finish_and_clear();
+                        output::success("Workspace created");
+                        logger.log("Workspace created successfully")?;
+
+                        // Wait for SSH to become available (new workspace needs time to initialize)
+                        if verbose {
+                            println!("  Waiting for SSH to become ready...");
+                        }
+                        std::thread::sleep(std::time::Duration::from_secs(10));
+                        logger.log("Waited 10s for SSH initialization")?;
+                        logger.log(&format!("Workspace SSH ready: coder ssh {ws_name}"))?;
+                        ws_name
+                    }
+                    "3" | "" => {
+                        output::info("Cancelled");
+                        return Err(anyhow!("User cancelled workspace setup"));
+                    }
+                    _ => {
+                        output::error("Invalid choice. Cancelled.");
+                        return Err(anyhow!("Invalid choice - setup cancelled"));
+                    }
+                }
+            } else {
+                // Workspace doesn't exist, create it
+                logger.log_section("Creating Workspace")?;
+                logger.log("Template: devdock-glean")?;
+                logger.log(&format!("Workspace name: {workspace_name}"))?;
+                logger.log(&format!("Region: {region}"))?;
+
+                // Create workspace with spinner
+                let spinner = output::create_spinner("Creating Coder workspace (1-2 minutes)...");
+                let config = CoderWorkspaceConfig {
+                    template: "devdock-glean".to_string(),
+                    workspace_name: workspace_name.clone(),
+                    region: region.clone(),
+                    port_base: Some(offset),
+                    profile: profile.clone(),
+                };
+
+                let ws_name = workspace::provision_workspace(&config).await?;
+                spinner.finish_and_clear();
+                output::success("Workspace created");
+                logger.log("Workspace created successfully")?;
+
+                // Wait for SSH to become available (new workspace needs time to initialize)
+                if verbose {
+                    println!("  Waiting for SSH to become ready...");
+                }
+                std::thread::sleep(std::time::Duration::from_secs(10));
+                logger.log("Waited 10s for SSH initialization")?;
+                logger.log(&format!("Workspace SSH ready: coder ssh {ws_name}"))?;
+                ws_name
             }
-        } else {
-            // Workspace doesn't exist, create it
-            logger.log_section("Creating Workspace")?;
-            logger.log("Template: devdock-glean")?;
-            logger.log(&format!("Workspace name: {}", workspace_name))?;
-            logger.log(&format!("Region: {}", region))?;
-            
-            // Create workspace with spinner
-            let spinner = output::create_spinner("Creating Coder workspace (1-2 minutes)...");
-            let config = CoderWorkspaceConfig {
-                template: "devdock-glean".to_string(),
-                workspace_name: workspace_name.clone(),
-                region: region.to_string(),
-                port_base: Some(offset),
-                profile: profile.to_string(),
-            };
-            
-            let ws_name = workspace::provision_workspace(&config).await?;
-            spinner.finish_and_clear();
-            output::success("Workspace created");
-            logger.log("Workspace created successfully")?;
-            
-            // Wait for SSH to become available (new workspace needs time to initialize)
-            if verbose {
-                println!("  Waiting for SSH to become ready...");
-            }
-            std::thread::sleep(std::time::Duration::from_secs(10));
-            logger.log("Waited 10s for SSH initialization")?;
-            logger.log(&format!("Workspace SSH ready: coder ssh {}", ws_name))?;
-            ws_name
-        }
-    };
-    
-    // Start DevDock on remote with progress reporting
-    println!();
-    logger.log_section("Syncing Configuration")?;
-    logger.log("Syncing profile, custom.ini, and gcloud credentials...")?;
-    
-    logger.log_section("Starting DevDock")?;
-    logger.log(&format!("Profile: {}", profile))?;
-    logger.log(&format!("Services filter: {:?}", services))?;
-    logger.log(&format!("Command: devdock start {} {}", profile, services.as_ref().map(|s| format!("-s {}", s)).unwrap_or_default()))?;
-    logger.log(&format!("Remote logs: coder ssh {} -- tail -f /tmp/devdock-start.log", &workspace_name))?;
-    
-    // Step 1: Config sync
-    let config_start = Instant::now();
-    
-    let spinner1 = if !verbose {
-        Some(output::create_spinner("Config"))
-    } else {
-        println!();  // Newline for substeps
-        output::info("Syncing configuration files to remote...");
-        None
-    };
-    
-    // Step 2: DevDock start (spinner created by callback after config completes)
-    let spinner2 = std::sync::Arc::new(std::sync::Mutex::new(None::<indicatif::ProgressBar>));
-    let spinner2_clone = spinner2.clone();
-    let devdock_start_time = std::sync::Arc::new(std::sync::Mutex::new(Instant::now()));
-    let devdock_start_clone = devdock_start_time.clone();
-    
-    let config_duration_ref = std::sync::Arc::new(std::sync::Mutex::new(config_start));
-    let config_duration_clone = config_duration_ref.clone();
-    
-    let on_config_complete = move || {
-        if !verbose {
-            let config_duration = config_duration_clone.lock().unwrap().elapsed().as_secs();
-            if let Some(s) = spinner1 {
-                s.finish_with_message(format!("Config {}", format!("✓ {}s", config_duration).green()));
-            }
-            
-            // Start spinner for DevDock startup phase
-            let s2 = output::create_spinner("Starting");
-            *spinner2_clone.lock().unwrap() = Some(s2);
-            *devdock_start_clone.lock().unwrap() = Instant::now();
-        }
-    };
-    
-    // The actual config sync and devdock start happens inside workspace::start_remote_devdock
-    let port_mgr = workspace::start_remote_devdock(
-        &workspace_name,
-        &profile,
-        &profile_path,
-        &instance_id,
-        services.as_deref(),
-        auto_forward,
-        offset,
-        Some(logger.path()),
-        verbose,
-        Some(on_config_complete),
-    )
-    .await?;
-    
-    // Finish DevDock start spinner
-    if !verbose {
-        let devdock_duration = devdock_start_time.lock().unwrap().elapsed().as_secs();
-        if let Some(s) = spinner2.lock().unwrap().take() {
-            s.finish_with_message(format!("Starting {}", format!("✓ {}s", devdock_duration).green()));
-        }
-    } else {
-        output::success("DevDock started successfully");
-    }
-    logger.log("DevDock started successfully")?;
-    
-    // Step 2: Save port mappings (if auto-forwarding)
-    if let Some(mgr) = &port_mgr {
-        let step2_start = Instant::now();
-        
-        let spinner2 = if !verbose {
-            Some(output::create_spinner("Ports"))
-        } else {
-            None
         };
-        
-        let mappings: Vec<_> = mgr
-            .mappings
-            .iter()
-            .map(|m| {
-                (
-                    m.service_name.clone(),
-                    format!("{:?}", m.port_type),
-                    m.local_port,
-                    m.remote_port,
-                    m.process_pid,
-                )
-            })
-            .collect();
-        
-        state.save_port_mappings(&instance_id, &mappings).await?;
-        
-        let step2_duration = step2_start.elapsed().as_secs();
-        if let Some(s) = spinner2 {
-            s.finish_with_message(format!("Ports {}", format!("✓ {}s", step2_duration).green()));
-        }
-    }
-    
-    // Clean up stale sync files from old instances first
-    cleanup_stale_sync_files(&state).await?;
-    
-    // Step 3 (or 2 if no ports): Auto-start file sync (always enabled)
-    let step_sync_start = Instant::now();
-    
-    let spinner_sync = if !verbose {
-        Some(output::create_spinner("Sync"))
-    } else {
+
+        // Start DevDock on remote with progress reporting
         println!();
-        Some(output::create_spinner("Starting file sync..."))
-    };
-    
-    let repo_path = PathBuf::from(&worktree);
-    let sync_result = match sync_daemon::start_daemon(&instance_id, &workspace_name, &repo_path, false) {
-        Ok(_) => {
-            state.save_sync_session(&instance_id, &workspace_name, None, false, "running").await?;
-            
-            let step_sync_duration = step_sync_start.elapsed().as_secs();
-            
-            if let Some(s) = spinner_sync {
-                if verbose {
-                    s.finish_with_message("File sync started ✓".green().to_string());
-                } else {
-                    s.finish_with_message(format!("Sync {}", format!("✓ {}s", step_sync_duration).green()));
-                }
-            }
-            Ok(())
-        }
-        Err(e) => {
-            warn!("Failed to start file sync: {}", e);
-            if let Some(s) = spinner_sync {
-                if verbose {
-                    s.finish_with_message("File sync failed ⚠️".yellow().to_string());
-                } else {
-                    s.finish_with_message(format!("Sync {}", "⚠️ failed".yellow()));
-                }
-            }
-            
-            if verbose {
-                output::warn("Start manually: devdock sync start");
-            }
-            Err(e)
-        }
-    };
-    
-    // Continue even if sync fails
-    let _ = sync_result;
-    
-    // Update instance status
-    state.update_status(&instance_id, InstanceStatus::Running).await?;
-    
-    // Calculate total time
-    let total_seconds = overall_start.elapsed().as_secs();
-    let total_time = output::format_elapsed(total_seconds);
-    
-    // Log completion
-    logger.log_section("Setup Complete")?;
-    logger.log(&format!("Total time: {}", total_time))?;
-    logger.log(&format!("Workspace: {}", workspace_name))?;
-    logger.log(&format!("Tilt UI: http://localhost:{}", offset + 10350))?;
-    
-    // Print success message (clean and actionable)
-    println!();
-    
-    if verbose {
-        output::header("🚀 Remote DevDock is Ready!");
-        println!("{}", format!("Total time: {}", total_time).green().bold());
-        println!();
-        println!("Access your remote DevDock:");
-        println!("  {}: {}", "Workspace".cyan(), workspace_name);
-        println!("  {}: coder ssh {}", "SSH".cyan(), workspace_name);
-        println!("  {}: {}", "Tilt UI".cyan(), format!("http://localhost:{}", offset + 10350).cyan());
-        println!();
-        
-        if auto_forward {
-            println!("  {}: {}", "Port forwarding".cyan(), "enabled".green());
-            println!("  View port mappings: {}", "devdock ports list".cyan());
+        logger.log_section("Syncing Configuration")?;
+        logger.log("Syncing profile, custom.ini, and gcloud credentials...")?;
+
+        logger.log_section("Starting DevDock")?;
+        logger.log(&format!("Profile: {profile}"))?;
+        logger.log(&format!("Services filter: {services:?}"))?;
+        logger.log(&format!(
+            "Command: devdock start {} {}",
+            profile,
+            services.as_ref().map(|s| format!("-s {s}")).unwrap_or_default()
+        ))?;
+        logger.log(&format!(
+            "Remote logs: coder ssh {} -- tail -f /tmp/devdock-start.log",
+            &workspace_name
+        ))?;
+
+        // Step 1: Config sync
+        let config_start = Instant::now();
+
+        let spinner1 = if verbose {
+            println!(); // Newline for substeps
+            output::info("Syncing configuration files to remote...");
+            None
         } else {
-            println!("  💡 Tip: Forward ports with: {}", "devdock ports forward --all".yellow());
-        }
-        
-        println!();
-        println!("Additional commands:");
-        println!("  {}: devdock status", "Check health".dimmed());
-        println!("  {}: devdock sync status", "Sync status".dimmed());
-        println!("  {}: devdock stop", "Stop session".dimmed());
-        println!();
-    } else {
-        // Compact success output
-        println!("{}", "╭────────────────────────────────────────╮".green());
-        println!("{}", format!("│  ✅ Ready in {}                     │", total_time).green());
-        println!("{}", "╰────────────────────────────────────────╯".green());
-        println!();
-        println!("{} {}", "🌐 Tilt UI:".cyan(), format!("http://localhost:{}", offset + 10350).cyan().underline());
-        println!("{} coder ssh {}", "📁 SSH:    ".dimmed(), workspace_name.dimmed());
-        println!();
-        
-        // Show actionable next steps based on context
-        println!("{}", "💡 Next steps:".bold());
-        
-        if !auto_forward {
-            println!("   {} {}  {}", "•".cyan(), "devdock ports forward --all".cyan(), "(forward service ports)".dimmed());
+            Some(output::create_spinner("Config"))
+        };
+
+        // Step 2: DevDock start (spinner created by callback after config completes)
+        let spinner2 = std::sync::Arc::new(std::sync::Mutex::new(None::<indicatif::ProgressBar>));
+        let spinner2_clone = spinner2.clone();
+        let devdock_start_time = std::sync::Arc::new(std::sync::Mutex::new(Instant::now()));
+        let devdock_start_clone = devdock_start_time.clone();
+
+        let config_duration_ref = std::sync::Arc::new(std::sync::Mutex::new(config_start));
+        let config_duration_clone = config_duration_ref.clone();
+
+        let on_config_complete = move || {
+            if !verbose {
+                let config_duration = config_duration_clone.lock().unwrap().elapsed().as_secs();
+                if let Some(s) = spinner1 {
+                    s.finish_with_message(format!(
+                        "Config {}",
+                        format!("✓ {config_duration}s").green()
+                    ));
+                }
+
+                // Start spinner for DevDock startup phase
+                let s2 = output::create_spinner("Starting");
+                *spinner2_clone.lock().unwrap() = Some(s2);
+                *devdock_start_clone.lock().unwrap() = Instant::now();
+            }
+        };
+
+        // The actual config sync and devdock start happens inside workspace::start_remote_devdock
+        let port_mgr = workspace::start_remote_devdock(
+            &workspace_name,
+            &profile,
+            &profile_path,
+            &instance_id,
+            services.as_deref(),
+            auto_forward,
+            offset,
+            Some(logger.path()),
+            verbose,
+            Some(on_config_complete),
+        )
+        .await?;
+
+        // Finish DevDock start spinner
+        if verbose {
+            output::success("DevDock started successfully");
         } else {
-            println!("   {} {}  {}", "•".cyan(), "devdock ports list".cyan(), "(view port mappings)".dimmed());
+            let devdock_duration = devdock_start_time.lock().unwrap().elapsed().as_secs();
+            if let Some(s) = spinner2.lock().unwrap().take() {
+                s.finish_with_message(format!(
+                    "Starting {}",
+                    format!("✓ {devdock_duration}s").green()
+                ));
+            }
         }
-        
-        println!("   {} {}  {}", "•".cyan(), "devdock status".cyan(), "(check service health)".dimmed());
-        println!("   {} {}  {}", "•".cyan(), format!("open http://localhost:{}", offset + 10350).cyan(), "(view dashboard)".dimmed());
+        logger.log("DevDock started successfully")?;
+
+        // Step 2: Save port mappings (if auto-forwarding)
+        if let Some(mgr) = &port_mgr {
+            let step2_start = Instant::now();
+
+            let spinner2 = if verbose { None } else { Some(output::create_spinner("Ports")) };
+
+            let mappings: Vec<_> = mgr
+                .mappings
+                .iter()
+                .map(|m| {
+                    (
+                        m.service_name.clone(),
+                        format!("{:?}", m.port_type),
+                        m.local_port,
+                        m.remote_port,
+                        m.process_pid,
+                    )
+                })
+                .collect();
+
+            state.save_port_mappings(&instance_id, &mappings).await?;
+
+            let step2_duration = step2_start.elapsed().as_secs();
+            if let Some(s) = spinner2 {
+                s.finish_with_message(format!("Ports {}", format!("✓ {step2_duration}s").green()));
+            }
+        }
+
+        // Clean up stale sync files from old instances first
+        cleanup_stale_sync_files(&state).await?;
+
+        // Step 3 (or 2 if no ports): Auto-start file sync (always enabled)
+        let step_sync_start = Instant::now();
+
+        let spinner_sync = if verbose {
+            println!();
+            Some(output::create_spinner("Starting file sync..."))
+        } else {
+            Some(output::create_spinner("Sync"))
+        };
+
+        let repo_path = PathBuf::from(&worktree);
+        let sync_result =
+            match sync_daemon::start_daemon(&instance_id, &workspace_name, &repo_path, false) {
+                Ok(_) => {
+                    state
+                        .save_sync_session(&instance_id, &workspace_name, None, false, "running")
+                        .await?;
+
+                    let step_sync_duration = step_sync_start.elapsed().as_secs();
+
+                    if let Some(s) = spinner_sync {
+                        if verbose {
+                            s.finish_with_message("File sync started ✓".green().to_string());
+                        } else {
+                            s.finish_with_message(format!(
+                                "Sync {}",
+                                format!("✓ {step_sync_duration}s").green()
+                            ));
+                        }
+                    }
+                    Ok(())
+                }
+                Err(e) => {
+                    warn!("Failed to start file sync: {}", e);
+                    if let Some(s) = spinner_sync {
+                        if verbose {
+                            s.finish_with_message("File sync failed ⚠️".yellow().to_string());
+                        } else {
+                            s.finish_with_message(format!("Sync {}", "⚠️ failed".yellow()));
+                        }
+                    }
+
+                    if verbose {
+                        output::warn("Start manually: devdock sync start");
+                    }
+                    Err(e)
+                }
+            };
+
+        // Continue even if sync fails
+        let _ = sync_result;
+
+        // Update instance status
+        state.update_status(&instance_id, InstanceStatus::Running).await?;
+
+        // Calculate total time
+        let total_seconds = overall_start.elapsed().as_secs();
+        let total_time = output::format_elapsed(total_seconds);
+
+        // Log completion
+        logger.log_section("Setup Complete")?;
+        logger.log(&format!("Total time: {total_time}"))?;
+        logger.log(&format!("Workspace: {workspace_name}"))?;
+        logger.log(&format!("Tilt UI: http://localhost:{}", offset + 10350))?;
+
+        // Print success message (clean and actionable)
         println!();
-    }
-    
-    // Send desktop notification
-    output::notify(
-        "DevDock Remote Ready! 🚀",
-        &format!("Workspace '{}' ready in {}. Tilt UI at localhost:{}", 
-                 workspace_name, total_time, offset + 10350)
-    );
-    
+
+        if verbose {
+            output::header("🚀 Remote DevDock is Ready!");
+            println!("{}", format!("Total time: {total_time}").green().bold());
+            println!();
+            println!("Access your remote DevDock:");
+            println!("  {}: {}", "Workspace".cyan(), workspace_name);
+            println!("  {}: coder ssh {}", "SSH".cyan(), workspace_name);
+            println!(
+                "  {}: {}",
+                "Tilt UI".cyan(),
+                format!("http://localhost:{}", offset + 10350).cyan()
+            );
+            println!();
+
+            if auto_forward {
+                println!("  {}: {}", "Port forwarding".cyan(), "enabled".green());
+                println!("  View port mappings: {}", "devdock ports list".cyan());
+            } else {
+                println!(
+                    "  💡 Tip: Forward ports with: {}",
+                    "devdock ports forward --all".yellow()
+                );
+            }
+
+            println!();
+            println!("Additional commands:");
+            println!("  {}: devdock status", "Check health".dimmed());
+            println!("  {}: devdock sync status", "Sync status".dimmed());
+            println!("  {}: devdock stop", "Stop session".dimmed());
+            println!();
+        } else {
+            // Compact success output
+            println!("{}", "╭────────────────────────────────────────╮".green());
+            println!("{}", format!("│  ✅ Ready in {total_time}                     │").green());
+            println!("{}", "╰────────────────────────────────────────╯".green());
+            println!();
+            println!(
+                "{} {}",
+                "🌐 Tilt UI:".cyan(),
+                format!("http://localhost:{}", offset + 10350).cyan().underline()
+            );
+            println!("{} coder ssh {}", "📁 SSH:    ".dimmed(), workspace_name.dimmed());
+            println!();
+
+            // Show actionable next steps based on context
+            println!("{}", "💡 Next steps:".bold());
+
+            if auto_forward {
+                println!(
+                    "   {} {}  {}",
+                    "•".cyan(),
+                    "devdock ports list".cyan(),
+                    "(view port mappings)".dimmed()
+                );
+            } else {
+                println!(
+                    "   {} {}  {}",
+                    "•".cyan(),
+                    "devdock ports forward --all".cyan(),
+                    "(forward service ports)".dimmed()
+                );
+            }
+
+            println!(
+                "   {} {}  {}",
+                "•".cyan(),
+                "devdock status".cyan(),
+                "(check service health)".dimmed()
+            );
+            println!(
+                "   {} {}  {}",
+                "•".cyan(),
+                format!("open http://localhost:{}", offset + 10350).cyan(),
+                "(view dashboard)".dimmed()
+            );
+            println!();
+        }
+
+        // Send desktop notification
+        output::notify(
+            "DevDock Remote Ready! 🚀",
+            &format!(
+                "Workspace '{}' ready in {}. Tilt UI at localhost:{}",
+                workspace_name,
+                total_time,
+                offset + 10350
+            ),
+        );
+
         Ok::<(), anyhow::Error>(())
-    }.await;
-    
+    }
+    .await;
+
     // Handle result and update status accordingly
     match setup_result {
-        Ok(_) => {
+        Ok(()) => {
             // Success - status already updated to Running above
             Ok(())
         }
         Err(e) => {
             // Failed - update status to Stopped
             info!("Setup failed, updating instance status to Stopped");
-            if let Err(status_err) = state.update_status(&instance_id, InstanceStatus::Stopped).await {
+            if let Err(status_err) =
+                state.update_status(&instance_id, InstanceStatus::Stopped).await
+            {
                 warn!("Failed to update instance status: {}", status_err);
             }
-            
+
             logger.log_section("Setup Failed")?;
-            logger.log(&format!("Error: {}", e))?;
+            logger.log(&format!("Error: {e}"))?;
             logger.log(&format!("Instance {} marked as Stopped", &instance_id[..8]))?;
-            
-            output::error(&format!("DevDock setup failed: {}", e));
+
+            output::error(&format!("DevDock setup failed: {e}"));
             println!();
             println!("To clean up: devdock stop -i {}", &instance_id[..8]);
             Err(e)
@@ -547,30 +608,26 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
 /// Get current git worktree path.
 fn get_current_worktree() -> Result<String> {
     use std::process::Command;
-    
-    let output = Command::new("git")
-        .args(["rev-parse", "--show-toplevel"])
-        .output()?;
-    
+
+    let output = Command::new("git").args(["rev-parse", "--show-toplevel"]).output()?;
+
     if !output.status.success() {
         return Err(anyhow!("Not in a git repository"));
     }
-    
+
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
 /// Get current git branch name.
 fn get_current_branch() -> Result<String> {
     use std::process::Command;
-    
-    let output = Command::new("git")
-        .args(["rev-parse", "--abbrev-ref", "HEAD"])
-        .output()?;
-    
+
+    let output = Command::new("git").args(["rev-parse", "--abbrev-ref", "HEAD"]).output()?;
+
     if !output.status.success() {
         return Err(anyhow!("Failed to get branch name"));
     }
-    
+
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
@@ -578,11 +635,9 @@ fn get_current_branch() -> Result<String> {
 /// Replaces non-alphanumeric characters with hyphens and truncates to 32 chars.
 fn sanitize_workspace_name(name: &str) -> String {
     // Replace non-alphanumeric (except hyphens) with hyphens
-    let sanitized: String = name
-        .chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' { c } else { '-' })
-        .collect();
-    
+    let sanitized: String =
+        name.chars().map(|c| if c.is_alphanumeric() || c == '-' { c } else { '-' }).collect();
+
     // Truncate to 32 characters (Coder workspace name limit)
     sanitized.chars().take(32).collect()
 }
@@ -592,63 +647,59 @@ fn find_profile(profile: &str) -> Result<PathBuf> {
     let devdock_root = std::env::var("DEVDOCK_ROOT")
         .or_else(|_| std::env::var("PWD"))
         .unwrap_or_else(|_| ".".to_string());
-    
+
     let base = PathBuf::from(devdock_root).join("devdock/profiles");
-    
+
     // Try user_profiles first
-    let user_profile = base.join("user_profiles").join(format!("{}.yaml", profile));
+    let user_profile = base.join("user_profiles").join(format!("{profile}.yaml"));
     if user_profile.exists() {
         return Ok(user_profile);
     }
-    
+
     // Try integration_tests
-    let test_profile = base.join("integration_tests").join(format!("{}.yaml", profile));
+    let test_profile = base.join("integration_tests").join(format!("{profile}.yaml"));
     if test_profile.exists() {
         return Ok(test_profile);
     }
-    
+
     // Try base profiles
-    let base_profile = base.join(format!("{}.yaml", profile));
+    let base_profile = base.join(format!("{profile}.yaml"));
     if base_profile.exists() {
         return Ok(base_profile);
     }
-    
-    Err(anyhow!("Profile not found: {}", profile))
-}
 
+    Err(anyhow!("Profile not found: {profile}"))
+}
 
 /// Get current timestamp.
 fn now() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs() as i64
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64
 }
 
 /// Clean up sync files for instances that no longer exist in the database.
 async fn cleanup_stale_sync_files(state_manager: &StateManager) -> Result<()> {
     use std::collections::HashSet;
     use std::fs;
-    
+
     // Get all active instance IDs
     let instances = state_manager.list_instances().await?;
     let active_ids: HashSet<String> = instances.iter().map(|i| i.id.clone()).collect();
-    
+
     // Get sync directory
     let sync_dir = dirs::home_dir()
         .ok_or_else(|| anyhow!("Cannot determine home directory"))?
         .join(".devdock/sync");
-    
+
     if !sync_dir.exists() {
         return Ok(());
     }
-    
+
     let entries = fs::read_dir(&sync_dir)?;
     let mut cleaned_count = 0;
-    
+
     for entry in entries.flatten() {
         let file_name = entry.file_name().to_string_lossy().to_string();
-        
+
         // Extract devdock_id from filename
         if let Some(devdock_id) = extract_devdock_id_from_filename(&file_name) {
             if !active_ids.contains(&devdock_id) {
@@ -659,11 +710,11 @@ async fn cleanup_stale_sync_files(state_manager: &StateManager) -> Result<()> {
             }
         }
     }
-    
+
     if cleaned_count > 0 {
         info!("Cleaned up {} stale sync file(s)", cleaned_count);
     }
-    
+
     Ok(())
 }
 
@@ -677,7 +728,7 @@ fn extract_devdock_id_from_filename(filename: &str) -> Option<String> {
         .trim_end_matches(".stats")
         .trim_end_matches(".log")
         .trim_end_matches("_portforward");
-    
+
     // UUID format: 8-4-4-4-12 (36 chars with 4 dashes)
     if base.len() == 36 && base.matches('-').count() == 4 {
         Some(base.to_string())
@@ -685,4 +736,3 @@ fn extract_devdock_id_from_filename(filename: &str) -> Option<String> {
         None
     }
 }
-

@@ -1,9 +1,9 @@
 //! DevDock INI configuration generator.
 
+use crate::dependency_graph::ServiceNode;
 use crate::ini_parser::ParsedIniConfig;
 use crate::platform::{IniConfig, Platform};
 use crate::service_config::ServiceConfig;
-use crate::dependency_graph::ServiceNode;
 use devdock_core::profile::Profile;
 
 /// Context for INI generation that affects how configs are generated
@@ -49,10 +49,7 @@ impl IniGenerator {
     pub fn new() -> Self {
         let mut config = IniConfig::new();
         Self::add_defaults(&mut config);
-        Self {
-            config,
-            context: IniGeneratorContext::default(),
-        }
+        Self { config, context: IniGeneratorContext::default() }
     }
 
     /// Create with context from profile
@@ -63,11 +60,11 @@ impl IniGenerator {
     }
 
     /// Create with reference to dynamic.ini for reading values (NOT merging)
-    /// 
+    ///
     /// IMPORTANT: devdock.ini should ONLY contain local development overrides.
     /// Services read dynamic.ini first (base config from GCS), then devdock.ini overrides.
     /// We do NOT merge dynamic.ini into devdock.ini - that would duplicate everything.
-    /// 
+    ///
     /// The dynamic_ini parameter is used to READ values when we need to reference
     /// the production config (e.g., to get namespace names), but NOT to copy them.
     #[allow(dead_code)]
@@ -77,13 +74,16 @@ impl IniGenerator {
     }
 
     /// Create with context (the correct way to create the generator)
-    /// 
+    ///
     /// devdock.ini waterfall resolution:
     /// 1. Services read dynamic.ini (fetched from GCS, stored separately)
     /// 2. Services then read devdock.ini (local overrides only)
-    /// 
+    ///
     /// This method creates a generator that produces ONLY the overrides.
-    pub fn with_base_config_and_context(_base: &ParsedIniConfig, context: IniGeneratorContext) -> Self {
+    pub fn with_base_config_and_context(
+        _base: &ParsedIniConfig,
+        context: IniGeneratorContext,
+    ) -> Self {
         // IMPORTANT: Do NOT merge base config - devdock.ini should only have overrides
         let mut generator = Self::new();
         generator.context = context;
@@ -151,7 +151,7 @@ impl IniGenerator {
     }
 
     /// Apply service configuration
-    /// 
+    ///
     /// NOTE: Environment variables are NOT written to devdock.ini.
     /// They belong in docker-compose.yaml or container runtime.
     /// devdock.ini only contains app configuration (INI overrides).
@@ -159,24 +159,16 @@ impl IniGenerator {
         // Only apply explicit INI overrides defined for the service
         // Do NOT write environment variables to devdock.ini
         for override_entry in &service_config.ini_overrides {
-            self.config.set(
-                &override_entry.section,
-                &override_entry.key,
-                &override_entry.val,
-            );
+            self.config.set(&override_entry.section, &override_entry.key, &override_entry.val);
         }
     }
 
     /// Apply profile-level INI overrides
-    /// 
+    ///
     /// These are applied last and take precedence over all other configurations.
     pub fn apply_profile_overrides(&mut self, overrides: &[devdock_core::IniOverride]) {
         for override_entry in overrides {
-            self.config.set(
-                &override_entry.section,
-                &override_entry.key,
-                &override_entry.val,
-            );
+            self.config.set(&override_entry.section, &override_entry.key, &override_entry.val);
         }
     }
 
@@ -216,9 +208,9 @@ impl IniGenerator {
 
             // Determine host based on quality_pipelines (they run outside Docker)
             let sql_host = if self.context.has_quality_pipelines {
-                format!("localhost:{}", sql_port)
+                format!("localhost:{sql_port}")
             } else {
-                format!("host.docker.internal:{}", sql_port)
+                format!("host.docker.internal:{sql_port}")
             };
 
             // Basic config for local SQL
@@ -230,15 +222,12 @@ impl IniGenerator {
             let instances = vec!["", "frontendInstance", "backendInstance"];
 
             for instance in instances {
-                let instance_prefix = if instance.is_empty() {
-                    String::new()
-                } else {
-                    format!("{}.", instance)
-                };
+                let instance_prefix =
+                    if instance.is_empty() { String::new() } else { format!("{instance}.") };
 
-                self.config.set("sql", &format!("{}db.password", instance_prefix), "");
-                self.config.set("sql", &format!("{}db.user", instance_prefix), "root");
-                self.config.set("sql", &format!("{}db.host", instance_prefix), &sql_host);
+                self.config.set("sql", &format!("{instance_prefix}db.password"), "");
+                self.config.set("sql", &format!("{instance_prefix}db.user"), "root");
+                self.config.set("sql", &format!("{instance_prefix}db.host"), &sql_host);
             }
 
             // Set googlecloud.instanceName for frontend and backend
@@ -314,14 +303,22 @@ impl IniGenerator {
             let port = node.config.env.get("PORT").unwrap_or(&"9200".to_string()).clone();
 
             self.config.set("indexing", "index.name", "index-1");
-            self.config.set("indexing", "server.url", format!("http://host.docker.internal:{}", port));
+            self.config.set(
+                "indexing",
+                "server.url",
+                format!("http://host.docker.internal:{port}"),
+            );
             self.config.set("entitybuilder", "index.name", "entity-index-1");
             self.config.set("elastic_plugin", "hotswapJarPluginTag", "");
             self.config.set("elastic_plugin", "hotswapJarPluginConfig", "");
 
             // Namespace-based config (standard namespace convention)
             let namespace = "elasticsearch-1-namespace";
-            self.config.set(namespace, "indexing.server.url", format!("http://host.docker.internal:{}", port));
+            self.config.set(
+                namespace,
+                "indexing.server.url",
+                format!("http://host.docker.internal:{port}"),
+            );
             self.config.set(namespace, "indexing.index.name", "index-1");
             self.config.set(namespace, "entitybuilder.index.name", "entity-index-1");
 
@@ -369,11 +366,11 @@ impl IniGenerator {
         let port = node.config.env.get("PORT").unwrap_or(&"7960".to_string()).clone();
 
         let glean_base_url = if node.config.is_local() {
-            format!("https://local.glean.com:{}", port)
+            format!("https://local.glean.com:{port}")
         } else {
             // For remote, would need to get from dynamic config
             // For now, use local
-            format!("https://local.glean.com:{}", port)
+            format!("https://local.glean.com:{port}")
         };
 
         self.config.set("queryapi", "baseURL", &glean_base_url);
@@ -384,15 +381,23 @@ impl IniGenerator {
     fn apply_task_push_config(&mut self, node: &ServiceNode) {
         let port = node.config.env.get("PORT").unwrap_or(&"7992".to_string()).clone();
 
-        self.config.set("task_push", "baseURL", format!("http://host.docker.internal:{}", port));
-        self.config.set("task_push", "internalLBBaseURL", format!("http://host.docker.internal:{}", port));
+        self.config.set("task_push", "baseURL", format!("http://host.docker.internal:{port}"));
+        self.config.set(
+            "task_push",
+            "internalLBBaseURL",
+            format!("http://host.docker.internal:{port}"),
+        );
         self.config.set("task_push", "rabbitmq.connections", "5");
     }
 
     fn apply_crawler_config(&mut self, node: &ServiceNode) {
         let port = node.config.env.get("PORT").unwrap_or(&"7961".to_string()).clone();
 
-        self.config.set("task_push", "crawler.baseURL", format!("http://host.docker.internal:{}", port));
+        self.config.set(
+            "task_push",
+            "crawler.baseURL",
+            format!("http://host.docker.internal:{port}"),
+        );
         self.config.set("local", "taskHandler.port", "7961");
         self.config.set("chat", "fileUpload.clamAVScan.enabled", "false");
     }
@@ -400,13 +405,17 @@ impl IniGenerator {
     fn apply_scholastic_config(&mut self, node: &ServiceNode) {
         let port = node.config.env.get("PORT").unwrap_or(&"8090".to_string()).clone();
 
-        self.config.set("queryapi", "scholastic.url", format!("http://host.docker.internal:{}", port));
+        self.config.set(
+            "queryapi",
+            "scholastic.url",
+            format!("http://host.docker.internal:{port}"),
+        );
     }
 
     fn apply_py_agents_config(&mut self, node: &ServiceNode) {
         let port = node.config.env.get("PORT").unwrap_or(&"8091".to_string()).clone();
 
-        self.config.set("queryapi", "pyAgents.url", format!("http://host.docker.internal:{}", port));
+        self.config.set("queryapi", "pyAgents.url", format!("http://host.docker.internal:{port}"));
     }
 
     fn apply_deployment_wizard_config(&mut self, _node: &ServiceNode) {
@@ -422,20 +431,29 @@ impl IniGenerator {
     fn apply_dse_config(&mut self, node: &ServiceNode) {
         if node.config.is_local() {
             let port = node.config.env.get("PORT").unwrap_or(&"7962".to_string()).clone();
-            self.config.set("queryapi", "datasourceEvents.url",
-                format!("http://local.glean.com:{}", port));
+            self.config.set(
+                "queryapi",
+                "datasourceEvents.url",
+                format!("http://local.glean.com:{port}"),
+            );
         } else {
             let port = node.config.env.get("PORT").unwrap_or(&"7962".to_string()).clone();
-            self.config.set("queryapi", "datasourceEvents.url",
-                format!("http://host.docker.internal:{}", port));
+            self.config.set(
+                "queryapi",
+                "datasourceEvents.url",
+                format!("http://host.docker.internal:{port}"),
+            );
         }
     }
 
     fn apply_notebook_sandbox_config(&mut self, node: &ServiceNode) {
         if node.config.is_local() {
             let port = node.config.env.get("PORT").unwrap_or(&"5050".to_string()).clone();
-            self.config.set("code_interpreter", "notebook_sandbox_host_url",
-                format!("http://local.glean.com:{}", port));
+            self.config.set(
+                "code_interpreter",
+                "notebook_sandbox_host_url",
+                format!("http://local.glean.com:{port}"),
+            );
             self.config.set("chat", "fileUpload.clamAVScan.enabled", "false");
         }
     }
@@ -443,15 +461,22 @@ impl IniGenerator {
     fn apply_tempo_config(&mut self, node: &ServiceNode) {
         if !node.config.is_local() {
             self.config.set("queryapi", "otel.otlpEndpoint", "http://host.docker.internal:4318");
-            self.config.set("queryapi", "otel.tempoQueryFrontendEndpoint", "http://host.docker.internal:3100");
+            self.config.set(
+                "queryapi",
+                "otel.tempoQueryFrontendEndpoint",
+                "http://host.docker.internal:3100",
+            );
         }
     }
 
     fn apply_git_crawler_config(&mut self, node: &ServiceNode) {
         if node.config.is_local() {
             let port = node.config.env.get("PORT").unwrap_or(&"7976".to_string()).clone();
-            self.config.set("deploy", "computeengine.git_crawler.url",
-                format!("http://host.docker.internal:{}/git-crawler", port));
+            self.config.set(
+                "deploy",
+                "computeengine.git_crawler.url",
+                format!("http://host.docker.internal:{port}/git-crawler"),
+            );
             self.config.set("deploy", "git_crawler.machine_type", "e2-small");
             self.config.set("git", "vmCrawler.workspaceDirectory", "/mnt/git_crawler/workspace");
         }
@@ -463,4 +488,3 @@ impl Default for IniGenerator {
         Self::new()
     }
 }
-

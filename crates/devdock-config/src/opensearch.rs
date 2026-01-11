@@ -5,8 +5,9 @@
 //! - python_scio.core.config_constants (IndexingConfig)
 
 use crate::constants::{
-    ELASTICSEARCH_NAMESPACES, ELASTIC_EXPERIMENTAL_NAMESPACE_1, ELASTIC_EXPERIMENTAL_NAMESPACE_2,
-    ELASTIC_EXPERIMENTAL_NODE_POOL_1, ELASTIC_EXPERIMENTAL_NODE_POOL_2, IndexingConfig,
+    IndexingConfig, ELASTICSEARCH_NAMESPACES, ELASTIC_EXPERIMENTAL_NAMESPACE_1,
+    ELASTIC_EXPERIMENTAL_NAMESPACE_2, ELASTIC_EXPERIMENTAL_NODE_POOL_1,
+    ELASTIC_EXPERIMENTAL_NODE_POOL_2,
 };
 use crate::ini_parser::ParsedIniConfig;
 use anyhow::Result;
@@ -47,7 +48,7 @@ fn get_namespace_to_node_pool() -> HashMap<String, String> {
 /// Returns:
 /// - "elastic-node-pool-1" through "elastic-node-pool-12" on GCP
 fn get_elastic_node_pool_name_from_number(number: usize) -> String {
-    format!("elastic-node-pool-{}", number)
+    format!("elastic-node-pool-{number}")
 }
 
 /// Get namespace from node pool name
@@ -56,32 +57,26 @@ fn get_elastic_node_pool_name_from_number(number: usize) -> String {
 pub fn get_elastic_namespace(node_pool_name: &str) -> Result<String> {
     let mapping = get_node_pool_to_namespace();
 
-    mapping
-        .get(node_pool_name)
-        .cloned()
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "Invalid node pool [{}]. Valid node pools: {:?}",
-                node_pool_name,
-                mapping.keys().collect::<Vec<_>>()
-            )
-        })
+    mapping.get(node_pool_name).cloned().ok_or_else(|| {
+        anyhow::anyhow!(
+            "Invalid node pool [{}]. Valid node pools: {:?}",
+            node_pool_name,
+            mapping.keys().collect::<Vec<_>>()
+        )
+    })
 }
 
 /// Get node pool name from namespace
 pub fn get_elastic_node_pool(namespace: &str) -> Result<String> {
     let mapping = get_namespace_to_node_pool();
 
-    mapping
-        .get(namespace)
-        .cloned()
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "Invalid namespace [{}]. Valid namespaces: {:?}",
-                namespace,
-                mapping.keys().collect::<Vec<_>>()
-            )
-        })
+    mapping.get(namespace).cloned().ok_or_else(|| {
+        anyhow::anyhow!(
+            "Invalid namespace [{}]. Valid namespaces: {:?}",
+            namespace,
+            mapping.keys().collect::<Vec<_>>()
+        )
+    })
 }
 
 /// Get namespace suffix from full namespace name
@@ -134,12 +129,7 @@ impl OpenSearchConfig {
             node_pool, namespace, server_url
         );
 
-        Ok(Self {
-            node_pool,
-            namespace,
-            server_url,
-            is_staging,
-        })
+        Ok(Self { node_pool, namespace, server_url, is_staging })
     }
 }
 
@@ -189,14 +179,8 @@ mod tests {
 
     #[test]
     fn test_node_pool_name_from_number() {
-        assert_eq!(
-            get_elastic_node_pool_name_from_number(1),
-            "elastic-node-pool-1"
-        );
-        assert_eq!(
-            get_elastic_node_pool_name_from_number(12),
-            "elastic-node-pool-12"
-        );
+        assert_eq!(get_elastic_node_pool_name_from_number(1), "elastic-node-pool-1");
+        assert_eq!(get_elastic_node_pool_name_from_number(12), "elastic-node-pool-12");
     }
 
     #[test]
@@ -241,11 +225,11 @@ mod tests {
 
     #[test]
     fn test_opensearch_config_from_ini() {
-        let ini = r#"
+        let ini = r"
 [indexing]
 index.nodePool = elastic-node-pool-3
 index.serverUrl = http://localhost:9200
-"#;
+";
         let config = ParsedIniConfig::parse_str(ini).unwrap();
         let os_config = OpenSearchConfig::from_config(&config, false).unwrap();
 
@@ -265,4 +249,3 @@ index.serverUrl = http://localhost:9200
         assert_eq!(IndexType::KnowledgeGraph.code(), "kg");
     }
 }
-

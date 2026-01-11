@@ -40,10 +40,7 @@ impl IniConfig {
     }
 
     pub fn set(&mut self, section: &str, key: &str, value: impl Into<String>) {
-        self.sections
-            .entry(section.to_string())
-            .or_default()
-            .insert(key.to_string(), value.into());
+        self.sections.entry(section.to_string()).or_default().insert(key.to_string(), value.into());
     }
 
     pub fn get(&self, section: &str, key: &str) -> Option<&String> {
@@ -54,9 +51,9 @@ impl IniConfig {
         let mut result = String::new();
 
         for (section, keys) in &self.sections {
-            result.push_str(&format!("[{}]\n", section));
+            result.push_str(&format!("[{section}]\n"));
             for (key, value) in keys {
-                result.push_str(&format!("{} = {}\n", key, value));
+                result.push_str(&format!("{key} = {value}\n"));
             }
             result.push('\n');
         }
@@ -80,12 +77,10 @@ pub struct TempProfile {
 }
 
 /// DNS kubectl enabled projects
-const DNS_KUBECTL_ENABLED_PROJECTS: &[&str] = &[
-    "dev-sandbox-334901",
-    "salessavvy-test",
-];
+const DNS_KUBECTL_ENABLED_PROJECTS: &[&str] = &["dev-sandbox-334901", "salessavvy-test"];
 
 /// Google Cloud Platform implementation
+#[allow(dead_code)]
 pub struct GooglePlatform {
     project: String,
     zone: String,
@@ -114,7 +109,7 @@ impl GooglePlatform {
         // Python reads from config.get('google', 'primaryZone')
         let zone = dynamic_config
             .and_then(|c| c.get("google", "primaryZone"))
-            .map(|s| s.to_string())
+            .cloned()
             .unwrap_or_else(|| "us-central1-c".to_string());
 
         // Derive region from zone (remove last 2 chars: us-central1-c -> us-central1)
@@ -127,13 +122,7 @@ impl GooglePlatform {
         // Check if DNS kubectl should be enabled
         let dns_kubectl_enabled = Self::should_use_dns_kubectl(&project);
 
-        Ok(Self {
-            project,
-            zone,
-            region,
-            project_number,
-            dns_kubectl_enabled,
-        })
+        Ok(Self { project, zone, region, project_number, dns_kubectl_enabled })
     }
 
     /// Check if DNS-based kubectl should be enabled
@@ -147,35 +136,25 @@ impl GooglePlatform {
 
     async fn get_project_number(project: &str) -> Result<String> {
         let output = Command::new("gcloud")
-            .args([
-                "projects",
-                "describe",
-                project,
-                "--format",
-                "value(projectNumber)",
-            ])
+            .args(["projects", "describe", project, "--format", "value(projectNumber)"])
             .output()
             .await
             .context("Failed to execute gcloud command - is gcloud installed and in PATH?")?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            eprintln!("\n❌ Failed to get GCP project number for '{}'", project);
-            eprintln!("Error: {}", stderr);
+            eprintln!("\n❌ Failed to get GCP project number for '{project}'");
+            eprintln!("Error: {stderr}");
             eprintln!("\nPossible causes:");
             eprintln!("  1. Not authenticated with gcloud");
             eprintln!("     → Run: gcloud auth login");
-            eprintln!("  2. No access to project '{}'", project);
+            eprintln!("  2. No access to project '{project}'");
             eprintln!("     → Verify project exists and you have access");
             eprintln!("  3. Wrong active gcloud account");
             eprintln!("     → Run: gcloud auth list");
             eprintln!("  4. Wrong gcloud project configured");
-            eprintln!("     → Run: gcloud config set project {}", project);
-            anyhow::bail!(
-                "gcloud projects describe failed for '{}': {}",
-                project,
-                stderr.trim()
-            );
+            eprintln!("     → Run: gcloud config set project {project}");
+            anyhow::bail!("gcloud projects describe failed for '{}': {}", project, stderr.trim());
         }
 
         Ok(String::from_utf8(output.stdout)?.trim().to_string())
@@ -202,14 +181,8 @@ impl Platform for GooglePlatform {
         };
 
         if self.project != "scio-engineering" {
-            let mut args = vec![
-                "container",
-                "clusters",
-                "get-credentials",
-                cluster,
-                "--zone",
-                &self.zone,
-            ];
+            let mut args =
+                vec!["container", "clusters", "get-credentials", cluster, "--zone", &self.zone];
 
             // Add DNS endpoint flag if enabled
             if self.dns_kubectl_enabled {
@@ -217,11 +190,12 @@ impl Platform for GooglePlatform {
             }
 
             let step_start = std::time::Instant::now();
-            let status = Command::new("gcloud")
-                .args(&args)
-                .status()
-                .await?;
-            println!("      └─ gcloud get-credentials ({}): {:.2}s", cluster, step_start.elapsed().as_secs_f64());
+            let status = Command::new("gcloud").args(&args).status().await?;
+            println!(
+                "      └─ gcloud get-credentials ({}): {:.2}s",
+                cluster,
+                step_start.elapsed().as_secs_f64()
+            );
 
             if !status.success() {
                 eprintln!(
@@ -246,10 +220,11 @@ impl Platform for GooglePlatform {
         profile.zone = self.zone.clone();
         profile.region = self.region.clone();
         profile.project_number = self.project_number.clone();
-        profile.dns_kubectl = if self.dns_kubectl_enabled { "enabled" } else { "disabled" }.to_string();
+        profile.dns_kubectl =
+            if self.dns_kubectl_enabled { "enabled" } else { "disabled" }.to_string();
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "google"
     }
 
@@ -277,7 +252,7 @@ impl AWSPlatform {
 
         Ok(Self {
             project,
-            zone: String::new(),  // AWS doesn't use zones the same way
+            zone: String::new(), // AWS doesn't use zones the same way
             region,
         })
     }
@@ -288,14 +263,7 @@ impl Platform for AWSPlatform {
     async fn authenticate(&self) -> Result<()> {
         // Update kubeconfig for EKS
         let status = Command::new("aws")
-            .args([
-                "eks",
-                "update-kubeconfig",
-                "--name",
-                "glean-cluster",
-                "--region",
-                &self.region,
-            ])
+            .args(["eks", "update-kubeconfig", "--name", "glean-cluster", "--region", &self.region])
             .status()
             .await?;
 
@@ -317,7 +285,7 @@ impl Platform for AWSPlatform {
         profile.dns_kubectl = "disabled".to_string();
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "aws"
     }
 
@@ -351,11 +319,7 @@ impl AzurePlatform {
             String::new()
         };
 
-        Ok(Self {
-            project,
-            subscription_id,
-            region: "uswest2".to_string(),
-        })
+        Ok(Self { project, subscription_id, region: "uswest2".to_string() })
     }
 }
 
@@ -393,11 +357,11 @@ impl Platform for AzurePlatform {
         profile.dns_kubectl = "disabled".to_string();
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "azure"
     }
 
-    fn zone(&self) -> &str {
+    fn zone(&self) -> &'static str {
         ""
     }
 
@@ -434,8 +398,6 @@ pub async fn create_platform_with_multi_project(
             // Azure doesn't support multi_project yet
             Ok(Box::new(AzurePlatform::new(project, dynamic_config).await?))
         }
-        _ => anyhow::bail!("Unsupported platform: {}", platform_name),
+        _ => anyhow::bail!("Unsupported platform: {platform_name}"),
     }
 }
-
-

@@ -4,7 +4,7 @@ use devdock_core::{profile::Profile, Error, Result};
 use std::path::{Path, PathBuf};
 
 /// Loads DevDock profiles from various locations.
-/// 
+///
 /// Profile resolution follows Python devdock.sh behavior:
 /// 1. user_profiles/ subdirectory (highest priority)
 /// 2. integration_tests/ subdirectory
@@ -46,9 +46,7 @@ impl ProfileLoader {
 
     /// Create a profile loader with custom search paths.
     pub fn with_paths(paths: Vec<PathBuf>) -> Self {
-        Self {
-            base_paths: paths,
-        }
+        Self { base_paths: paths }
     }
 
     /// Add a search path.
@@ -83,25 +81,22 @@ impl ProfileLoader {
     }
 
     /// Find a profile file by name.
-    /// 
+    ///
     /// Resolution priority (matches Python devdock.sh):
     /// 1. user_profiles/<name>.yaml (highest priority)
     /// 2. integration_tests/<name>.yaml
     /// 3. <name>.yaml (root profiles directory)
     fn find_profile(&self, name: &str) -> Result<PathBuf> {
-        let filename_yaml = format!("{}.yaml", name);
-        let filename_yml = format!("{}.yml", name);
+        let filename_yaml = format!("{name}.yaml");
+        let filename_yml = format!("{name}.yml");
 
         // Subdirectories to check in priority order
         let subdirs = ["user_profiles", "integration_tests", ""];
 
         for base_path in &self.base_paths {
             for subdir in &subdirs {
-                let search_path = if subdir.is_empty() {
-                    base_path.clone()
-                } else {
-                    base_path.join(subdir)
-                };
+                let search_path =
+                    if subdir.is_empty() { base_path.clone() } else { base_path.join(subdir) };
 
                 // Try .yaml extension
                 let yaml_path = search_path.join(&filename_yaml);
@@ -127,13 +122,10 @@ impl ProfileLoader {
         for base_path in &self.base_paths {
             // Check subdirectories and root
             let subdirs = ["user_profiles", "integration_tests", ""];
-            
+
             for subdir in &subdirs {
-                let search_path = if subdir.is_empty() {
-                    base_path.clone()
-                } else {
-                    base_path.join(subdir)
-                };
+                let search_path =
+                    if subdir.is_empty() { base_path.clone() } else { base_path.join(subdir) };
 
                 if !search_path.exists() {
                     continue;
@@ -142,7 +134,7 @@ impl ProfileLoader {
                 for entry in walkdir::WalkDir::new(&search_path)
                     .max_depth(1)
                     .into_iter()
-                    .filter_map(|e| e.ok())
+                    .filter_map(std::result::Result::ok)
                 {
                     let path = entry.path();
                     if let Some(ext) = path.extension() {
@@ -173,13 +165,10 @@ impl ProfileLoader {
                 ("integration_tests", "Integration test profiles"),
                 ("", "Standard profiles"),
             ];
-            
+
             for (subdir, category) in &categories {
-                let search_path = if subdir.is_empty() {
-                    base_path.clone()
-                } else {
-                    base_path.join(subdir)
-                };
+                let search_path =
+                    if subdir.is_empty() { base_path.clone() } else { base_path.join(subdir) };
 
                 if !search_path.exists() {
                     continue;
@@ -188,14 +177,14 @@ impl ProfileLoader {
                 for entry in walkdir::WalkDir::new(&search_path)
                     .max_depth(1)
                     .into_iter()
-                    .filter_map(|e| e.ok())
+                    .filter_map(std::result::Result::ok)
                 {
                     let path = entry.path();
                     if let Some(ext) = path.extension() {
                         if ext == "yaml" || ext == "yml" {
                             if let Some(stem) = path.file_stem() {
                                 if let Some(name) = stem.to_str() {
-                                    profiles.push((name.to_string(), category.to_string()));
+                                    profiles.push((name.to_string(), (*category).to_string()));
                                 }
                             }
                         }
@@ -224,7 +213,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let profile_path = temp_dir.path().join("test_profile.yaml");
 
-        let profile_content = r#"
+        let profile_content = r"
 project: test-project
 platform: google
 infra:
@@ -233,7 +222,7 @@ infra:
 services:
   qe:
     type: local
-"#;
+";
         std::fs::write(&profile_path, profile_content).unwrap();
 
         let loader = ProfileLoader::with_paths(vec![temp_dir.path().to_path_buf()]);
@@ -268,4 +257,3 @@ services:
         assert!(profiles.contains(&"profile2".to_string()));
     }
 }
-

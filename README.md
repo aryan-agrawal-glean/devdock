@@ -1,4 +1,8 @@
-# DevDock v2 - Rust-native , Blazing fast
+# DevDock v2 - Rust-native, Blazing fast
+
+[![CI](https://github.com/askscio/devdock/actions/workflows/ci.yml/badge.svg)](https://github.com/askscio/devdock/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE-MIT)
+[![MSRV](https://img.shields.io/badge/MSRV-1.74-orange.svg)](https://www.rust-lang.org)
 
 A fast, extensible, standalone binary for managing local and remote development environments.
 
@@ -20,7 +24,7 @@ A fast, extensible, standalone binary for managing local and remote development 
   # Install gh CLI if not already installed
   # macOS: brew install gh
   # Linux: https://cli.github.com/
-  
+
   # Authenticate (one-time)
   gh auth login
   ```
@@ -44,25 +48,13 @@ cd devdock
 
 ### Manual Installation
 
-Download the binary for your platform from [GitHub Releases](https://github.com/askscio/devdock/releases/latest):
+Download the binary for your platform from [GitHub Releases](https://github.com/askscio/devdock/releases/latest).
 
-**macOS (Apple Silicon):**
-```bash
-curl -L https://github.com/askscio/devdock/releases/download/v0.1.0/devdock-macos-arm64-v0.1.0 -o devdock
-chmod +x devdock
-sudo mv devdock /usr/local/bin/
-```
+Extract and install:
 
-**macOS (Intel):**
 ```bash
-curl -L https://github.com/askscio/devdock/releases/download/v0.1.0/devdock-macos-x86_64-v0.1.0 -o devdock
-chmod +x devdock
-sudo mv devdock /usr/local/bin/
-```
-
-**Linux (x86_64):**
-```bash
-curl -L https://github.com/askscio/devdock/releases/download/v0.1.0/devdock-linux-x86_64-v0.1.0 -o devdock
+# Download the appropriate release for your platform, then:
+tar xzf devdock-*.tar.gz
 chmod +x devdock
 sudo mv devdock /usr/local/bin/
 ```
@@ -78,7 +70,7 @@ cargo install --path crates/devdock-cli
 ### Verify Installation
 
 ```bash
-devdock --version  # Should output: devdock 0.1.0
+devdock --version
 ```
 
 ### Uninstall
@@ -106,9 +98,8 @@ devdock list
 ## 📚 Documentation
 
 - [Getting Started](docs/getting-started.md)
-- [Profile Reference](docs/profiles.md)
-- [Plugin Development](docs/plugins.md)
-- [Architecture](docs/architecture.md)
+- [Publishing Releases](docs/publishing.md)
+- [Command Guide](COMMAND_GUIDE.md)
 
 ## 🏗️ Architecture
 
@@ -119,6 +110,11 @@ DevDock is built as a modular Rust workspace:
 - `devdock-config` - Profile parsing and validation
 - `devdock-state` - State management (SQLite)
 - `devdock-codegen` - Tiltfile and config generation
+- `devdock-remote` - Remote workspace management (Coder integration)
+- `devdock-sync` - File synchronization and watching
+- `devdock-diagnostics` - Diagnostic reports and troubleshooting
+- `devdock-monitor` - Health monitoring and notifications
+- `devdock-telemetry` - Usage analytics and telemetry
 
 ## 🧑‍💻 Development
 
@@ -137,10 +133,10 @@ cargo build
 cargo test
 
 # Run locally
-cargo run -- start default_profile
+cargo run -p devdock-cli -- start default_profile
 
 # Install locally
-cargo install --path .
+cargo install --path crates/devdock-cli
 ```
 
 ## 🤝 Contributing

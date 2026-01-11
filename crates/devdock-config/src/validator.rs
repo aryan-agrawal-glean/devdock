@@ -16,17 +16,13 @@ impl ProfileValidator {
     pub fn validate(&self, profile: &Profile) -> Result<()> {
         // Check project is not empty
         if profile.project.is_empty() {
-            return Err(Error::InvalidProfile(
-                "Project name cannot be empty".to_string(),
-            ));
+            return Err(Error::InvalidProfile("Project name cannot be empty".to_string()));
         }
 
         // Validate no empty component names
         for name in profile.all_components() {
             if name.is_empty() {
-                return Err(Error::InvalidProfile(
-                    "Component name cannot be empty".to_string(),
-                ));
+                return Err(Error::InvalidProfile("Component name cannot be empty".to_string()));
             }
         }
 
@@ -34,10 +30,7 @@ impl ProfileValidator {
         let mut seen = std::collections::HashSet::new();
         for name in profile.all_components() {
             if !seen.insert(name.clone()) {
-                return Err(Error::InvalidProfile(format!(
-                    "Duplicate component name: {}",
-                    name
-                )));
+                return Err(Error::InvalidProfile(format!("Duplicate component name: {name}")));
             }
         }
 
@@ -49,7 +42,7 @@ impl ProfileValidator {
         let output = Command::new("gcloud")
             .args(["config", "get-value", "project"])
             .output()
-            .map_err(|e| Error::InvalidProfile(format!("Failed to run gcloud: {}", e)))?;
+            .map_err(|e| Error::InvalidProfile(format!("Failed to run gcloud: {e}")))?;
 
         if !output.status.success() {
             return Err(Error::InvalidProfile(
@@ -61,7 +54,8 @@ impl ProfileValidator {
 
         if current_project.is_empty() {
             return Err(Error::InvalidProfile(
-                "No gcloud project is currently set. Run: gcloud config set project <project>".to_string(),
+                "No gcloud project is currently set. Run: gcloud config set project <project>"
+                    .to_string(),
             ));
         }
 
@@ -97,7 +91,7 @@ impl ProfileValidator {
         let mut seen = std::collections::HashSet::new();
         for name in profile.all_components() {
             if !seen.insert(name.clone()) {
-                errors.push(format!("Duplicate component name: {}", name));
+                errors.push(format!("Duplicate component name: {name}"));
             }
         }
 
@@ -123,10 +117,7 @@ mod tests {
         let mut infra = HashMap::new();
         infra.insert(
             "sql".to_string(),
-            InfraConfig {
-                deployment_type: DeploymentType::Local,
-                config: HashMap::new(),
-            },
+            InfraConfig { deployment_type: DeploymentType::Local, config: HashMap::new() },
         );
 
         let mut services = HashMap::new();
@@ -164,7 +155,7 @@ mod tests {
     #[test]
     fn test_empty_project() {
         let profile = Profile {
-            project: "".to_string(),
+            project: String::new(),
             platform: Platform::Google,
             infra: HashMap::new(),
             services: HashMap::new(),
@@ -179,4 +170,3 @@ mod tests {
         assert!(validator.validate(&profile).is_err());
     }
 }
-

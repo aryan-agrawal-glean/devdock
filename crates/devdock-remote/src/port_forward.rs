@@ -2,9 +2,9 @@
 
 use crate::{coder, RemoteError, Result};
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
 use std::collections::HashMap;
 use std::fs;
+use std::path::{Path, PathBuf};
 use tracing::{debug, info, warn};
 
 /// Type of port being forwarded.
@@ -64,16 +64,17 @@ struct ServiceConfig {
 
 /// Read service port from devdock_config.json
 fn read_service_config_port(service_name: &str) -> Option<u16> {
-    let config_path = PathBuf::from(std::env::var("DEVDOCK_ROOT").unwrap_or_else(|_| ".".to_string()))
-        .join("devdock/config/services")
-        .join(service_name)
-        .join("devdock_config.json");
-    
+    let config_path =
+        PathBuf::from(std::env::var("DEVDOCK_ROOT").unwrap_or_else(|_| ".".to_string()))
+            .join("devdock/config/services")
+            .join(service_name)
+            .join("devdock_config.json");
+
     if !config_path.exists() {
         debug!("No config found for service: {} at {:?}", service_name, config_path);
         return None;
     }
-    
+
     match fs::read_to_string(&config_path) {
         Ok(contents) => {
             if let Ok(config) = serde_json::from_str::<ServiceConfig>(&contents) {
@@ -83,11 +84,17 @@ fn read_service_config_port(service_name: &str) -> Option<u16> {
                         // PORT can be a string or number
                         if let Some(port_str) = port_value.as_str() {
                             if let Ok(port) = port_str.parse::<u16>() {
-                                debug!("Found port {} for service {} from config", port, service_name);
+                                debug!(
+                                    "Found port {} for service {} from config",
+                                    port, service_name
+                                );
                                 return Some(port);
                             }
                         } else if let Some(port_num) = port_value.as_u64() {
-                            debug!("Found port {} for service {} from config", port_num, service_name);
+                            debug!(
+                                "Found port {} for service {} from config",
+                                port_num, service_name
+                            );
                             return Some(port_num as u16);
                         }
                     }
@@ -98,21 +105,22 @@ fn read_service_config_port(service_name: &str) -> Option<u16> {
             debug!("Failed to read config for {}: {}", service_name, e);
         }
     }
-    
+
     None
 }
 
 /// Read service debug port from devdock_config.json
 fn read_service_config_debug_port(service_name: &str) -> Option<u16> {
-    let config_path = PathBuf::from(std::env::var("DEVDOCK_ROOT").unwrap_or_else(|_| ".".to_string()))
-        .join("devdock/config/services")
-        .join(service_name)
-        .join("devdock_config.json");
-    
+    let config_path =
+        PathBuf::from(std::env::var("DEVDOCK_ROOT").unwrap_or_else(|_| ".".to_string()))
+            .join("devdock/config/services")
+            .join(service_name)
+            .join("devdock_config.json");
+
     if !config_path.exists() {
         return None;
     }
-    
+
     match fs::read_to_string(&config_path) {
         Ok(contents) => {
             if let Ok(config) = serde_json::from_str::<ServiceConfig>(&contents) {
@@ -120,11 +128,17 @@ fn read_service_config_debug_port(service_name: &str) -> Option<u16> {
                     // debug_port can be a string or number
                     if let Some(port_str) = debug_port_value.as_str() {
                         if let Ok(port) = port_str.parse::<u16>() {
-                            debug!("Found debug port {} for service {} from config", port, service_name);
+                            debug!(
+                                "Found debug port {} for service {} from config",
+                                port, service_name
+                            );
                             return Some(port);
                         }
                     } else if let Some(port_num) = debug_port_value.as_u64() {
-                        debug!("Found debug port {} for service {} from config", port_num, service_name);
+                        debug!(
+                            "Found debug port {} for service {} from config",
+                            port_num, service_name
+                        );
                         return Some(port_num as u16);
                     }
                 }
@@ -134,7 +148,7 @@ fn read_service_config_debug_port(service_name: &str) -> Option<u16> {
             debug!("Failed to read config for {}: {}", service_name, e);
         }
     }
-    
+
     None
 }
 
@@ -147,15 +161,15 @@ impl PortForwardManager {
         offset: u16,
     ) -> Result<Self> {
         info!("Parsing profile for port mappings: {:?}", profile_path);
-        
+
         let contents = fs::read_to_string(profile_path)
-            .map_err(|e| RemoteError::ConfigSyncError(format!("Failed to read profile: {}", e)))?;
-        
+            .map_err(|e| RemoteError::ConfigSyncError(format!("Failed to read profile: {e}")))?;
+
         let profile: Profile = serde_yaml::from_str(&contents)
-            .map_err(|e| RemoteError::ConfigSyncError(format!("Failed to parse profile: {}", e)))?;
-        
+            .map_err(|e| RemoteError::ConfigSyncError(format!("Failed to parse profile: {e}")))?;
+
         let mut mappings = Vec::new();
-        
+
         // Add Tilt UI port (always present)
         mappings.push(PortMapping {
             service_name: "tilt".to_string(),
@@ -164,7 +178,7 @@ impl PortForwardManager {
             remote_port: 10350,
             process_pid: None,
         });
-        
+
         // Extract service ports
         if let Some(services) = profile.services {
             for (service_name, service) in services {
@@ -175,7 +189,7 @@ impl PortForwardManager {
                         continue;
                     }
                 }
-                
+
                 // Add main service port (priority: explicit > config file)
                 let port = service.port.or_else(|| read_service_config_port(&service_name));
                 if let Some(port) = port {
@@ -190,9 +204,10 @@ impl PortForwardManager {
                 } else {
                     debug!("No port mapping found for service: {}", service_name);
                 }
-                
+
                 // Add debug port if present (priority: explicit > config file)
-                let debug_port = service.debug_port.or_else(|| read_service_config_debug_port(&service_name));
+                let debug_port =
+                    service.debug_port.or_else(|| read_service_config_debug_port(&service_name));
                 if let Some(debug_port) = debug_port {
                     mappings.push(PortMapping {
                         service_name: service_name.clone(),
@@ -201,13 +216,18 @@ impl PortForwardManager {
                         remote_port: debug_port,
                         process_pid: None,
                     });
-                    debug!("Added debug port mapping for {}: {}->{}", service_name, offset + debug_port, debug_port);
+                    debug!(
+                        "Added debug port mapping for {}: {}->{}",
+                        service_name,
+                        offset + debug_port,
+                        debug_port
+                    );
                 }
             }
         }
-        
+
         debug!("Created {} port mappings", mappings.len());
-        
+
         Ok(Self {
             workspace_name: workspace.to_string(),
             devdock_id: devdock_id.to_string(),
@@ -215,15 +235,15 @@ impl PortForwardManager {
             mappings,
         })
     }
-    
+
     /// Start all port forwards.
     pub fn start_all_forwards(&mut self) -> Result<()> {
         info!("Starting {} port forwards", self.mappings.len());
-        
+
         let pid_dir = Self::get_pid_dir(&self.devdock_id)?;
         fs::create_dir_all(&pid_dir)
-            .map_err(|e| RemoteError::PortForwardError(format!("Failed to create PID dir: {}", e)))?;
-        
+            .map_err(|e| RemoteError::PortForwardError(format!("Failed to create PID dir: {e}")))?;
+
         for mapping in &mut self.mappings {
             match coder::port_forward_single(
                 &self.workspace_name,
@@ -233,20 +253,17 @@ impl PortForwardManager {
                 Ok(child) => {
                     let pid = child.id();
                     mapping.process_pid = Some(pid);
-                    
+
                     // Write PID file
-                    let pid_file = pid_dir.join(format!(
-                        "{}_{:?}.pid",
-                        mapping.service_name,
-                        mapping.port_type
-                    ));
+                    let pid_file = pid_dir
+                        .join(format!("{}_{:?}.pid", mapping.service_name, mapping.port_type));
                     let _ = fs::write(&pid_file, pid.to_string());
-                    
+
                     debug!(
                         "Port forward started: {} {:?} -> {} (PID: {})",
                         mapping.service_name, mapping.port_type, mapping.local_port, pid
                     );
-                    
+
                     // Keep the child process alive - don't let it be dropped
                     std::mem::forget(child);
                 }
@@ -255,35 +272,36 @@ impl PortForwardManager {
                 }
             }
         }
-        
+
         Ok(())
     }
-    
+
     /// Stop all port forwards.
     pub fn stop_all_forwards(&mut self) -> Result<()> {
         info!("Stopping all port forwards");
-        
+
         for mapping in &mut self.mappings {
             if let Some(pid) = mapping.process_pid {
                 let _ = coder::kill_port_forward(pid);
                 mapping.process_pid = None;
             }
         }
-        
+
         // Clean up PID directory
         let pid_dir = Self::get_pid_dir(&self.devdock_id)?;
         if pid_dir.exists() {
             let _ = fs::remove_dir_all(&pid_dir);
         }
-        
+
         Ok(())
     }
-    
+
     /// Get PID directory for this DevDock instance.
     fn get_pid_dir(devdock_id: &str) -> Result<PathBuf> {
-        let home = dirs::home_dir()
-            .ok_or_else(|| RemoteError::PortForwardError("Cannot determine home directory".to_string()))?;
-        
+        let home = dirs::home_dir().ok_or_else(|| {
+            RemoteError::PortForwardError("Cannot determine home directory".to_string())
+        })?;
+
         Ok(home.join(".devdock/port_forwards").join(devdock_id))
     }
 }
@@ -291,4 +309,3 @@ impl PortForwardManager {
 // Note: We don't implement Drop to stop port forwards automatically
 // because we use std::mem::forget on the Child processes to keep them alive.
 // Port forwards should be stopped explicitly via `devdock stop` or by killing the PIDs.
-

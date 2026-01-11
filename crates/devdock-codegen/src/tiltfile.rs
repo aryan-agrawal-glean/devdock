@@ -32,8 +32,7 @@ impl TiltfileGenerator {
             tiltfile.push_str("# Infrastructure\n");
             for name in profile.infra.keys() {
                 tiltfile.push_str(&format!(
-                    "local_resource('{}', serve_cmd='echo Starting {}')\n",
-                    name, name
+                    "local_resource('{name}', serve_cmd='echo Starting {name}')\n"
                 ));
             }
             tiltfile.push('\n');
@@ -44,8 +43,7 @@ impl TiltfileGenerator {
             tiltfile.push_str("# Services\n");
             for name in profile.services.keys() {
                 tiltfile.push_str(&format!(
-                    "local_resource('{}', serve_cmd='echo Starting {}')\n",
-                    name, name
+                    "local_resource('{name}', serve_cmd='echo Starting {name}')\n"
                 ));
             }
         }
@@ -59,4 +57,3 @@ impl Default for TiltfileGenerator {
         Self::new()
     }
 }
-

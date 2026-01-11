@@ -7,7 +7,7 @@ use crate::ini_generator::IniGenerator;
 use crate::ini_parser::ParsedIniConfig;
 use crate::platform::{create_platform, Platform};
 use crate::profile_generator::TempProfileGenerator;
-use crate::watch_patterns::{WatchPatternGenerator, ServiceType as WatchServiceType};
+use crate::watch_patterns::{ServiceType as WatchServiceType, WatchPatternGenerator};
 use anyhow::{Context, Result};
 use devdock_core::profile::Profile;
 use std::collections::HashMap;
@@ -98,15 +98,15 @@ impl ConfigGenerator {
             profile.project.clone(),
             dynamic_ini.as_ref(),
         )
-            .await
-            .context(format!(
-                "Failed to create platform '{}' for project '{}'. \
+        .await
+        .context(format!(
+            "Failed to create platform '{}' for project '{}'. \
                 This usually indicates authentication issues with your cloud provider. \
                 See error details above.",
-                profile.platform,
-                profile.project
-            ))?;
-        println!("✅ Platform initialized in {:.2}s (total: {:.2}s)", 
+            profile.platform, profile.project
+        ))?;
+        println!(
+            "✅ Platform initialized in {:.2}s (total: {:.2}s)",
             step_start.elapsed().as_secs_f64(),
             total_start.elapsed().as_secs_f64()
         );
@@ -115,9 +115,10 @@ impl ConfigGenerator {
         println!("⏩ Authenticating with platform...");
         let step_start = std::time::Instant::now();
         if let Err(e) = platform.authenticate().await {
-            eprintln!("Warning: Platform authentication failed: {}", e);
+            eprintln!("Warning: Platform authentication failed: {e}");
         } else {
-            println!("✅ Platform authenticated in {:.2}s (total: {:.2}s)", 
+            println!(
+                "✅ Platform authenticated in {:.2}s (total: {:.2}s)",
                 step_start.elapsed().as_secs_f64(),
                 total_start.elapsed().as_secs_f64()
             );
@@ -126,26 +127,46 @@ impl ConfigGenerator {
         // 4. Generate all configs in parallel with detailed timing
         println!("⏩ Generating configs (3 parallel tasks)...");
         let step_start = std::time::Instant::now();
-        
+
         // Use separate timers for each task
         let ini_start = std::time::Instant::now();
         let profile_start = std::time::Instant::now();
         let watch_start = std::time::Instant::now();
-        
+
         let (devdock_ini, temp_profile, watch_result) = tokio::join!(
             async {
-                let result = self.generate_devdock_ini(profile, platform.as_ref(), &graph, dynamic_ini.as_ref()).await;
-                println!("   └─ devdock.ini generated in {:.2}s", ini_start.elapsed().as_secs_f64());
+                let result = self
+                    .generate_devdock_ini(profile, platform.as_ref(), &graph, dynamic_ini.as_ref())
+                    .await;
+                println!(
+                    "   └─ devdock.ini generated in {:.2}s",
+                    ini_start.elapsed().as_secs_f64()
+                );
                 result
             },
             async {
-                let result = self.generate_temp_profile(profile, platform.as_ref(), &graph, active_services, profile_path, dynamic_ini.clone()).await;
-                println!("   └─ temp_profile.yaml generated in {:.2}s", profile_start.elapsed().as_secs_f64());
+                let result = self
+                    .generate_temp_profile(
+                        profile,
+                        platform.as_ref(),
+                        &graph,
+                        active_services,
+                        profile_path,
+                        dynamic_ini.clone(),
+                    )
+                    .await;
+                println!(
+                    "   └─ temp_profile.yaml generated in {:.2}s",
+                    profile_start.elapsed().as_secs_f64()
+                );
                 result
             },
             async {
                 let result = self.generate_watch_files(&graph).await;
-                println!("   └─ watch files generated in {:.2}s", watch_start.elapsed().as_secs_f64());
+                println!(
+                    "   └─ watch files generated in {:.2}s",
+                    watch_start.elapsed().as_secs_f64()
+                );
                 result
             },
         );
@@ -153,10 +174,11 @@ impl ConfigGenerator {
         let devdock_ini = devdock_ini?;
         let temp_profile = temp_profile?;
         if let Err(e) = watch_result {
-            eprintln!("   └─ Warning: watch file generation failed: {}", e);
+            eprintln!("   └─ Warning: watch file generation failed: {e}");
         }
 
-        println!("✅ Generated all configs in {:.2}s (total: {:.2}s)", 
+        println!(
+            "✅ Generated all configs in {:.2}s (total: {:.2}s)",
             step_start.elapsed().as_secs_f64(),
             total_start.elapsed().as_secs_f64()
         );
@@ -165,15 +187,9 @@ impl ConfigGenerator {
         println!("⏩ Writing config files...");
         let step_start = std::time::Instant::now();
         tokio::try_join!(
-            tokio::fs::write(
-                self.workspace_root.join("devdock/devdock.ini"),
-                &devdock_ini
-            ),
+            tokio::fs::write(self.workspace_root.join("devdock/devdock.ini"), &devdock_ini),
             tokio::fs::write(self.workspace_root.join("config/devdock.ini"), &devdock_ini),
-            tokio::fs::write(
-                self.workspace_root.join("config/run_local.ini"),
-                &devdock_ini
-            ),
+            tokio::fs::write(self.workspace_root.join("config/run_local.ini"), &devdock_ini),
             tokio::fs::write(runtime_gen.join("temp_profile.yaml"), &temp_profile),
         )?;
 
@@ -210,7 +226,7 @@ impl ConfigGenerator {
 
         // The multi-project is always glean-apps-canary for now
         let multi_project_name = "glean-apps-canary";
-        
+
         // 1. Create platform for multi-project
         let multi_platform = crate::platform::create_platform_with_multi_project(
             "google", // Multi-project is always GCP for now
@@ -237,22 +253,8 @@ impl ConfigGenerator {
 
         // 3. Auto-inject SQL if not present (matches Python behavior)
         let has_sql = multi_config.infra.contains_key("sql");
-        if !has_sql {
-            use devdock_core::types::DeploymentType;
-            use devdock_core::InfraConfig;
-            
-            multi_profile.infra.insert(
-                "sql".to_string(),
-                InfraConfig {
-                    deployment_type: DeploymentType::Remote,
-                    config: HashMap::new(),
-                },
-            );
-            
-            // Rebuild graph with SQL included
-            let multi_graph = DependencyGraph::build(&multi_profile, &self.workspace_root).await?;
-            
-            // Generate scio_apps.ini with SQL
+        if has_sql {
+            // Generate scio_apps.ini without auto-injecting SQL
             self.generate_multi_project_ini(
                 &multi_profile,
                 multi_platform.as_ref(),
@@ -261,7 +263,18 @@ impl ConfigGenerator {
             )
             .await?;
         } else {
-            // Generate scio_apps.ini without auto-injecting SQL
+            use devdock_core::types::DeploymentType;
+            use devdock_core::InfraConfig;
+
+            multi_profile.infra.insert(
+                "sql".to_string(),
+                InfraConfig { deployment_type: DeploymentType::Remote, config: HashMap::new() },
+            );
+
+            // Rebuild graph with SQL included
+            let multi_graph = DependencyGraph::build(&multi_profile, &self.workspace_root).await?;
+
+            // Generate scio_apps.ini with SQL
             self.generate_multi_project_ini(
                 &multi_profile,
                 multi_platform.as_ref(),
@@ -333,10 +346,8 @@ impl ConfigGenerator {
         for node in graph.nodes() {
             // Inject USE_DEVDOCK_INI env var for all services
             let mut node_config = node.config.clone();
-            node_config
-                .env
-                .insert("USE_DEVDOCK_INI".to_string(), "true".to_string());
-            
+            node_config.env.insert("USE_DEVDOCK_INI".to_string(), "true".to_string());
+
             generator.apply_service(&node.name, &node_config);
             generator.apply_dependency(node);
         }
@@ -365,22 +376,20 @@ impl ConfigGenerator {
         }
 
         match DynamicIniLoader::new(project, self.workspace_root.clone()) {
-            Ok(loader) => {
-                match loader.fetch_dynamic_ini().await {
-                    Ok(config) => {
-                        if config.is_some() {
-                            println!("✅ Fetched dynamic.ini from GCS");
-                        }
-                        config
+            Ok(loader) => match loader.fetch_dynamic_ini().await {
+                Ok(config) => {
+                    if config.is_some() {
+                        println!("✅ Fetched dynamic.ini from GCS");
                     }
-                    Err(e) => {
-                        eprintln!("Warning: Failed to fetch dynamic.ini: {}", e);
-                        None
-                    }
+                    config
                 }
-            }
+                Err(e) => {
+                    eprintln!("Warning: Failed to fetch dynamic.ini: {e}");
+                    None
+                }
+            },
             Err(e) => {
-                eprintln!("Warning: Failed to create INI loader: {}", e);
+                eprintln!("Warning: Failed to create INI loader: {e}");
                 None
             }
         }
@@ -510,8 +519,12 @@ impl ConfigGenerator {
             generator.set_multi_project(multi_profile_data);
 
             // 2. Add multi-project services to TOP-LEVEL services dict (Python behavior)
-            self.apply_multi_project_services_to_generator(&mut generator, multi_config, dynamic_ini.as_ref())
-                .await?;
+            self.apply_multi_project_services_to_generator(
+                &mut generator,
+                multi_config,
+                dynamic_ini.as_ref(),
+            )
+            .await?;
         }
 
         generator.generate()
@@ -525,7 +538,7 @@ impl ConfigGenerator {
         _dynamic_ini: Option<&ParsedIniConfig>,
     ) -> Result<()> {
         use crate::profile_generator::ServiceProfileEntry;
-        
+
         let multi_project_name = "glean-apps-canary";
 
         // Build profile for multi-project to get dependency graph
@@ -547,24 +560,15 @@ impl ConfigGenerator {
         for node in multi_graph.nodes() {
             if node.component_type == crate::dependency_graph::ComponentType::Service {
                 let profile_service = multi_profile.services.get(&node.name);
-                
-                let service_type = if node.config.is_local() {
-                    "local".to_string()
-                } else {
-                    "remote".to_string()
-                };
+
+                let service_type =
+                    if node.config.is_local() { "local".to_string() } else { "remote".to_string() };
 
                 // Get env from profile and add USE_DEVDOCK_INI
                 let mut env = profile_service
-                    .and_then(|s| {
-                        if s.env.is_empty() {
-                            None
-                        } else {
-                            Some(s.env.clone())
-                        }
-                    })
+                    .and_then(|s| if s.env.is_empty() { None } else { Some(s.env.clone()) })
                     .unwrap_or_default();
-                
+
                 env.insert("USE_DEVDOCK_INI".to_string(), "true".to_string());
 
                 let hot_reload = profile_service.and_then(|s| {
@@ -580,9 +584,7 @@ impl ConfigGenerator {
                     })
                 });
 
-                let extra = profile_service
-                    .map(|s| s.config.clone())
-                    .unwrap_or_default();
+                let extra = profile_service.map(|s| s.config.clone()).unwrap_or_default();
 
                 generator.add_service(
                     &node.name,
@@ -614,7 +616,7 @@ impl ConfigGenerator {
         dynamic_ini: Option<&ParsedIniConfig>,
     ) -> Result<crate::profile_generator::MultiProjectProfile> {
         use crate::profile_generator::{InfraProfileEntry, MultiProjectProfile};
-        
+
         let multi_project_name = "glean-apps-canary";
 
         // Create platform for multi-project
@@ -637,10 +639,7 @@ impl ConfigGenerator {
 
             infra.insert(
                 "sql".to_string(),
-                InfraProfileEntry {
-                    infra_type,
-                    extra: sql_config.config.clone(),
-                },
+                InfraProfileEntry { infra_type, extra: sql_config.config.clone() },
             );
         }
 
@@ -667,20 +666,16 @@ impl ConfigGenerator {
                 println!("      └─ Watch file generation skipped");
                 Ok(())
             }
-            WatchStrategy::Static => {
-                self.generate_watch_files_static(graph).await
-            }
-            WatchStrategy::Cquery => {
-                self.generate_watch_files_cquery(graph).await
-            }
+            WatchStrategy::Static => self.generate_watch_files_static(graph).await,
+            WatchStrategy::Cquery => self.generate_watch_files_cquery(graph).await,
             WatchStrategy::Hybrid => {
                 // Generate static first (fast)
                 self.generate_watch_files_static(graph).await?;
-                
+
                 // Spawn background task to refine with cquery (non-blocking)
                 println!("      └─ Spawning background cquery refinement...");
                 self.spawn_background_cquery_refinement(graph).await;
-                
+
                 Ok(())
             }
         }
@@ -720,13 +715,18 @@ impl ConfigGenerator {
             return Ok(());
         }
 
-        println!("      └─ Generating static watch patterns for {} local service(s)", services.len());
+        println!(
+            "      └─ Generating static watch patterns for {} local service(s)",
+            services.len()
+        );
         let start = std::time::Instant::now();
 
         generator.generate_all_watch_files(&services).await?;
 
-        println!("      └─ Static watch patterns generated in {:.2}ms", 
-            start.elapsed().as_secs_f64() * 1000.0);
+        println!(
+            "      └─ Static watch patterns generated in {:.2}ms",
+            start.elapsed().as_secs_f64() * 1000.0
+        );
         Ok(())
     }
 
@@ -745,12 +745,7 @@ impl ConfigGenerator {
                 // Must have a bazel target
                 && n.config.bazel_target.is_some()
             })
-            .filter_map(|n| {
-                n.config
-                    .bazel_target
-                    .as_ref()
-                    .map(|t| (n.name.clone(), t.clone()))
-            })
+            .filter_map(|n| n.config.bazel_target.as_ref().map(|t| (n.name.clone(), t.clone())))
             .collect();
 
         if services_with_targets.is_empty() {
@@ -763,10 +758,10 @@ impl ConfigGenerator {
     }
 
     /// Spawn background task to refine watch files with bazel cquery
-    /// 
+    ///
     /// This runs in the background and updates watch files when complete.
     /// The main process doesn't wait for this - DevDock starts immediately.
-    /// 
+    ///
     /// Logs are written to ~/.devdock/background-cquery.log to avoid cluttering Tilt UI.
     async fn spawn_background_cquery_refinement(&self, graph: &DependencyGraph) {
         use crate::dependency_graph::ComponentType;
@@ -783,12 +778,7 @@ impl ConfigGenerator {
                 // Must have a bazel target
                 && n.config.bazel_target.is_some()
             })
-            .filter_map(|n| {
-                n.config
-                    .bazel_target
-                    .as_ref()
-                    .map(|t| (n.name.clone(), t.clone()))
-            })
+            .filter_map(|n| n.config.bazel_target.as_ref().map(|t| (n.name.clone(), t.clone())))
             .collect();
 
         if services_with_targets.is_empty() {
@@ -798,7 +788,7 @@ impl ConfigGenerator {
 
         let workspace_root = self.workspace_root.clone();
         let service_count = services_with_targets.len();
-        
+
         // Setup log file path
         let log_file = std::env::var("HOME")
             .ok()
@@ -807,27 +797,25 @@ impl ConfigGenerator {
         // Spawn detached background task
         tokio::spawn(async move {
             let start = std::time::Instant::now();
-            
+
             // Helper to log to file
             let log = |msg: String| {
                 if let Some(ref path) = log_file {
-                    if let Ok(mut file) = std::fs::OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open(path)
+                    if let Ok(mut file) =
+                        std::fs::OpenOptions::new().create(true).append(true).open(path)
                     {
                         let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
-                        let _ = writeln!(file, "[{}] {}", timestamp, msg);
+                        let _ = writeln!(file, "[{timestamp}] {msg}");
                     }
                 }
             };
 
-            log(format!("Starting cquery for {} local service(s)", service_count));
+            log(format!("Starting cquery for {service_count} local service(s)"));
 
             // Use silent engine to avoid console spam
             let engine = BazelQueryEngine::new_silent(workspace_root);
             match engine.generate_watch_files(services_with_targets).await {
-                Ok(_) => {
+                Ok(()) => {
                     let msg = format!(
                         "✅ Refined watch files with cquery in {:.2}s",
                         start.elapsed().as_secs_f64()
@@ -836,7 +824,7 @@ impl ConfigGenerator {
                     // Success is silent - no console output to avoid cluttering Tilt UI
                 }
                 Err(e) => {
-                    let msg = format!("❌ Cquery refinement failed: {}", e);
+                    let msg = format!("❌ Cquery refinement failed: {e}");
                     log(msg.clone());
                     // Only print errors to console (after Tilt starts, but important to see)
                     eprintln!("\n⚠️  Background cquery failed (static patterns still active). Check ~/.devdock/background-cquery.log");
@@ -848,4 +836,3 @@ impl ConfigGenerator {
         println!("      └─ Background cquery starting (logs → ~/.devdock/background-cquery.log)");
     }
 }
-
