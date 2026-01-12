@@ -32,6 +32,8 @@ pub struct ConfigGenerator {
     workspace_root: PathBuf,
     fetch_dynamic_config: bool,
     watch_strategy: WatchStrategy,
+    skip_platform_init: bool,
+    skip_file_writes: bool,
 }
 
 impl ConfigGenerator {
@@ -40,6 +42,8 @@ impl ConfigGenerator {
             workspace_root,
             fetch_dynamic_config: true,
             watch_strategy: WatchStrategy::default(),
+            skip_platform_init: false,
+            skip_file_writes: false,
         }
     }
 
@@ -57,6 +61,18 @@ impl ConfigGenerator {
     /// - `Skip`: Don't generate watch files
     pub fn with_watch_strategy(mut self, strategy: WatchStrategy) -> Self {
         self.watch_strategy = strategy;
+        self
+    }
+
+    /// Skip platform initialization (for benchmarking/CI)
+    pub fn with_skip_platform_init(mut self, skip: bool) -> Self {
+        self.skip_platform_init = skip;
+        self
+    }
+
+    /// Skip writing files to disk (for benchmarking/CI)
+    pub fn with_skip_file_writes(mut self, skip: bool) -> Self {
+        self.skip_file_writes = skip;
         self
     }
 
@@ -91,38 +107,47 @@ impl ConfigGenerator {
         );
 
         // 2. Create platform object with dynamic config for zone/region
-        println!("⏩ Initializing platform...");
-        let step_start = std::time::Instant::now();
-        let platform = create_platform(
-            &profile.platform.to_string(),
-            profile.project.clone(),
-            dynamic_ini.as_ref(),
-        )
-        .await
-        .context(format!(
-            "Failed to create platform '{}' for project '{}'. \
-                This usually indicates authentication issues with your cloud provider. \
-                See error details above.",
-            profile.platform, profile.project
-        ))?;
-        println!(
-            "✅ Platform initialized in {:.2}s (total: {:.2}s)",
-            step_start.elapsed().as_secs_f64(),
-            total_start.elapsed().as_secs_f64()
-        );
-
-        // 3. Platform authentication (optional, can be slow)
-        println!("⏩ Authenticating with platform...");
-        let step_start = std::time::Instant::now();
-        if let Err(e) = platform.authenticate().await {
-            eprintln!("Warning: Platform authentication failed: {e}");
+        let platform = if self.skip_platform_init {
+            // Use mock platform for benchmarking (no external API calls)
+            println!("⏩ Using mock platform (benchmark mode)...");
+            use crate::platform::create_mock_platform;
+            create_mock_platform(profile.project.clone())
         } else {
+            println!("⏩ Initializing platform...");
+            let step_start = std::time::Instant::now();
+            let platform = create_platform(
+                &profile.platform.to_string(),
+                profile.project.clone(),
+                dynamic_ini.as_ref(),
+            )
+            .await
+            .context(format!(
+                "Failed to create platform '{}' for project '{}'. \
+                    This usually indicates authentication issues with your cloud provider. \
+                    See error details above.",
+                profile.platform, profile.project
+            ))?;
             println!(
-                "✅ Platform authenticated in {:.2}s (total: {:.2}s)",
+                "✅ Platform initialized in {:.2}s (total: {:.2}s)",
                 step_start.elapsed().as_secs_f64(),
                 total_start.elapsed().as_secs_f64()
             );
-        }
+
+            // 3. Platform authentication (optional, can be slow)
+            println!("⏩ Authenticating with platform...");
+            let step_start = std::time::Instant::now();
+            if let Err(e) = platform.authenticate().await {
+                eprintln!("Warning: Platform authentication failed: {e}");
+            } else {
+                println!(
+                    "✅ Platform authenticated in {:.2}s (total: {:.2}s)",
+                    step_start.elapsed().as_secs_f64(),
+                    total_start.elapsed().as_secs_f64()
+                );
+            }
+
+            platform
+        };
 
         // 4. Generate all configs in parallel with detailed timing
         println!("⏩ Generating configs (3 parallel tasks)...");
@@ -183,21 +208,28 @@ impl ConfigGenerator {
             total_start.elapsed().as_secs_f64()
         );
 
-        // 5. Write all files in parallel
-        println!("⏩ Writing config files...");
-        let step_start = std::time::Instant::now();
-        tokio::try_join!(
-            tokio::fs::write(self.workspace_root.join("devdock/devdock.ini"), &devdock_ini),
-            tokio::fs::write(self.workspace_root.join("config/devdock.ini"), &devdock_ini),
-            tokio::fs::write(self.workspace_root.join("config/run_local.ini"), &devdock_ini),
-            tokio::fs::write(runtime_gen.join("temp_profile.yaml"), &temp_profile),
-        )?;
+        // 5. Write all files in parallel (skip in benchmark mode)
+        if !self.skip_file_writes {
+            println!("⏩ Writing config files...");
+            let step_start = std::time::Instant::now();
+            tokio::try_join!(
+                tokio::fs::write(self.workspace_root.join("devdock/devdock.ini"), &devdock_ini),
+                tokio::fs::write(self.workspace_root.join("config/devdock.ini"), &devdock_ini),
+                tokio::fs::write(self.workspace_root.join("config/run_local.ini"), &devdock_ini),
+                tokio::fs::write(runtime_gen.join("temp_profile.yaml"), &temp_profile),
+            )?;
 
-        println!(
-            "✅ Config files written in {:.2}s (TOTAL: {:.2}s)",
-            step_start.elapsed().as_secs_f64(),
-            total_start.elapsed().as_secs_f64()
-        );
+            println!(
+                "✅ Config files written in {:.2}s (TOTAL: {:.2}s)",
+                step_start.elapsed().as_secs_f64(),
+                total_start.elapsed().as_secs_f64()
+            );
+        } else {
+            println!(
+                "✅ Config generation complete (TOTAL: {:.2}s)",
+                total_start.elapsed().as_secs_f64()
+            );
+        }
 
         // 6. Handle multi-project (glean-apps-canary) if present
         if let Some(ref multi_config) = profile.multi_project {

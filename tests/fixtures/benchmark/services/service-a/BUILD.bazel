@@ -1,0 +1,6 @@
+# Minimal BUILD file for service-a
+py_binary(
+    name = "service-a",
+    srcs = ["main.py"],
+    visibility = ["//visibility:public"],
+)

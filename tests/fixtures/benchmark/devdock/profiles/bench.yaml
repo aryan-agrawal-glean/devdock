@@ -1,0 +1,17 @@
+project: benchmark-test
+platform: google
+
+infra:
+  sql:
+    type: local
+
+services:
+  service-a:
+    type: local
+    env:
+      SERVICE_NAME: "service-a"
+  
+  service-b:
+    type: local
+    env:
+      SERVICE_NAME: "service-b"

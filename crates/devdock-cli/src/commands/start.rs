@@ -15,6 +15,7 @@ pub async fn execute(
     run_monitor: bool,
     monitor_timeout: Option<u64>,
     telemetry_enabled: bool,
+    dry_run: bool,
 ) -> Result<()> {
     // Track command start time for telemetry
     let command_start_time = chrono::Utc::now();
@@ -28,7 +29,11 @@ pub async fn execute(
 
     let validator = ProfileValidator::new();
     validator.validate(&profile)?;
-    validator.validate_gcloud_project(&profile)?;
+
+    // Skip gcloud project validation in dry-run mode (for benchmarking/CI)
+    if !dry_run {
+        validator.validate_gcloud_project(&profile)?;
+    }
     output::success("Profile validated");
 
     // Step 2: Resolve dependencies
@@ -36,51 +41,79 @@ pub async fn execute(
     let resolved_components = resolver.resolve(&profile)?;
     output::info(&format!("Resolved {} components", resolved_components.len()));
 
-    // Step 3: Check Docker is running
-    check_docker()?;
+    // Step 3: Check Docker is running (skip in dry-run mode)
+    if !dry_run {
+        check_docker()?;
+    }
 
-    // Step 4: Setup Docker networks
-    setup_docker_networks()?;
+    // Step 4: Setup Docker networks (skip in dry-run mode)
+    if !dry_run {
+        setup_docker_networks()?;
+    }
 
-    // Step 5: Register instance and allocate ports
-    let state_manager = StateManager::new().await?;
-    let port_allocator = PortAllocator::new(state_manager.clone()).await;
-    let port_base = port_allocator.allocate().await?;
+    // Step 5: Register instance and allocate ports (skip in dry-run mode)
+    let (state_manager, instance_id, port_base) = if !dry_run {
+        let state_manager = StateManager::new().await?;
+        let port_allocator = PortAllocator::new(state_manager.clone()).await;
+        let port_base = port_allocator.allocate().await?;
 
-    let workspace_path = std::env::current_dir()?.display().to_string();
-    let branch = get_git_branch()?;
+        let workspace_path = std::env::current_dir()?.display().to_string();
+        let branch = get_git_branch()?;
 
-    let instance = Instance {
-        id: Instance::generate_id(),
-        workspace_path: workspace_path.clone(),
-        workspace_name: None, // Local instances don't need workspace name
-        branch,
-        profile: profile_name.to_string(),
-        mode: "local".to_string(),
-        status: InstanceStatus::Starting,
-        port_base,
-        created_at: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64,
-        updated_at: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64,
+        let instance = Instance {
+            id: Instance::generate_id(),
+            workspace_path: workspace_path.clone(),
+            workspace_name: None, // Local instances don't need workspace name
+            branch,
+            profile: profile_name.to_string(),
+            mode: "local".to_string(),
+            status: InstanceStatus::Starting,
+            port_base,
+            created_at: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64,
+            updated_at: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64,
+        };
+
+        state_manager.register_instance(&instance).await?;
+        output::success(&format!(
+            "Registered instance: {} (port base: {})",
+            &instance.id[..8],
+            port_base
+        ));
+
+        (Some(state_manager), instance.id, port_base)
+    } else {
+        (None, String::new(), 0)
     };
-
-    state_manager.register_instance(&instance).await?;
-    output::success(&format!(
-        "Registered instance: {} (port base: {})",
-        &instance.id[..8],
-        port_base
-    ));
 
     // Step 6: Generate configuration files (Rust - parallel)
     let workspace_root = find_workspace_root()?;
     let profile_path_str = profile_path.to_string_lossy();
-    generate_configs_rust(&workspace_root, &profile, services, Some(&profile_path_str)).await?;
+    generate_configs_rust(&workspace_root, &profile, services, Some(&profile_path_str), dry_run)
+        .await?;
 
     // Step 7: Clean old logs and startup state files
     cleanup_old_logs()?;
     cleanup_startup_state_files()?;
 
+    // If dry-run mode, exit here with timing information
+    if dry_run {
+        let elapsed = chrono::Utc::now() - command_start_time;
+        let elapsed_ms = elapsed.num_milliseconds();
+
+        // Output timing in JSON format for benchmarking
+        println!("{{\"profile\": \"{}\", \"bootstrap_time_ms\": {}}}", profile_name, elapsed_ms);
+
+        output::success(&format!("Dry-run completed in {}ms", elapsed_ms));
+
+        // Force exit to avoid tokio runtime shutdown hang (benchmarking only)
+        std::process::exit(0);
+    }
+
+    // Unwrap state_manager (safe because dry_run is false)
+    let state_manager = state_manager.unwrap();
+
     // Step 8: Update status and start Tilt
-    state_manager.update_status(&instance.id, InstanceStatus::Running).await?;
+    state_manager.update_status(&instance_id, InstanceStatus::Running).await?;
 
     output::info("Starting Tilt...");
     let tilt_process = start_tilt(services)?;
@@ -105,7 +138,7 @@ pub async fn execute(
     wait_for_tilt(
         tilt_process,
         &state_manager,
-        &instance.id,
+        &instance_id,
         workspace_root,
         run_monitor,
         monitor_timeout,
@@ -208,12 +241,27 @@ async fn generate_configs_rust(
     profile: &devdock_core::profile::Profile,
     services: Option<&str>,
     profile_path: Option<&str>,
+    dry_run: bool,
 ) -> Result<()> {
     use devdock_config::{ConfigGenerator, WatchStrategy};
 
-    // Use Hybrid strategy: instant static patterns + background cquery refinement
-    let generator = ConfigGenerator::new(workspace_root.to_path_buf())
-        .with_watch_strategy(WatchStrategy::Hybrid);
+    // Use different strategy based on mode
+    let watch_strategy = if dry_run {
+        // Skip background threads entirely in dry-run mode to prevent hanging
+        WatchStrategy::Static
+    } else {
+        // Use Hybrid strategy: instant static patterns + background cquery refinement
+        WatchStrategy::Hybrid
+    };
+
+    let mut generator =
+        ConfigGenerator::new(workspace_root.to_path_buf()).with_watch_strategy(watch_strategy);
+
+    // Skip platform initialization and file writes in dry-run mode (for benchmarking)
+    if dry_run {
+        generator = generator.with_skip_platform_init(true).with_skip_file_writes(true);
+    }
+
     generator.generate(profile, services, profile_path).await?;
 
     Ok(())

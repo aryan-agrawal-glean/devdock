@@ -45,6 +45,71 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --all-features --workspace
 
+      # Run startup benchmark and check thresholds (PR only, both OS)
+      - name: Startup Time Benchmark
+        if: github.event_name == 'pull_request'
+        run: |
+          echo "Running startup benchmark test..."
+          echo ""
+
+          set +e
+          cargo test -p devdock-cli benchmark_startup -- --ignored --nocapture 2>&1 | tee benchmark_output.txt
+          TEST_EXIT_CODE=$?
+          set -e
+
+          echo ""
+          if [ $TEST_EXIT_CODE -ne 0 ]; then
+            echo "❌ Benchmark test failed with exit code $TEST_EXIT_CODE"
+            echo ""
+            echo "=== Full Output ==="
+            cat benchmark_output.txt
+            exit 1
+          fi
+
+          echo "=== Extracting Timing ==="
+          if grep -q '"bootstrap_time_ms"' benchmark_output.txt; then
+            # Extract just the number from the JSON line (portable for both GNU and BSD sed)
+            BOOTSTRAP_TIME=$(grep '"bootstrap_time_ms"' benchmark_output.txt | sed -E 's/.*"bootstrap_time_ms": *([0-9]+).*/\1/')
+
+            if [ -z "$BOOTSTRAP_TIME" ]; then
+              echo "❌ Extracted value is empty"
+              echo "Line found:"
+              grep '"bootstrap_time_ms"' benchmark_output.txt
+              exit 1
+            fi
+
+            echo "✅ Extracted: ${BOOTSTRAP_TIME}ms"
+          else
+            echo "❌ Failed to find bootstrap_time_ms in output"
+            echo ""
+            echo "=== Full Output ==="
+            cat benchmark_output.txt
+            exit 1
+          fi
+
+          echo ""
+          echo "=== Performance Check ==="
+          BOOTSTRAP_SEC=$(awk "BEGIN {printf \"%.2f\", $BOOTSTRAP_TIME / 1000}")
+          echo "Bootstrap time: ${BOOTSTRAP_TIME}ms (${BOOTSTRAP_SEC}s)"
+
+          # Thresholds
+          FAIL_THRESHOLD=15000    # 15 seconds
+          WARN_THRESHOLD=10000    # 10 seconds
+
+          if [ "$BOOTSTRAP_TIME" -gt "$FAIL_THRESHOLD" ]; then
+            echo ""
+            echo "❌ PERFORMANCE REGRESSION!"
+            echo "Bootstrap time (${BOOTSTRAP_SEC}s) exceeds 15s threshold"
+            exit 1
+          elif [ "$BOOTSTRAP_TIME" -gt "$WARN_THRESHOLD" ]; then
+            echo ""
+            echo "⚠️  WARNING: Bootstrap time is elevated (${BOOTSTRAP_SEC}s)"
+            echo "Between 10-15s. Consider investigating."
+          else
+            echo ""
+            echo "✅ EXCELLENT: Bootstrap time under 10s"
+          fi
+
   doc:
     name: Documentation
     runs-on: ubuntu-latest
