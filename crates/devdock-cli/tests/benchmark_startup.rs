@@ -7,8 +7,10 @@
 //! spawning the Tilt process, using the --dry-run flag.
 
 use std::path::PathBuf;
-use std::process::Command;
-use std::time::Instant;
+use std::process::{Command, Stdio};
+use std::sync::mpsc;
+use std::thread;
+use std::time::{Duration, Instant};
 
 #[test]
 #[ignore] // Only run when explicitly requested
@@ -36,13 +38,30 @@ fn benchmark_startup_bootstrap_time() {
     let test_fixture = workspace_root.join("tests/fixtures/benchmark");
     assert!(test_fixture.exists(), "Test fixture not found at {}", test_fixture.display());
 
-    // Run the benchmark
+    // Run the benchmark with a timeout to prevent hanging
     let start = Instant::now();
-    let output = Command::new(&binary_path)
-        .args(["start", "bench", "--dry-run", "--ci-mode"])
-        .current_dir(&test_fixture)
-        .env("HOME", std::env::var("HOME").unwrap())
-        .output()
+
+    let (tx, rx) = mpsc::channel();
+    let binary_path_clone = binary_path.clone();
+    let test_fixture_clone = test_fixture.clone();
+    let home = std::env::var("HOME").unwrap();
+
+    // Spawn the command in a separate thread
+    thread::spawn(move || {
+        let output = Command::new(&binary_path_clone)
+            .args(["start", "bench", "--dry-run", "--ci-mode"])
+            .current_dir(&test_fixture_clone)
+            .env("HOME", home)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output();
+        tx.send(output).ok();
+    });
+
+    // Wait with a 20-second timeout
+    let output = rx
+        .recv_timeout(Duration::from_secs(20))
+        .expect("Command timed out after 20 seconds")
         .expect("Failed to execute devdock start");
 
     let elapsed = start.elapsed();
