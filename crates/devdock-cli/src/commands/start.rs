@@ -79,7 +79,7 @@ pub async fn execute(
             &instance.id[..8],
             port_base
         ));
-        
+
         (Some(state_manager), instance.id)
     } else {
         (None, String::new())

@@ -38,7 +38,7 @@ fn benchmark_startup_bootstrap_time() {
 
     // Run the benchmark with timeout
     let start = Instant::now();
-    
+
     // Spawn the process
     let mut child = Command::new(&binary_path)
         .args(["start", "bench", "--dry-run", "--ci-mode"])
@@ -48,18 +48,17 @@ fn benchmark_startup_bootstrap_time() {
         .stderr(std::process::Stdio::piped())
         .spawn()
         .expect("Failed to spawn devdock start");
-    
+
     // Wait with a timeout (30 seconds should be plenty for dry-run)
     let timeout = std::time::Duration::from_secs(30);
-    let wait_result = std::thread::spawn(move || child.wait_with_output())
-        .join()
-        .expect("Thread panicked");
-    
+    let wait_result =
+        std::thread::spawn(move || child.wait_with_output()).join().expect("Thread panicked");
+
     let output = match wait_result {
         Ok(output) => output.expect("Failed to get output"),
         Err(e) => panic!("Command failed: {}", e),
     };
-    
+
     let elapsed = start.elapsed();
 
     // Parse JSON output
