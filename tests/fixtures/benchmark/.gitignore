@@ -1,3 +1,5 @@
 # Ignore generated files
 devdock/runtime_generated/
+devdock/devdock.ini
+config/
 *.log
