@@ -129,7 +129,6 @@ pub async fn execute(
         println!("\nResource monitor enabled (timeout: {}s)...\n", monitor_timeout.unwrap_or(1200));
     } else {
         println!("\nPress Ctrl+C to stop DevDock");
-        println!("Tip: Use --monitor to automatically wait for all resources to become healthy\n");
     }
 
     // Wait for Tilt process (optionally with monitoring)
