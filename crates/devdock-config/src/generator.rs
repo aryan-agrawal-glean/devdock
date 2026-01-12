@@ -302,11 +302,20 @@ impl ConfigGenerator {
         use crate::ini_generator::IniGeneratorContext;
 
         // Create context with multi_project=true
-        let context = IniGeneratorContext {
+        let mut context = IniGeneratorContext {
             multi_project: true,
             has_quality_pipelines: false,
             project: profile.project.clone(),
+            sql_metadata: None,
         };
+
+        // Pre-fetch SQL metadata if SQL is remote
+        if let Some(metadata) = self
+            .fetch_sql_metadata_if_needed(profile, platform, dynamic_ini, "multi-project INI")
+            .await
+        {
+            context = context.with_sql_metadata(metadata);
+        }
 
         // Create generator with context
         let mut generator = if let Some(base) = dynamic_ini {
@@ -371,6 +380,39 @@ impl ConfigGenerator {
         }
     }
 
+    /// Fetch SQL metadata if SQL is remote and dynamic_ini is present
+    async fn fetch_sql_metadata_if_needed(
+        &self,
+        profile: &Profile,
+        platform: &dyn Platform,
+        dynamic_ini: Option<&ParsedIniConfig>,
+        context_name: &str,
+    ) -> Option<crate::sql::SqlRemoteMetadata> {
+        if let Some(sql_config) = profile.infra.get("sql") {
+            if sql_config.deployment_type == devdock_core::types::DeploymentType::Remote {
+                if let Some(ini) = dynamic_ini {
+                    match crate::sql::SqlUtils::fetch_remote_metadata(
+                        &profile.project,
+                        &profile.platform.to_string(),
+                        platform.zone(),
+                        ini,
+                    )
+                    .await
+                    {
+                        Ok(metadata) => return Some(metadata),
+                        Err(e) => {
+                            eprintln!(
+                                "Warning: Failed to fetch SQL metadata for {}: {}",
+                                context_name, e
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
     /// Generate devdock.ini configuration
     async fn generate_devdock_ini(
         &self,
@@ -382,7 +424,14 @@ impl ConfigGenerator {
         use crate::ini_generator::IniGeneratorContext;
 
         // Create context from profile
-        let context = IniGeneratorContext::from_profile(profile);
+        let mut context = IniGeneratorContext::from_profile(profile);
+
+        // Pre-fetch SQL metadata if SQL is remote
+        if let Some(metadata) =
+            self.fetch_sql_metadata_if_needed(profile, platform, dynamic_ini, "INI").await
+        {
+            context = context.with_sql_metadata(metadata);
+        }
 
         // Create generator with context, optionally with base config from dynamic INI
         let mut generator = if let Some(base) = dynamic_ini {
@@ -429,6 +478,14 @@ impl ConfigGenerator {
         // If we have dynamic.ini, pass it to the generator for namespace resolution
         if let Some(ref ini) = dynamic_ini {
             generator = generator.with_dynamic_ini(ini.clone());
+        }
+
+        // Pre-fetch SQL metadata if SQL is remote
+        if let Some(metadata) = self
+            .fetch_sql_metadata_if_needed(profile, platform, dynamic_ini.as_ref(), "temp_profile")
+            .await
+        {
+            generator = generator.with_sql_metadata(metadata);
         }
 
         // Apply profile-level settings (vault_key, pipelines, test_suite, env)

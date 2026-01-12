@@ -17,6 +17,8 @@ pub struct TempProfileGenerator {
     profile: TempProfileData,
     /// Reference to dynamic.ini for reading production config values
     dynamic_ini: Option<ParsedIniConfig>,
+    /// Pre-fetched remote SQL metadata (for remote SQL configuration)
+    sql_remote_metadata: Option<crate::sql::SqlRemoteMetadata>,
 }
 
 #[derive(Debug, Serialize)]
@@ -37,6 +39,8 @@ pub struct TempProfileData {
     pub k8s_service_account: Option<String>,
     pub debug_mode: String,
     pub vault_key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub aws_account_id: Option<String>,
     pub services: HashMap<String, ServiceProfileEntry>,
     pub infra: HashMap<String, InfraProfileEntry>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -129,6 +133,7 @@ impl TempProfileGenerator {
             k8s_service_account: None,
             debug_mode: "False".to_string(),
             vault_key: String::new(),
+            aws_account_id: None,
             services: HashMap::new(),
             infra: HashMap::new(),
             pipelines: None,
@@ -137,12 +142,18 @@ impl TempProfileGenerator {
             multi_project: None,
         };
 
-        Self { profile, dynamic_ini: None }
+        Self { profile, dynamic_ini: None, sql_remote_metadata: None }
     }
 
     /// Set the dynamic.ini config for reading production values
     pub fn with_dynamic_ini(mut self, dynamic_ini: ParsedIniConfig) -> Self {
         self.dynamic_ini = Some(dynamic_ini);
+        self
+    }
+
+    /// Set pre-fetched SQL remote metadata
+    pub fn with_sql_metadata(mut self, metadata: crate::sql::SqlRemoteMetadata) -> Self {
+        self.sql_remote_metadata = Some(metadata);
         self
     }
 
@@ -181,6 +192,7 @@ impl TempProfileGenerator {
     /// Queries AWS EC2 for the bastion instance in the specified region.
     fn get_aws_bastion_instance_id(&self, region: &str) -> Option<String> {
         // Use AWS CLI to describe instances
+        println!("   └─ Looking up AWS bastion instance in region: {}", region);
         let output = Command::new("aws")
             .args([
                 "ec2",
@@ -201,18 +213,22 @@ impl TempProfileGenerator {
             Ok(out) if out.status.success() => {
                 let instance_id = String::from_utf8_lossy(&out.stdout).trim().to_string();
                 if instance_id.is_empty() || instance_id == "None" {
-                    warn!("No running bastion instance found in region {}", region);
+                    eprintln!("⚠️  No running bastion instance found in region {}", region);
                     None
                 } else {
+                    println!("   └─ Found bastion instance: {}", instance_id);
                     Some(instance_id)
                 }
             }
             Ok(out) => {
-                warn!("Failed to get bastion instance: {}", String::from_utf8_lossy(&out.stderr));
+                eprintln!(
+                    "⚠️  Failed to get bastion instance: {}",
+                    String::from_utf8_lossy(&out.stderr)
+                );
                 None
             }
             Err(e) => {
-                warn!("Failed to execute aws cli: {}", e);
+                eprintln!("⚠️  Failed to execute aws cli: {}", e);
                 None
             }
         }
@@ -234,12 +250,17 @@ impl TempProfileGenerator {
 
         platform.update_temp_profile(&mut temp_profile);
 
-        self.profile.project = temp_profile.project;
-        self.profile.platform = temp_profile.platform;
+        self.profile.project = temp_profile.project.clone();
+        self.profile.platform = temp_profile.platform.clone();
         self.profile.zone = temp_profile.zone;
         self.profile.region = temp_profile.region;
         self.profile.project_number = temp_profile.project_number;
         self.profile.dns_kubectl = Some(temp_profile.dns_kubectl);
+
+        // For AWS platform, set aws_account_id from project
+        if temp_profile.platform == "aws" {
+            self.profile.aws_account_id = Some(temp_profile.project);
+        }
     }
 
     /// Apply the original profile settings (pipelines, test_suite, env, vault_key)
@@ -455,26 +476,46 @@ impl TempProfileGenerator {
             extra.insert(key.clone(), value.clone());
         }
 
-        // SQL-specific defaults for local
-        if name == "sql" && infra_type == "local" {
-            // Set k8s_service_account for local SQL
-            self.profile.k8s_service_account = Some("root".to_string());
+        // SQL-specific configuration
+        if name == "sql" {
+            if infra_type == "local" {
+                // Set k8s_service_account for local SQL
+                self.profile.k8s_service_account = Some("root".to_string());
 
-            // Set defaults if not present
-            if !extra.contains_key("mode") {
-                extra.insert("mode".to_string(), serde_json::Value::String("fast".to_string()));
-            }
-            if !extra.contains_key("copy_tables") {
-                extra.insert("copy_tables".to_string(), serde_json::Value::String(String::new()));
-            }
-            if !extra.contains_key("full_cleanup") {
-                extra.insert("full_cleanup".to_string(), serde_json::Value::Bool(false));
-            }
-            if !extra.contains_key("copy_keyval") {
-                extra.insert("copy_keyval".to_string(), serde_json::Value::Bool(true));
-            }
-            if !extra.contains_key("copy_where_queries") {
-                extra.insert("copy_where_queries".to_string(), serde_json::Value::Array(vec![]));
+                // Set defaults if not present
+                if !extra.contains_key("mode") {
+                    extra.insert("mode".to_string(), serde_json::Value::String("fast".to_string()));
+                }
+                if !extra.contains_key("copy_tables") {
+                    extra.insert(
+                        "copy_tables".to_string(),
+                        serde_json::Value::String(String::new()),
+                    );
+                }
+                if !extra.contains_key("full_cleanup") {
+                    extra.insert("full_cleanup".to_string(), serde_json::Value::Bool(false));
+                }
+                if !extra.contains_key("copy_keyval") {
+                    extra.insert("copy_keyval".to_string(), serde_json::Value::Bool(true));
+                }
+                if !extra.contains_key("copy_where_queries") {
+                    extra
+                        .insert("copy_where_queries".to_string(), serde_json::Value::Array(vec![]));
+                }
+            } else {
+                // Remote SQL configuration
+                // Don't include copy_tables/mode/etc for remote SQL
+                extra.retain(|k, _| {
+                    !matches!(
+                        k.as_str(),
+                        "copy_tables"
+                            | "mode"
+                            | "full_cleanup"
+                            | "copy_keyval"
+                            | "copy_where_queries"
+                    )
+                });
+                self.apply_remote_sql_config(&mut extra);
             }
         }
 
@@ -652,6 +693,178 @@ impl TempProfileGenerator {
     /// Add a service to the TOP-LEVEL services dict (used for multi-project services)
     pub fn add_service(&mut self, name: &str, entry: ServiceProfileEntry) {
         self.profile.services.insert(name.to_string(), entry);
+    }
+
+    /// Apply remote SQL configuration to temp_profile (matches Python logic)
+    fn apply_remote_sql_config(&mut self, extra: &mut HashMap<String, serde_json::Value>) {
+        let Some(ref metadata) = self.sql_remote_metadata else {
+            warn!("No SQL metadata available for remote SQL configuration");
+            return;
+        };
+
+        let platform = self.profile.platform.as_str();
+
+        // Check if this is multi-project (nested under glean_apps_canary)
+        let is_multi_project = self.profile.multi_project.is_some();
+
+        match platform {
+            "azure" => {
+                // Azure: Fixed ports with bastion
+                let ports = vec![3407, 3408];
+                extra.insert("ports".to_string(), serde_json::json!(ports));
+                extra.insert("bastion".to_string(), serde_json::json!(true));
+
+                let instances: Vec<String> = metadata.instances.keys().cloned().collect();
+                extra.insert("instances".to_string(), serde_json::json!(instances));
+
+                // Update bastion config
+                self.profile.infra.entry("bastion".to_string()).or_insert_with(|| {
+                    InfraProfileEntry { infra_type: "local".to_string(), extra: HashMap::new() }
+                });
+
+                if let Some(bastion) = self.profile.infra.get_mut("bastion") {
+                    let mut local_to_remote = bastion
+                        .extra
+                        .get("local_to_remote_ports")
+                        .and_then(|v| serde_json::from_value::<Vec<Vec<u16>>>(v.clone()).ok())
+                        .unwrap_or_default();
+
+                    local_to_remote.push(vec![3407, 7972]);
+                    local_to_remote.push(vec![3408, 7973]);
+
+                    bastion.extra.insert(
+                        "local_to_remote_ports".to_string(),
+                        serde_json::json!(local_to_remote),
+                    );
+                }
+
+                self.profile.k8s_service_account = Some("mysqladmin".to_string());
+            }
+            "aws" => {
+                // AWS: Direct RDS connections
+                let curr_port_base = if is_multi_project { 3311 } else { 3307 };
+                let mut connections = Vec::new();
+                let mut ports = Vec::new();
+
+                if let Some(ref dynamic_ini) = self.dynamic_ini {
+                    for (idx, instance_name) in
+                        ["frontendInstance", "backendInstance"].iter().enumerate()
+                    {
+                        let key = format!("{}.aws.instanceEndpoint", instance_name);
+                        if let Some(endpoint) = dynamic_ini.get("sql", &key) {
+                            connections.push(endpoint.clone());
+                            ports.push(curr_port_base + idx as u16);
+                        }
+                    }
+                }
+
+                extra.insert("connections".to_string(), serde_json::json!(connections));
+                extra.insert("ports".to_string(), serde_json::json!(ports));
+            }
+            "google" => {
+                // GCP: Two paths - cloud-sql-proxy or bastion
+                let curr_port_base = if is_multi_project { 3311 } else { 3307 };
+
+                if metadata.use_public_ip || !metadata.is_bastion_available {
+                    // Path 1: Use cloud-sql-proxy
+                    let mut cloud_sql_args = Vec::new();
+                    let mut curr_port = curr_port_base;
+
+                    // Order matters: frontendInstance first, then backendInstance
+                    let ordered_instances = vec!["frontendInstance", "backendInstance"];
+                    for instance_name in ordered_instances {
+                        if let Some(connection_str) = metadata.instances.get(instance_name) {
+                            if !connection_str.is_empty() {
+                                cloud_sql_args
+                                    .push(format!("{}?port={}", connection_str, curr_port));
+                                curr_port += 1;
+                            }
+                        }
+                    }
+
+                    if metadata.use_iam_auth {
+                        cloud_sql_args.push("--auto-iam-authn".to_string());
+                    }
+
+                    extra.insert("cloud_sql_args".to_string(), serde_json::json!(cloud_sql_args));
+                } else {
+                    // Path 2: Use bastion tunnel
+                    extra.insert("bastion".to_string(), serde_json::json!(true));
+                    extra.insert(
+                        "use_iam_auth".to_string(),
+                        serde_json::json!(metadata.use_iam_auth),
+                    );
+
+                    // Order matters: frontendInstance first, then backendInstance
+                    // This must match the INI generation order
+                    let ordered_instances = ["frontendInstance", "backendInstance"];
+                    let mut instances_list = Vec::new();
+                    let mut ports = Vec::new();
+                    let mut curr_port = curr_port_base;
+
+                    for instance_name in &ordered_instances {
+                        if metadata.instances.contains_key(*instance_name) {
+                            instances_list.push(instance_name.to_string());
+                            ports.push(curr_port);
+                            curr_port += 1;
+                        }
+                    }
+
+                    extra.insert("instances".to_string(), serde_json::json!(instances_list));
+                    extra.insert("ports".to_string(), serde_json::json!(ports));
+
+                    // Update bastion config with port forwarding
+                    if let Some(ref dynamic_ini) = self.dynamic_ini {
+                        let bastion_port_map =
+                            crate::sql::get_bastion_port_map(dynamic_ini, metadata.use_iam_auth);
+
+                        self.profile.infra.entry("bastion".to_string()).or_insert_with(|| {
+                            InfraProfileEntry {
+                                infra_type: "local".to_string(),
+                                extra: HashMap::new(),
+                            }
+                        });
+
+                        if let Some(bastion) = self.profile.infra.get_mut("bastion") {
+                            let mut local_to_remote = bastion
+                                .extra
+                                .get("local_to_remote_ports")
+                                .and_then(|v| {
+                                    serde_json::from_value::<Vec<Vec<u16>>>(v.clone()).ok()
+                                })
+                                .unwrap_or_default();
+
+                            // Add SQL port mappings in order
+                            for (i, instance_name) in instances_list.iter().enumerate() {
+                                let local_port = ports[i];
+                                if let Some(&remote_port) = bastion_port_map.get(instance_name) {
+                                    local_to_remote.push(vec![local_port, remote_port]);
+                                }
+                            }
+
+                            bastion.extra.insert(
+                                "local_to_remote_ports".to_string(),
+                                serde_json::json!(local_to_remote),
+                            );
+                        }
+
+                        // Set sql_account for IAM auth
+                        if metadata.use_iam_auth {
+                            if let Some(account) = dynamic_ini.get("sql", "serviceAccount") {
+                                self.profile.vault_key = account.clone();
+                            }
+                        }
+                    }
+                }
+
+                // Special handling for glean-apps-canary and scio-apps
+                if matches!(metadata.project.as_str(), "glean-apps-canary" | "scio-apps") {
+                    // These projects use simplified config
+                    // The actual db.host is already set in devdock.ini
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Generate the final YAML string

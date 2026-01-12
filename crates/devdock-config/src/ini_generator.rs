@@ -15,6 +15,8 @@ pub struct IniGeneratorContext {
     pub has_quality_pipelines: bool,
     /// Project name (for special project handling)
     pub project: String,
+    /// SQL remote metadata (for remote SQL configuration)
+    pub sql_metadata: Option<crate::sql::SqlRemoteMetadata>,
 }
 
 impl IniGeneratorContext {
@@ -22,7 +24,18 @@ impl IniGeneratorContext {
         let has_quality_pipelines = profile.pipelines.contains_key("quality_pipelines");
         let multi_project = profile.multi_project.is_some();
 
-        Self { multi_project, has_quality_pipelines, project: profile.project.clone() }
+        Self {
+            multi_project,
+            has_quality_pipelines,
+            project: profile.project.clone(),
+            sql_metadata: None,
+        }
+    }
+
+    /// Set SQL metadata for remote SQL configuration
+    pub fn with_sql_metadata(mut self, metadata: crate::sql::SqlRemoteMetadata) -> Self {
+        self.sql_metadata = Some(metadata);
+        self
     }
 }
 
@@ -232,26 +245,50 @@ impl IniGenerator {
             // Port base for remote SQL proxy
             let curr_port = if self.context.multi_project { 3311 } else { 3307 };
 
-            // For remote, we still set these but with different values
-            // The actual cloud-sql-proxy setup happens in Tiltfile based on temp_profile.yaml
-            self.config.set("sql", "useSecretsManagerForPassword", "true");
-            self.config.set("sql", "useDbIAMAuth", "true");
+            // Check if we have metadata about public IP
+            let use_public_ip =
+                self.context.sql_metadata.as_ref().map(|m| m.use_public_ip).unwrap_or(false);
 
-            // Set host for remote SQL (goes through cloud-sql-proxy)
-            let instances =
-                vec![("frontendInstance", curr_port), ("backendInstance", curr_port + 1)];
-
-            for (instance, port) in instances {
-                self.config.set(
-                    "sql",
-                    &format!("{instance}.db.host"),
-                    format!("host.docker.internal:{port}"),
-                );
+            // Set auth configuration based on public IP
+            if use_public_ip
+                && !matches!(
+                    self.context.project.as_str(),
+                    "glean-apps-canary" | "scio-engineering"
+                )
+            {
+                // Public IP in test projects: use glean_local user, no IAM
+                self.config.set("sql", "useDbIAMAuth", "false");
+                self.config.set("sql", "useCloudSqlConnectorInQe", "false");
+                // Note: Don't set useSecretsManagerForPassword for public IP path
+            } else {
+                // Private IP or canary: use IAM auth
+                self.config.set("sql", "useSecretsManagerForPassword", "true");
+                self.config.set("sql", "useDbIAMAuth", "true");
             }
 
-            // Set googlecloud.instanceName for frontend and backend
-            self.config.set("sql", "frontendInstance.googlecloud.instanceName", "");
-            self.config.set("sql", "backendInstance.googlecloud.instanceName", "");
+            // Set host for remote SQL (goes through cloud-sql-proxy or bastion)
+            // Order matters: frontendInstance first, then backendInstance
+            let instances = ["frontendInstance", "backendInstance"];
+
+            for (idx, instance) in instances.iter().enumerate() {
+                let port = curr_port + idx as u16;
+                self.config.set(
+                    "sql",
+                    &format!("{}.db.host", instance),
+                    format!("host.docker.internal:{}", port),
+                );
+                self.config.set("sql", &format!("{}.googlecloud.instanceName", instance), "");
+
+                // Set db.user for public IP instances
+                if use_public_ip
+                    && !matches!(
+                        self.context.project.as_str(),
+                        "glean-apps-canary" | "scio-engineering"
+                    )
+                {
+                    self.config.set("sql", &format!("{}.db.user", instance), "glean_local");
+                }
+            }
 
             // Special handling for glean-apps-canary and scio-apps
             if self.context.project == "glean-apps-canary" || self.context.project == "scio-apps" {
@@ -260,6 +297,7 @@ impl IniGenerator {
                     "db.host",
                     format!("host.docker.internal:{}", curr_port + 1),
                 );
+                self.config.set("sql", "googlecloud.instanceName", "");
             }
         }
     }
