@@ -52,7 +52,7 @@ pub async fn execute(
     }
 
     // Step 5: Register instance and allocate ports (skip in dry-run mode)
-    let (state_manager, instance_id) = if !dry_run {
+    let (state_manager, instance_id, port_base) = if !dry_run {
         let state_manager = StateManager::new().await?;
         let port_allocator = PortAllocator::new(state_manager.clone()).await;
         let port_base = port_allocator.allocate().await?;
@@ -79,10 +79,10 @@ pub async fn execute(
             &instance.id[..8],
             port_base
         ));
-
-        (Some(state_manager), instance.id)
+        
+        (Some(state_manager), instance.id, port_base)
     } else {
-        (None, String::new())
+        (None, String::new(), 0)
     };
 
     // Step 6: Generate configuration files (Rust - parallel)
