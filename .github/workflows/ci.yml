@@ -45,6 +45,65 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --all-features --workspace
 
+      # Run startup benchmark (PR only, ubuntu only to avoid duplication)
+      - name: Run startup benchmark
+        if: github.event_name == 'pull_request' && matrix.os == 'ubuntu-latest'
+        id: benchmark
+        run: |
+          echo "Running startup benchmark test..."
+          set +e
+          cargo test -p devdock-cli benchmark_startup -- --ignored --nocapture 2>&1 | tee benchmark_output.txt
+          TEST_EXIT_CODE=$?
+          set -e
+          
+          if [ $TEST_EXIT_CODE -ne 0 ]; then
+            echo "❌ Benchmark test failed"
+            cat benchmark_output.txt
+            exit 1
+          fi
+          
+          if grep -q '"bootstrap_time_ms"' benchmark_output.txt; then
+            BOOTSTRAP_TIME=$(grep -o '"bootstrap_time_ms":[0-9]*' benchmark_output.txt | grep -o '[0-9]*' | head -1)
+            echo "bootstrap_time_ms=$BOOTSTRAP_TIME" >> $GITHUB_OUTPUT
+            echo "✅ Bootstrap time: ${BOOTSTRAP_TIME}ms"
+          else
+            echo "❌ Failed to extract timing"
+            cat benchmark_output.txt
+            exit 1
+          fi
+
+      # Check performance thresholds (PR only, ubuntu only)
+      - name: Check performance thresholds
+        if: github.event_name == 'pull_request' && matrix.os == 'ubuntu-latest'
+        env:
+          BOOTSTRAP_TIME: ${{ steps.benchmark.outputs.bootstrap_time_ms }}
+        run: |
+          echo "=== Benchmark Results ==="
+          
+          if [ -z "$BOOTSTRAP_TIME" ]; then
+            echo "❌ Bootstrap time not found"
+            exit 1
+          fi
+          
+          BOOTSTRAP_SEC=$(awk "BEGIN {printf \"%.2f\", $BOOTSTRAP_TIME / 1000}")
+          echo "Bootstrap time: ${BOOTSTRAP_TIME}ms (${BOOTSTRAP_SEC}s)"
+          echo ""
+          
+          # Thresholds
+          FAIL_THRESHOLD=15000    # 15 seconds
+          WARN_THRESHOLD=10000    # 10 seconds
+          
+          if [ "$BOOTSTRAP_TIME" -gt "$FAIL_THRESHOLD" ]; then
+            echo "❌ PERFORMANCE REGRESSION!"
+            echo "Bootstrap time (${BOOTSTRAP_SEC}s) exceeds 15s threshold"
+            exit 1
+          elif [ "$BOOTSTRAP_TIME" -gt "$WARN_THRESHOLD" ]; then
+            echo "⚠️  WARNING: Bootstrap time is elevated (${BOOTSTRAP_SEC}s)"
+            echo "Between 10-15s. Consider investigating."
+          else
+            echo "✅ EXCELLENT: Bootstrap time under 10s"
+          fi
+
   doc:
     name: Documentation
     runs-on: ubuntu-latest
@@ -88,93 +147,3 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo check --all-features --workspace
 
-  benchmark:
-    name: Startup Time Benchmark
-    runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-
-      # Run the benchmark
-      - name: Run startup benchmark
-        id: benchmark
-        run: |
-          echo "Running benchmark test..."
-          set +e  # Don't exit immediately on error
-          cargo test --release -p devdock-cli benchmark_startup -- --ignored --nocapture 2>&1 | tee benchmark_output.txt
-          TEST_EXIT_CODE=$?
-          set -e
-          
-          echo ""
-          echo "=== Test Exit Code: $TEST_EXIT_CODE ==="
-          
-          # Check if test passed
-          if [ $TEST_EXIT_CODE -ne 0 ]; then
-            echo "❌ Benchmark test failed"
-            echo ""
-            echo "=== Full Benchmark Output ==="
-            cat benchmark_output.txt
-            exit 1
-          fi
-          
-          # Extract bootstrap time from JSON output
-          if grep -q '"bootstrap_time_ms"' benchmark_output.txt; then
-            BOOTSTRAP_TIME=$(grep -o '"bootstrap_time_ms":[0-9]*' benchmark_output.txt | grep -o '[0-9]*' | head -1)
-            echo "bootstrap_time_ms=$BOOTSTRAP_TIME" >> $GITHUB_OUTPUT
-            echo ""
-            echo "✅ Successfully extracted bootstrap time: ${BOOTSTRAP_TIME}ms"
-          else
-            echo "❌ Failed to extract bootstrap time from output"
-            echo ""
-            echo "=== Full Benchmark Output ==="
-            cat benchmark_output.txt
-            exit 1
-          fi
-
-      # Check against thresholds
-      - name: Check performance thresholds
-        env:
-          BOOTSTRAP_TIME: ${{ steps.benchmark.outputs.bootstrap_time_ms }}
-        run: |
-          echo "=== Benchmark Results ==="
-          
-          # Check if BOOTSTRAP_TIME is set
-          if [ -z "$BOOTSTRAP_TIME" ]; then
-            echo "❌ ERROR: Bootstrap time not found"
-            echo "The benchmark test may have failed to run or produce output."
-            exit 1
-          fi
-          
-          echo "Bootstrap time: ${BOOTSTRAP_TIME}ms"
-          echo ""
-          
-          # Convert to seconds for display
-          BOOTSTRAP_SEC=$(awk "BEGIN {printf \"%.2f\", $BOOTSTRAP_TIME / 1000}")
-          echo "Bootstrap time: ${BOOTSTRAP_SEC}s"
-          echo ""
-          
-          # Thresholds
-          FAIL_THRESHOLD=15000    # 15 seconds
-          WARN_THRESHOLD=10000    # 10 seconds
-          
-          if [ "$BOOTSTRAP_TIME" -gt "$FAIL_THRESHOLD" ]; then
-            echo "❌ PERFORMANCE REGRESSION DETECTED!"
-            echo "Bootstrap time (${BOOTSTRAP_SEC}s) exceeds failure threshold (15s)"
-            echo ""
-            echo "This is a significant performance regression. Please investigate and optimize."
-            exit 1
-          elif [ "$BOOTSTRAP_TIME" -gt "$WARN_THRESHOLD" ]; then
-            echo "⚠️  WARNING: Bootstrap time is elevated"
-            echo "Bootstrap time (${BOOTSTRAP_SEC}s) is between 10-15s"
-            echo ""
-            echo "Consider investigating if this is expected. Threshold for failure is 15s."
-            # Don't fail, just warn
-          else
-            echo "✅ EXCELLENT: Bootstrap time is under 10s"
-          fi
-          
-          echo ""
-          echo "Benchmark check passed!"
