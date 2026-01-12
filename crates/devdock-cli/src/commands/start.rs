@@ -126,12 +126,10 @@ pub async fn execute(
     println!("  Services: https://local.glean.com:{port_base}");
 
     if run_monitor {
-        println!(
-            "\nStarting resource monitor (timeout: {}s)...\n",
-            monitor_timeout.unwrap_or(1200)
-        );
+        println!("\nResource monitor enabled (timeout: {}s)...\n", monitor_timeout.unwrap_or(1200));
     } else {
-        println!("\nPress Ctrl+C to stop DevDock\n");
+        println!("\nPress Ctrl+C to stop DevDock");
+        println!("Tip: Use --monitor to automatically wait for all resources to become healthy\n");
     }
 
     // Wait for Tilt process (optionally with monitoring)
@@ -346,6 +344,9 @@ fn start_tilt(services: Option<&str>) -> Result<Child> {
 
     // Set DEVDOCK_ROOT environment variable
     std::env::set_var("DEVDOCK_ROOT", &workspace_root);
+
+    // Set DEVDOCK_RUST_BINARY to indicate the Rust implementation is being used
+    std::env::set_var("DEVDOCK_RUST_BINARY", "true");
 
     // Build tilt command
     let mut cmd = Command::new("tilt");
