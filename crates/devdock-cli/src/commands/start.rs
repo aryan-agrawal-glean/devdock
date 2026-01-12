@@ -104,7 +104,9 @@ pub async fn execute(
         println!("{{\"profile\": \"{}\", \"bootstrap_time_ms\": {}}}", profile_name, elapsed_ms);
 
         output::success(&format!("Dry-run completed in {}ms", elapsed_ms));
-        return Ok(());
+
+        // Force exit to avoid tokio runtime shutdown hang (benchmarking only)
+        std::process::exit(0);
     }
 
     // Unwrap state_manager (safe because dry_run is false)

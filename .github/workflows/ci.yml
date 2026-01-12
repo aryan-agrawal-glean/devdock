@@ -68,8 +68,8 @@ jobs:
 
           echo "=== Extracting Timing ==="
           if grep -q '"bootstrap_time_ms"' benchmark_output.txt; then
-            # Extract just the number from the JSON line
-            BOOTSTRAP_TIME=$(grep '"bootstrap_time_ms"' benchmark_output.txt | sed -n 's/.*"bootstrap_time_ms": *\([0-9]\+\).*/\1/p')
+            # Extract just the number from the JSON line (portable for both GNU and BSD sed)
+            BOOTSTRAP_TIME=$(grep '"bootstrap_time_ms"' benchmark_output.txt | sed -E 's/.*"bootstrap_time_ms": *([0-9]+).*/\1/')
 
             if [ -z "$BOOTSTRAP_TIME" ]; then
               echo "❌ Extracted value is empty"
