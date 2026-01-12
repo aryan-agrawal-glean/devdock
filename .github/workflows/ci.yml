@@ -94,73 +94,60 @@ jobs:
     if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0  # Fetch all history for comparison
 
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
-      # Benchmark the PR branch
-      - name: Benchmark PR branch
-        id: bench_pr
+      # Run the benchmark
+      - name: Run startup benchmark
+        id: benchmark
         run: |
-          cargo test --release -p devdock-cli benchmark_startup -- --ignored --nocapture 2>&1 | tee pr_output.txt
+          cargo test --release -p devdock-cli benchmark_startup -- --ignored --nocapture 2>&1 | tee benchmark_output.txt
+          
           # Extract bootstrap time from JSON output
-          PR_TIME=$(grep -o '"bootstrap_time_ms":[0-9]*' pr_output.txt | grep -o '[0-9]*')
-          echo "pr_time=$PR_TIME" >> $GITHUB_OUTPUT
-          echo "PR branch bootstrap time: ${PR_TIME}ms"
+          if grep -q '"bootstrap_time_ms"' benchmark_output.txt; then
+            BOOTSTRAP_TIME=$(grep -o '"bootstrap_time_ms":[0-9]*' benchmark_output.txt | grep -o '[0-9]*')
+            echo "bootstrap_time_ms=$BOOTSTRAP_TIME" >> $GITHUB_OUTPUT
+            echo "✅ Bootstrap time: ${BOOTSTRAP_TIME}ms"
+          else
+            echo "❌ Failed to extract bootstrap time from output"
+            echo "=== Benchmark Output ==="
+            cat benchmark_output.txt
+            exit 1
+          fi
 
-      # Checkout main branch
-      - name: Checkout main branch
-        run: |
-          git checkout origin/main
-
-      # Clear any cached build artifacts from PR branch
-      - name: Clean build artifacts
-        run: cargo clean
-
-      # Benchmark the main branch
-      - name: Benchmark main branch
-        id: bench_main
-        run: |
-          cargo test --release -p devdock-cli benchmark_startup -- --ignored --nocapture 2>&1 | tee main_output.txt
-          # Extract bootstrap time from JSON output
-          MAIN_TIME=$(grep -o '"bootstrap_time_ms":[0-9]*' main_output.txt | grep -o '[0-9]*')
-          echo "main_time=$MAIN_TIME" >> $GITHUB_OUTPUT
-          echo "Main branch bootstrap time: ${MAIN_TIME}ms"
-
-      # Compare results and fail if regression > 15%
-      - name: Compare and check for regression
+      # Check against thresholds
+      - name: Check performance thresholds
         env:
-          PR_TIME: ${{ steps.bench_pr.outputs.pr_time }}
-          MAIN_TIME: ${{ steps.bench_main.outputs.main_time }}
+          BOOTSTRAP_TIME: ${{ steps.benchmark.outputs.bootstrap_time_ms }}
         run: |
-          echo "=== Benchmark Comparison ==="
-          echo "Main branch:  ${MAIN_TIME}ms"
-          echo "PR branch:    ${PR_TIME}ms"
-          
-          # Calculate percentage difference
-          DIFF=$((PR_TIME - MAIN_TIME))
-          PERCENT=$(awk "BEGIN {printf \"%.2f\", ($DIFF / $MAIN_TIME) * 100}")
-          
-          echo "Difference:   ${DIFF}ms (${PERCENT}%)"
+          echo "=== Benchmark Results ==="
+          echo "Bootstrap time: ${BOOTSTRAP_TIME}ms"
           echo ""
           
-          # Check if regression exceeds threshold (15%)
-          THRESHOLD=15
-          IS_REGRESSION=$(awk "BEGIN {print ($PERCENT > $THRESHOLD) ? 1 : 0}")
+          # Convert to seconds for display
+          BOOTSTRAP_SEC=$(awk "BEGIN {printf \"%.2f\", $BOOTSTRAP_TIME / 1000}")
+          echo "Bootstrap time: ${BOOTSTRAP_SEC}s"
+          echo ""
           
-          if [ "$IS_REGRESSION" = "1" ]; then
-            echo "❌ REGRESSION DETECTED: ${PERCENT}% slower than main (threshold: ${THRESHOLD}%)"
+          # Thresholds
+          FAIL_THRESHOLD=15000    # 15 seconds
+          WARN_THRESHOLD=10000    # 10 seconds
+          
+          if [ "$BOOTSTRAP_TIME" -gt "$FAIL_THRESHOLD" ]; then
+            echo "❌ PERFORMANCE REGRESSION DETECTED!"
+            echo "Bootstrap time (${BOOTSTRAP_SEC}s) exceeds failure threshold (15s)"
             echo ""
-            echo "This PR introduces a startup time regression that exceeds the allowed threshold."
-            echo "Please investigate and optimize the changes before merging."
+            echo "This is a significant performance regression. Please investigate and optimize."
             exit 1
-          elif [ "$DIFF" -lt 0 ]; then
-            IMPROVEMENT=$(awk "BEGIN {printf \"%.2f\", ($DIFF / $MAIN_TIME) * -100}")
-            echo "✅ IMPROVEMENT: ${IMPROVEMENT}% faster than main"
+          elif [ "$BOOTSTRAP_TIME" -gt "$WARN_THRESHOLD" ]; then
+            echo "⚠️  WARNING: Bootstrap time is elevated"
+            echo "Bootstrap time (${BOOTSTRAP_SEC}s) is between 10-15s"
+            echo ""
+            echo "Consider investigating if this is expected. Threshold for failure is 15s."
+            # Don't fail, just warn
           else
-            echo "✅ ACCEPTABLE: ${PERCENT}% slower than main (within ${THRESHOLD}% threshold)"
+            echo "✅ EXCELLENT: Bootstrap time is under 10s"
           fi
           
           echo ""

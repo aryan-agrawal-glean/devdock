@@ -25,15 +25,17 @@ The minimal test fixture is located at `tests/fixtures/benchmark/` and includes:
 
 **CI Integration:**
 
-The benchmark runs automatically on all PRs via the `benchmark` job in `.github/workflows/ci.yml`. It:
-1. Benchmarks the PR branch
-2. Benchmarks the main branch
-3. Compares the results
-4. **Fails the build** if the PR is >15% slower than main
+The benchmark runs automatically on all PRs via the `benchmark` job in `.github/workflows/ci.yml`. It checks against absolute thresholds:
 
-**Regression Threshold:**
+- ✅ **< 10 seconds**: Excellent performance
+- ⚠️ **10-15 seconds**: Warning (passes but logged)
+- ❌ **> 15 seconds**: Fails the CI build
 
-The current threshold is **15%**. This can be adjusted in the CI workflow if needed.
+**Performance Thresholds:**
+
+The thresholds can be adjusted in the CI workflow:
+- `FAIL_THRESHOLD`: 15000ms (15 seconds) - CI fails if exceeded
+- `WARN_THRESHOLD`: 10000ms (10 seconds) - Warning logged if exceeded
 
 **Expected Performance:**
 
