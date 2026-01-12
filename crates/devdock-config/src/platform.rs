@@ -379,6 +379,49 @@ pub async fn create_platform(
     create_platform_with_multi_project(platform_name, project, dynamic_config, false).await
 }
 
+/// Create a mock platform for benchmarking/testing (no external dependencies)
+pub fn create_mock_platform(project: String) -> Box<dyn Platform> {
+    Box::new(MockPlatform { project })
+}
+
+/// Mock platform for benchmarking (no external API calls)
+struct MockPlatform {
+    project: String,
+}
+
+#[async_trait]
+impl Platform for MockPlatform {
+    async fn authenticate(&self) -> Result<()> {
+        // No-op for mock
+        Ok(())
+    }
+
+    fn update_devdock_config(&self, config: &mut IniConfig) {
+        config.set("manifest", "project", &self.project);
+        config.set("manifest", "zone", "us-central1-a");
+        config.set("manifest", "region", "us-central1");
+        config.set("manifest", "project_number", "000000000000");
+    }
+
+    fn update_temp_profile(&self, profile: &mut TempProfile) {
+        profile.project = self.project.clone();
+        profile.zone = "us-central1-a".to_string();
+        profile.region = "us-central1".to_string();
+    }
+
+    fn name(&self) -> &str {
+        "mock"
+    }
+
+    fn zone(&self) -> &str {
+        "us-central1-a"
+    }
+
+    fn region(&self) -> &str {
+        "us-central1"
+    }
+}
+
 /// Create platform with multi_project flag
 pub async fn create_platform_with_multi_project(
     platform_name: &str,

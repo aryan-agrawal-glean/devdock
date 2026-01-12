@@ -74,6 +74,10 @@ enum Commands {
         /// Disable telemetry/metrics export to BigQuery
         #[arg(long)]
         no_telemetry: bool,
+
+        /// Dry-run mode: execute all startup logic but don't start Tilt (for benchmarking)
+        #[arg(long)]
+        dry_run: bool,
     },
 
     /// Stop DevDock instance
@@ -491,6 +495,7 @@ async fn main() {
             no_monitor,
             monitor_timeout,
             no_telemetry,
+            dry_run,
         } => {
             if mode == "remote" {
                 commands::remote::start_remote(commands::remote::RemoteStartConfig {
@@ -512,6 +517,7 @@ async fn main() {
                     !no_monitor, // monitoring enabled by default
                     monitor_timeout,
                     !no_telemetry, // telemetry enabled by default
+                    dry_run,
                 )
                 .await
             }

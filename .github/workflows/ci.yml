@@ -87,3 +87,81 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.74.0
       - uses: Swatinem/rust-cache@v2
       - run: cargo check --all-features --workspace
+
+  benchmark:
+    name: Startup Time Benchmark
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0  # Fetch all history for comparison
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # Benchmark the PR branch
+      - name: Benchmark PR branch
+        id: bench_pr
+        run: |
+          cargo test --release benchmark_startup -- --ignored --nocapture 2>&1 | tee pr_output.txt
+          # Extract bootstrap time from JSON output
+          PR_TIME=$(grep -o '"bootstrap_time_ms":[0-9]*' pr_output.txt | grep -o '[0-9]*')
+          echo "pr_time=$PR_TIME" >> $GITHUB_OUTPUT
+          echo "PR branch bootstrap time: ${PR_TIME}ms"
+
+      # Checkout main branch
+      - name: Checkout main branch
+        run: |
+          git checkout origin/main
+
+      # Clear any cached build artifacts from PR branch
+      - name: Clean build artifacts
+        run: cargo clean
+
+      # Benchmark the main branch
+      - name: Benchmark main branch
+        id: bench_main
+        run: |
+          cargo test --release benchmark_startup -- --ignored --nocapture 2>&1 | tee main_output.txt
+          # Extract bootstrap time from JSON output
+          MAIN_TIME=$(grep -o '"bootstrap_time_ms":[0-9]*' main_output.txt | grep -o '[0-9]*')
+          echo "main_time=$MAIN_TIME" >> $GITHUB_OUTPUT
+          echo "Main branch bootstrap time: ${MAIN_TIME}ms"
+
+      # Compare results and fail if regression > 15%
+      - name: Compare and check for regression
+        env:
+          PR_TIME: ${{ steps.bench_pr.outputs.pr_time }}
+          MAIN_TIME: ${{ steps.bench_main.outputs.main_time }}
+        run: |
+          echo "=== Benchmark Comparison ==="
+          echo "Main branch:  ${MAIN_TIME}ms"
+          echo "PR branch:    ${PR_TIME}ms"
+          
+          # Calculate percentage difference
+          DIFF=$((PR_TIME - MAIN_TIME))
+          PERCENT=$(awk "BEGIN {printf \"%.2f\", ($DIFF / $MAIN_TIME) * 100}")
+          
+          echo "Difference:   ${DIFF}ms (${PERCENT}%)"
+          echo ""
+          
+          # Check if regression exceeds threshold (15%)
+          THRESHOLD=15
+          IS_REGRESSION=$(awk "BEGIN {print ($PERCENT > $THRESHOLD) ? 1 : 0}")
+          
+          if [ "$IS_REGRESSION" = "1" ]; then
+            echo "❌ REGRESSION DETECTED: ${PERCENT}% slower than main (threshold: ${THRESHOLD}%)"
+            echo ""
+            echo "This PR introduces a startup time regression that exceeds the allowed threshold."
+            echo "Please investigate and optimize the changes before merging."
+            exit 1
+          elif [ "$DIFF" -lt 0 ]; then
+            IMPROVEMENT=$(awk "BEGIN {printf \"%.2f\", ($DIFF / $MAIN_TIME) * -100}")
+            echo "✅ IMPROVEMENT: ${IMPROVEMENT}% faster than main"
+          else
+            echo "✅ ACCEPTABLE: ${PERCENT}% slower than main (within ${THRESHOLD}% threshold)"
+          fi
+          
+          echo ""
+          echo "Benchmark check passed!"

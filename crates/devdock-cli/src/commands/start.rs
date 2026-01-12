@@ -15,6 +15,7 @@ pub async fn execute(
     run_monitor: bool,
     monitor_timeout: Option<u64>,
     telemetry_enabled: bool,
+    dry_run: bool,
 ) -> Result<()> {
     // Track command start time for telemetry
     let command_start_time = chrono::Utc::now();
@@ -28,7 +29,11 @@ pub async fn execute(
 
     let validator = ProfileValidator::new();
     validator.validate(&profile)?;
-    validator.validate_gcloud_project(&profile)?;
+    
+    // Skip gcloud project validation in dry-run mode (for benchmarking/CI)
+    if !dry_run {
+        validator.validate_gcloud_project(&profile)?;
+    }
     output::success("Profile validated");
 
     // Step 2: Resolve dependencies
@@ -36,11 +41,15 @@ pub async fn execute(
     let resolved_components = resolver.resolve(&profile)?;
     output::info(&format!("Resolved {} components", resolved_components.len()));
 
-    // Step 3: Check Docker is running
-    check_docker()?;
+    // Step 3: Check Docker is running (skip in dry-run mode)
+    if !dry_run {
+        check_docker()?;
+    }
 
-    // Step 4: Setup Docker networks
-    setup_docker_networks()?;
+    // Step 4: Setup Docker networks (skip in dry-run mode)
+    if !dry_run {
+        setup_docker_networks()?;
+    }
 
     // Step 5: Register instance and allocate ports
     let state_manager = StateManager::new().await?;
@@ -73,11 +82,29 @@ pub async fn execute(
     // Step 6: Generate configuration files (Rust - parallel)
     let workspace_root = find_workspace_root()?;
     let profile_path_str = profile_path.to_string_lossy();
-    generate_configs_rust(&workspace_root, &profile, services, Some(&profile_path_str)).await?;
+    generate_configs_rust(&workspace_root, &profile, services, Some(&profile_path_str), dry_run).await?;
 
     // Step 7: Clean old logs and startup state files
     cleanup_old_logs()?;
     cleanup_startup_state_files()?;
+
+    // If dry-run mode, exit here with timing information
+    if dry_run {
+        let elapsed = chrono::Utc::now() - command_start_time;
+        let elapsed_ms = elapsed.num_milliseconds();
+        
+        // Output timing in JSON format for benchmarking
+        println!(
+            "{{\"profile\": \"{}\", \"bootstrap_time_ms\": {}}}",
+            profile_name, elapsed_ms
+        );
+        
+        // Clean up instance registration
+        state_manager.update_status(&instance.id, InstanceStatus::Stopped).await?;
+        
+        output::success(&format!("Dry-run completed in {}ms", elapsed_ms));
+        return Ok(());
+    }
 
     // Step 8: Update status and start Tilt
     state_manager.update_status(&instance.id, InstanceStatus::Running).await?;
@@ -208,12 +235,21 @@ async fn generate_configs_rust(
     profile: &devdock_core::profile::Profile,
     services: Option<&str>,
     profile_path: Option<&str>,
+    dry_run: bool,
 ) -> Result<()> {
     use devdock_config::{ConfigGenerator, WatchStrategy};
 
     // Use Hybrid strategy: instant static patterns + background cquery refinement
-    let generator = ConfigGenerator::new(workspace_root.to_path_buf())
+    let mut generator = ConfigGenerator::new(workspace_root.to_path_buf())
         .with_watch_strategy(WatchStrategy::Hybrid);
+    
+    // Skip platform initialization and file writes in dry-run mode (for benchmarking)
+    if dry_run {
+        generator = generator
+            .with_skip_platform_init(true)
+            .with_skip_file_writes(true);
+    }
+    
     generator.generate(profile, services, profile_path).await?;
 
     Ok(())
