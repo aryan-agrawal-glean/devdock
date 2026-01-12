@@ -51,33 +51,39 @@ pub async fn execute(
         setup_docker_networks()?;
     }
 
-    // Step 5: Register instance and allocate ports
-    let state_manager = StateManager::new().await?;
-    let port_allocator = PortAllocator::new(state_manager.clone()).await;
-    let port_base = port_allocator.allocate().await?;
+    // Step 5: Register instance and allocate ports (skip in dry-run mode)
+    let (state_manager, instance_id) = if !dry_run {
+        let state_manager = StateManager::new().await?;
+        let port_allocator = PortAllocator::new(state_manager.clone()).await;
+        let port_base = port_allocator.allocate().await?;
 
-    let workspace_path = std::env::current_dir()?.display().to_string();
-    let branch = get_git_branch()?;
+        let workspace_path = std::env::current_dir()?.display().to_string();
+        let branch = get_git_branch()?;
 
-    let instance = Instance {
-        id: Instance::generate_id(),
-        workspace_path: workspace_path.clone(),
-        workspace_name: None, // Local instances don't need workspace name
-        branch,
-        profile: profile_name.to_string(),
-        mode: "local".to_string(),
-        status: InstanceStatus::Starting,
-        port_base,
-        created_at: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64,
-        updated_at: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64,
+        let instance = Instance {
+            id: Instance::generate_id(),
+            workspace_path: workspace_path.clone(),
+            workspace_name: None, // Local instances don't need workspace name
+            branch,
+            profile: profile_name.to_string(),
+            mode: "local".to_string(),
+            status: InstanceStatus::Starting,
+            port_base,
+            created_at: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64,
+            updated_at: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64,
+        };
+
+        state_manager.register_instance(&instance).await?;
+        output::success(&format!(
+            "Registered instance: {} (port base: {})",
+            &instance.id[..8],
+            port_base
+        ));
+        
+        (Some(state_manager), instance.id)
+    } else {
+        (None, String::new())
     };
-
-    state_manager.register_instance(&instance).await?;
-    output::success(&format!(
-        "Registered instance: {} (port base: {})",
-        &instance.id[..8],
-        port_base
-    ));
 
     // Step 6: Generate configuration files (Rust - parallel)
     let workspace_root = find_workspace_root()?;
@@ -97,15 +103,15 @@ pub async fn execute(
         // Output timing in JSON format for benchmarking
         println!("{{\"profile\": \"{}\", \"bootstrap_time_ms\": {}}}", profile_name, elapsed_ms);
 
-        // Clean up instance registration
-        state_manager.update_status(&instance.id, InstanceStatus::Stopped).await?;
-
         output::success(&format!("Dry-run completed in {}ms", elapsed_ms));
         return Ok(());
     }
 
+    // Unwrap state_manager (safe because dry_run is false)
+    let state_manager = state_manager.unwrap();
+
     // Step 8: Update status and start Tilt
-    state_manager.update_status(&instance.id, InstanceStatus::Running).await?;
+    state_manager.update_status(&instance_id, InstanceStatus::Running).await?;
 
     output::info("Starting Tilt...");
     let tilt_process = start_tilt(services)?;
@@ -130,7 +136,7 @@ pub async fn execute(
     wait_for_tilt(
         tilt_process,
         &state_manager,
-        &instance.id,
+        &instance_id,
         workspace_root,
         run_monitor,
         monitor_timeout,

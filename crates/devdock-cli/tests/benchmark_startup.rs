@@ -36,15 +36,30 @@ fn benchmark_startup_bootstrap_time() {
     let test_fixture = workspace_root.join("tests/fixtures/benchmark");
     assert!(test_fixture.exists(), "Test fixture not found at {}", test_fixture.display());
 
-    // Run the benchmark
+    // Run the benchmark with timeout
     let start = Instant::now();
-    let output = Command::new(&binary_path)
+    
+    // Spawn the process
+    let mut child = Command::new(&binary_path)
         .args(["start", "bench", "--dry-run", "--ci-mode"])
         .current_dir(&test_fixture)
         .env("HOME", std::env::var("HOME").unwrap())
-        .output()
-        .expect("Failed to execute devdock start");
-
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("Failed to spawn devdock start");
+    
+    // Wait with a timeout (30 seconds should be plenty for dry-run)
+    let timeout = std::time::Duration::from_secs(30);
+    let wait_result = std::thread::spawn(move || child.wait_with_output())
+        .join()
+        .expect("Thread panicked");
+    
+    let output = match wait_result {
+        Ok(output) => output.expect("Failed to get output"),
+        Err(e) => panic!("Command failed: {}", e),
+    };
+    
     let elapsed = start.elapsed();
 
     // Parse JSON output
