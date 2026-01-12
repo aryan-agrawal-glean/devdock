@@ -45,62 +45,59 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --all-features --workspace
 
-      # Run startup benchmark (PR only, ubuntu only to avoid duplication)
-      - name: Run startup benchmark
+      # Run startup benchmark and check thresholds (PR only, ubuntu only)
+      - name: Startup Time Benchmark
         if: github.event_name == 'pull_request' && matrix.os == 'ubuntu-latest'
-        id: benchmark
         run: |
           echo "Running startup benchmark test..."
+          echo ""
+          
           set +e
           cargo test -p devdock-cli benchmark_startup -- --ignored --nocapture 2>&1 | tee benchmark_output.txt
           TEST_EXIT_CODE=$?
           set -e
           
+          echo ""
           if [ $TEST_EXIT_CODE -ne 0 ]; then
-            echo "❌ Benchmark test failed"
+            echo "❌ Benchmark test failed with exit code $TEST_EXIT_CODE"
+            echo ""
+            echo "=== Full Output ==="
             cat benchmark_output.txt
             exit 1
           fi
           
+          echo "=== Extracting Timing ==="
           if grep -q '"bootstrap_time_ms"' benchmark_output.txt; then
             BOOTSTRAP_TIME=$(grep -o '"bootstrap_time_ms":[0-9]*' benchmark_output.txt | grep -o '[0-9]*' | head -1)
-            echo "bootstrap_time_ms=$BOOTSTRAP_TIME" >> $GITHUB_OUTPUT
-            echo "✅ Bootstrap time: ${BOOTSTRAP_TIME}ms"
+            echo "✅ Extracted: ${BOOTSTRAP_TIME}ms"
           else
-            echo "❌ Failed to extract timing"
+            echo "❌ Failed to find bootstrap_time_ms in output"
+            echo ""
+            echo "=== Full Output ==="
             cat benchmark_output.txt
             exit 1
           fi
-
-      # Check performance thresholds (PR only, ubuntu only)
-      - name: Check performance thresholds
-        if: github.event_name == 'pull_request' && matrix.os == 'ubuntu-latest'
-        env:
-          BOOTSTRAP_TIME: ${{ steps.benchmark.outputs.bootstrap_time_ms }}
-        run: |
-          echo "=== Benchmark Results ==="
           
-          if [ -z "$BOOTSTRAP_TIME" ]; then
-            echo "❌ Bootstrap time not found"
-            exit 1
-          fi
-          
+          echo ""
+          echo "=== Performance Check ==="
           BOOTSTRAP_SEC=$(awk "BEGIN {printf \"%.2f\", $BOOTSTRAP_TIME / 1000}")
           echo "Bootstrap time: ${BOOTSTRAP_TIME}ms (${BOOTSTRAP_SEC}s)"
-          echo ""
           
           # Thresholds
           FAIL_THRESHOLD=15000    # 15 seconds
           WARN_THRESHOLD=10000    # 10 seconds
           
           if [ "$BOOTSTRAP_TIME" -gt "$FAIL_THRESHOLD" ]; then
+            echo ""
             echo "❌ PERFORMANCE REGRESSION!"
             echo "Bootstrap time (${BOOTSTRAP_SEC}s) exceeds 15s threshold"
             exit 1
           elif [ "$BOOTSTRAP_TIME" -gt "$WARN_THRESHOLD" ]; then
+            echo ""
             echo "⚠️  WARNING: Bootstrap time is elevated (${BOOTSTRAP_SEC}s)"
             echo "Between 10-15s. Consider investigating."
           else
+            echo ""
             echo "✅ EXCELLENT: Bootstrap time under 10s"
           fi
 
