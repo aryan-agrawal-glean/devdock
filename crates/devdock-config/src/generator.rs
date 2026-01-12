@@ -310,7 +310,10 @@ impl ConfigGenerator {
         };
 
         // Pre-fetch SQL metadata if SQL is remote
-        if let Some(metadata) = self.fetch_sql_metadata_if_needed(profile, platform, dynamic_ini, "multi-project INI").await {
+        if let Some(metadata) = self
+            .fetch_sql_metadata_if_needed(profile, platform, dynamic_ini, "multi-project INI")
+            .await
+        {
             context = context.with_sql_metadata(metadata);
         }
 
@@ -398,7 +401,10 @@ impl ConfigGenerator {
                     {
                         Ok(metadata) => return Some(metadata),
                         Err(e) => {
-                            eprintln!("Warning: Failed to fetch SQL metadata for {}: {}", context_name, e);
+                            eprintln!(
+                                "Warning: Failed to fetch SQL metadata for {}: {}",
+                                context_name, e
+                            );
                         }
                     }
                 }
@@ -421,7 +427,9 @@ impl ConfigGenerator {
         let mut context = IniGeneratorContext::from_profile(profile);
 
         // Pre-fetch SQL metadata if SQL is remote
-        if let Some(metadata) = self.fetch_sql_metadata_if_needed(profile, platform, dynamic_ini, "INI").await {
+        if let Some(metadata) =
+            self.fetch_sql_metadata_if_needed(profile, platform, dynamic_ini, "INI").await
+        {
             context = context.with_sql_metadata(metadata);
         }
 
@@ -473,7 +481,10 @@ impl ConfigGenerator {
         }
 
         // Pre-fetch SQL metadata if SQL is remote
-        if let Some(metadata) = self.fetch_sql_metadata_if_needed(profile, platform, dynamic_ini.as_ref(), "temp_profile").await {
+        if let Some(metadata) = self
+            .fetch_sql_metadata_if_needed(profile, platform, dynamic_ini.as_ref(), "temp_profile")
+            .await
+        {
             generator = generator.with_sql_metadata(metadata);
         }
 

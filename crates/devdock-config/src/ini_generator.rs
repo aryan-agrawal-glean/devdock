@@ -246,12 +246,16 @@ impl IniGenerator {
             let curr_port = if self.context.multi_project { 3311 } else { 3307 };
 
             // Check if we have metadata about public IP
-            let use_public_ip = self.context.sql_metadata.as_ref()
-                .map(|m| m.use_public_ip)
-                .unwrap_or(false);
+            let use_public_ip =
+                self.context.sql_metadata.as_ref().map(|m| m.use_public_ip).unwrap_or(false);
 
             // Set auth configuration based on public IP
-            if use_public_ip && !matches!(self.context.project.as_str(), "glean-apps-canary" | "scio-engineering") {
+            if use_public_ip
+                && !matches!(
+                    self.context.project.as_str(),
+                    "glean-apps-canary" | "scio-engineering"
+                )
+            {
                 // Public IP in test projects: use glean_local user, no IAM
                 self.config.set("sql", "useDbIAMAuth", "false");
                 self.config.set("sql", "useCloudSqlConnectorInQe", "false");
@@ -268,19 +272,31 @@ impl IniGenerator {
 
             for (idx, instance) in instances.iter().enumerate() {
                 let port = curr_port + idx as u16;
-                self.config.set("sql", &format!("{}.db.host", instance),
-                    format!("host.docker.internal:{}", port));
+                self.config.set(
+                    "sql",
+                    &format!("{}.db.host", instance),
+                    format!("host.docker.internal:{}", port),
+                );
                 self.config.set("sql", &format!("{}.googlecloud.instanceName", instance), "");
-                
+
                 // Set db.user for public IP instances
-                if use_public_ip && !matches!(self.context.project.as_str(), "glean-apps-canary" | "scio-engineering") {
+                if use_public_ip
+                    && !matches!(
+                        self.context.project.as_str(),
+                        "glean-apps-canary" | "scio-engineering"
+                    )
+                {
                     self.config.set("sql", &format!("{}.db.user", instance), "glean_local");
                 }
             }
 
             // Special handling for glean-apps-canary and scio-apps
             if self.context.project == "glean-apps-canary" || self.context.project == "scio-apps" {
-                self.config.set("sql", "db.host", format!("host.docker.internal:{}", curr_port + 1));
+                self.config.set(
+                    "sql",
+                    "db.host",
+                    format!("host.docker.internal:{}", curr_port + 1),
+                );
                 self.config.set("sql", "googlecloud.instanceName", "");
             }
         }
