@@ -104,7 +104,7 @@ jobs:
       - name: Benchmark PR branch
         id: bench_pr
         run: |
-          cargo test --release benchmark_startup -- --ignored --nocapture 2>&1 | tee pr_output.txt
+          cargo test --release -p devdock-cli benchmark_startup -- --ignored --nocapture 2>&1 | tee pr_output.txt
           # Extract bootstrap time from JSON output
           PR_TIME=$(grep -o '"bootstrap_time_ms":[0-9]*' pr_output.txt | grep -o '[0-9]*')
           echo "pr_time=$PR_TIME" >> $GITHUB_OUTPUT
@@ -123,7 +123,7 @@ jobs:
       - name: Benchmark main branch
         id: bench_main
         run: |
-          cargo test --release benchmark_startup -- --ignored --nocapture 2>&1 | tee main_output.txt
+          cargo test --release -p devdock-cli benchmark_startup -- --ignored --nocapture 2>&1 | tee main_output.txt
           # Extract bootstrap time from JSON output
           MAIN_TIME=$(grep -o '"bootstrap_time_ms":[0-9]*' main_output.txt | grep -o '[0-9]*')
           echo "main_time=$MAIN_TIME" >> $GITHUB_OUTPUT
