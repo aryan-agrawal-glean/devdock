@@ -243,9 +243,17 @@ async fn generate_configs_rust(
 ) -> Result<()> {
     use devdock_config::{ConfigGenerator, WatchStrategy};
 
-    // Use Hybrid strategy: instant static patterns + background cquery refinement
-    let mut generator = ConfigGenerator::new(workspace_root.to_path_buf())
-        .with_watch_strategy(WatchStrategy::Hybrid);
+    // Use different strategy based on mode
+    let watch_strategy = if dry_run {
+        // Skip background threads entirely in dry-run mode to prevent hanging
+        WatchStrategy::Static
+    } else {
+        // Use Hybrid strategy: instant static patterns + background cquery refinement
+        WatchStrategy::Hybrid
+    };
+
+    let mut generator =
+        ConfigGenerator::new(workspace_root.to_path_buf()).with_watch_strategy(watch_strategy);
 
     // Skip platform initialization and file writes in dry-run mode (for benchmarking)
     if dry_run {
