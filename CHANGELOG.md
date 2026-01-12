@@ -7,13 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-- **Startup Time Benchmark**: CI check to detect performance regressions in startup time
-  - New `--dry-run` flag for `devdock start` to benchmark bootstrap phase
-  - Automated CI job that compares PR branch against main branch
-  - Fails builds if startup time regresses >15%
-  - Integration test: `cargo test --release benchmark_startup -- --ignored`
-
 ## [0.1.0] - 2025-12-29
 
 ### Added - First Release 🎉

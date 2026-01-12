@@ -26,27 +26,15 @@ fn benchmark_startup_bootstrap_time() {
     );
 
     // Get the path to the built binary
-    let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .to_path_buf();
-    
+    let workspace_root =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap().to_path_buf();
+
     let binary_path = workspace_root.join("target/release/devdock");
-    assert!(
-        binary_path.exists(),
-        "Binary not found at {}",
-        binary_path.display()
-    );
+    assert!(binary_path.exists(), "Binary not found at {}", binary_path.display());
 
     // Set up test fixture directory
     let test_fixture = workspace_root.join("tests/fixtures/benchmark");
-    assert!(
-        test_fixture.exists(),
-        "Test fixture not found at {}",
-        test_fixture.display()
-    );
+    assert!(test_fixture.exists(), "Test fixture not found at {}", test_fixture.display());
 
     // Run the benchmark
     let start = Instant::now();
@@ -56,7 +44,7 @@ fn benchmark_startup_bootstrap_time() {
         .env("HOME", std::env::var("HOME").unwrap())
         .output()
         .expect("Failed to execute devdock start");
-    
+
     let elapsed = start.elapsed();
 
     // Parse JSON output
@@ -83,12 +71,11 @@ fn benchmark_startup_bootstrap_time() {
         .find(|line| line.contains("bootstrap_time_ms"))
         .expect("Could not find JSON timing output");
 
-    let timing: serde_json::Value = serde_json::from_str(json_line)
-        .expect("Failed to parse JSON timing output");
+    let timing: serde_json::Value =
+        serde_json::from_str(json_line).expect("Failed to parse JSON timing output");
 
-    let bootstrap_time_ms = timing["bootstrap_time_ms"]
-        .as_i64()
-        .expect("bootstrap_time_ms not found in JSON");
+    let bootstrap_time_ms =
+        timing["bootstrap_time_ms"].as_i64().expect("bootstrap_time_ms not found in JSON");
 
     // Print benchmark results
     println!("\n=== BENCHMARK RESULTS ===");

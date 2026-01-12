@@ -29,7 +29,7 @@ pub async fn execute(
 
     let validator = ProfileValidator::new();
     validator.validate(&profile)?;
-    
+
     // Skip gcloud project validation in dry-run mode (for benchmarking/CI)
     if !dry_run {
         validator.validate_gcloud_project(&profile)?;
@@ -82,7 +82,8 @@ pub async fn execute(
     // Step 6: Generate configuration files (Rust - parallel)
     let workspace_root = find_workspace_root()?;
     let profile_path_str = profile_path.to_string_lossy();
-    generate_configs_rust(&workspace_root, &profile, services, Some(&profile_path_str), dry_run).await?;
+    generate_configs_rust(&workspace_root, &profile, services, Some(&profile_path_str), dry_run)
+        .await?;
 
     // Step 7: Clean old logs and startup state files
     cleanup_old_logs()?;
@@ -92,16 +93,13 @@ pub async fn execute(
     if dry_run {
         let elapsed = chrono::Utc::now() - command_start_time;
         let elapsed_ms = elapsed.num_milliseconds();
-        
+
         // Output timing in JSON format for benchmarking
-        println!(
-            "{{\"profile\": \"{}\", \"bootstrap_time_ms\": {}}}",
-            profile_name, elapsed_ms
-        );
-        
+        println!("{{\"profile\": \"{}\", \"bootstrap_time_ms\": {}}}", profile_name, elapsed_ms);
+
         // Clean up instance registration
         state_manager.update_status(&instance.id, InstanceStatus::Stopped).await?;
-        
+
         output::success(&format!("Dry-run completed in {}ms", elapsed_ms));
         return Ok(());
     }
@@ -242,14 +240,12 @@ async fn generate_configs_rust(
     // Use Hybrid strategy: instant static patterns + background cquery refinement
     let mut generator = ConfigGenerator::new(workspace_root.to_path_buf())
         .with_watch_strategy(WatchStrategy::Hybrid);
-    
+
     // Skip platform initialization and file writes in dry-run mode (for benchmarking)
     if dry_run {
-        generator = generator
-            .with_skip_platform_init(true)
-            .with_skip_file_writes(true);
+        generator = generator.with_skip_platform_init(true).with_skip_file_writes(true);
     }
-    
+
     generator.generate(profile, services, profile_path).await?;
 
     Ok(())

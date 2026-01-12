@@ -145,7 +145,7 @@ impl ConfigGenerator {
                     total_start.elapsed().as_secs_f64()
                 );
             }
-            
+
             platform
         };
 
@@ -225,7 +225,10 @@ impl ConfigGenerator {
                 total_start.elapsed().as_secs_f64()
             );
         } else {
-            println!("✅ Config generation complete (TOTAL: {:.2}s)", total_start.elapsed().as_secs_f64());
+            println!(
+                "✅ Config generation complete (TOTAL: {:.2}s)",
+                total_start.elapsed().as_secs_f64()
+            );
         }
 
         // 6. Handle multi-project (glean-apps-canary) if present
