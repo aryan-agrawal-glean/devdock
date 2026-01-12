@@ -63,9 +63,9 @@ enum Commands {
         #[arg(long)]
         verbose: bool,
 
-        /// Disable startup monitor (by default, waits for all resources to become healthy)
+        /// Enable startup monitor to wait for all resources to become healthy
         #[arg(long)]
-        no_monitor: bool,
+        monitor: bool,
 
         /// Startup monitor timeout in seconds (default: 1200 = 20 minutes)
         #[arg(long)]
@@ -492,7 +492,7 @@ async fn main() {
             port_base,
             auto_forward,
             verbose,
-            no_monitor,
+            monitor,
             monitor_timeout,
             no_telemetry,
             dry_run,
@@ -514,7 +514,7 @@ async fn main() {
                     &profile,
                     services.as_deref(),
                     ci_mode,
-                    !no_monitor, // monitoring enabled by default
+                    monitor, // monitoring disabled by default (opt-in with --monitor)
                     monitor_timeout,
                     !no_telemetry, // telemetry enabled by default
                     dry_run,
