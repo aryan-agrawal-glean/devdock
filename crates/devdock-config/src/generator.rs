@@ -384,7 +384,7 @@ impl ConfigGenerator {
         platform: &dyn Platform,
         dynamic_ini: Option<&ParsedIniConfig>,
         context_name: &str,
-    ) -> Option<crate::sql::SqlMetadata> {
+    ) -> Option<crate::sql::SqlRemoteMetadata> {
         if let Some(sql_config) = profile.infra.get("sql") {
             if sql_config.deployment_type == devdock_core::types::DeploymentType::Remote {
                 if let Some(ini) = dynamic_ini {
