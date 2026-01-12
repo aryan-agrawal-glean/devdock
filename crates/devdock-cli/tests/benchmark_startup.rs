@@ -44,7 +44,7 @@ fn benchmark_startup_bootstrap_time() {
         .env("HOME", std::env::var("HOME").unwrap())
         .output()
         .expect("Failed to execute devdock start");
-    
+
     let elapsed = start.elapsed();
 
     // Parse JSON output
