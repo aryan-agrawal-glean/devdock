@@ -102,16 +102,34 @@ jobs:
       - name: Run startup benchmark
         id: benchmark
         run: |
+          echo "Running benchmark test..."
+          set +e  # Don't exit immediately on error
           cargo test --release -p devdock-cli benchmark_startup -- --ignored --nocapture 2>&1 | tee benchmark_output.txt
+          TEST_EXIT_CODE=$?
+          set -e
+          
+          echo ""
+          echo "=== Test Exit Code: $TEST_EXIT_CODE ==="
+          
+          # Check if test passed
+          if [ $TEST_EXIT_CODE -ne 0 ]; then
+            echo "❌ Benchmark test failed"
+            echo ""
+            echo "=== Full Benchmark Output ==="
+            cat benchmark_output.txt
+            exit 1
+          fi
           
           # Extract bootstrap time from JSON output
           if grep -q '"bootstrap_time_ms"' benchmark_output.txt; then
-            BOOTSTRAP_TIME=$(grep -o '"bootstrap_time_ms":[0-9]*' benchmark_output.txt | grep -o '[0-9]*')
+            BOOTSTRAP_TIME=$(grep -o '"bootstrap_time_ms":[0-9]*' benchmark_output.txt | grep -o '[0-9]*' | head -1)
             echo "bootstrap_time_ms=$BOOTSTRAP_TIME" >> $GITHUB_OUTPUT
-            echo "✅ Bootstrap time: ${BOOTSTRAP_TIME}ms"
+            echo ""
+            echo "✅ Successfully extracted bootstrap time: ${BOOTSTRAP_TIME}ms"
           else
             echo "❌ Failed to extract bootstrap time from output"
-            echo "=== Benchmark Output ==="
+            echo ""
+            echo "=== Full Benchmark Output ==="
             cat benchmark_output.txt
             exit 1
           fi
@@ -122,6 +140,14 @@ jobs:
           BOOTSTRAP_TIME: ${{ steps.benchmark.outputs.bootstrap_time_ms }}
         run: |
           echo "=== Benchmark Results ==="
+          
+          # Check if BOOTSTRAP_TIME is set
+          if [ -z "$BOOTSTRAP_TIME" ]; then
+            echo "❌ ERROR: Bootstrap time not found"
+            echo "The benchmark test may have failed to run or produce output."
+            exit 1
+          fi
+          
           echo "Bootstrap time: ${BOOTSTRAP_TIME}ms"
           echo ""
           
