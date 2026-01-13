@@ -15,6 +15,8 @@ pub struct IniGeneratorContext {
     pub has_quality_pipelines: bool,
     /// Project name (for special project handling)
     pub project: String,
+    /// Platform name (aws, google, azure)
+    pub platform: String,
     /// SQL remote metadata (for remote SQL configuration)
     pub sql_metadata: Option<crate::sql::SqlRemoteMetadata>,
 }
@@ -28,6 +30,7 @@ impl IniGeneratorContext {
             multi_project,
             has_quality_pipelines,
             project: profile.project.clone(),
+            platform: profile.platform.to_string(),
             sql_metadata: None,
         }
     }
@@ -234,6 +237,21 @@ impl IniGenerator {
             self.config.set("sql", "frontendInstance.googlecloud.instanceName", "");
             self.config.set("sql", "backendInstance.googlecloud.instanceName", "");
 
+            // AWS-specific fields for local SQL (matches Python behavior)
+            if self.context.platform == "aws" {
+                for instance in &["frontendInstance", "backendInstance"] {
+                    let instance_prefix =
+                        if instance.is_empty() { String::new() } else { format!("{instance}.") };
+
+                    self.config.set("sql", &format!("aws.{instance_prefix}rootSecretArn"), "");
+                    self.config.set(
+                        "sql",
+                        &format!("{instance_prefix}aws.instanceEndpoint"),
+                        &sql_host,
+                    );
+                }
+            }
+
             // Special handling for glean-apps-canary and scio-apps
             if self.context.project == "glean-apps-canary" || self.context.project == "scio-apps" {
                 self.config.set("sql", "db.user", "root");
@@ -315,33 +333,28 @@ impl IniGenerator {
     }
 
     fn apply_opensearch_config(&mut self, node: &ServiceNode) {
-        if node.config.is_local() {
-            let port = node.config.env.get("PORT").unwrap_or(&"9200".to_string()).clone();
+        // OpenSearch config is generated for BOTH local and remote (matches Python behavior)
+        let port = node.config.env.get("PORT").unwrap_or(&"9200".to_string()).clone();
 
-            self.config.set("indexing", "index.name", "index-1");
-            self.config.set(
-                "indexing",
-                "server.url",
-                format!("http://host.docker.internal:{port}"),
-            );
-            self.config.set("entitybuilder", "index.name", "entity-index-1");
-            self.config.set("elastic_plugin", "hotswapJarPluginTag", "");
-            self.config.set("elastic_plugin", "hotswapJarPluginConfig", "");
+        self.config.set("indexing", "index.name", "index-1");
+        self.config.set("indexing", "server.url", format!("http://host.docker.internal:{port}"));
+        self.config.set("entitybuilder", "index.name", "entity-index-1");
+        self.config.set("elastic_plugin", "hotswapJarPluginTag", "");
+        self.config.set("elastic_plugin", "hotswapJarPluginConfig", "");
 
-            // Namespace-based config (standard namespace convention)
-            let namespace = "elasticsearch-1-namespace";
-            self.config.set(
-                namespace,
-                "indexing.server.url",
-                format!("http://host.docker.internal:{port}"),
-            );
-            self.config.set(namespace, "indexing.index.name", "index-1");
-            self.config.set(namespace, "entitybuilder.index.name", "entity-index-1");
+        // Namespace-based config (standard namespace convention)
+        let namespace = "elasticsearch-1-namespace";
+        self.config.set(
+            namespace,
+            "indexing.server.url",
+            format!("http://host.docker.internal:{port}"),
+        );
+        self.config.set(namespace, "indexing.index.name", "index-1");
+        self.config.set(namespace, "entitybuilder.index.name", "entity-index-1");
 
-            // Cluster mapping with standard namespace
-            let cluster_mapping = r#"{"primary": [{"namespace": "elasticsearch-1-namespace", "cluster_type": "StandardCluster"}], "staging": [], "old": []}"#;
-            self.config.set("opensearch", "clusterMapping", cluster_mapping);
-        }
+        // Cluster mapping with standard namespace
+        let cluster_mapping = r#"{"primary": [{"namespace": "elasticsearch-1-namespace", "cluster_type": "StandardCluster"}], "staging": [], "old": []}"#;
+        self.config.set("opensearch", "clusterMapping", cluster_mapping);
     }
 
     fn apply_memcached_config(&mut self, _node: &ServiceNode) {
@@ -392,6 +405,12 @@ impl IniGenerator {
         self.config.set("queryapi", "baseURL", &glean_base_url);
         self.config.set("queryapi", "baseInternalURL", &glean_base_url);
         self.config.set("queryapi", "preferClusterBaseUrl", "false");
+
+        // AWS-specific timeouts for local QE (matches Python behavior)
+        if node.config.is_local() && self.context.platform == "aws" {
+            self.config.set("queryapi", "search.temporaryTimeoutMillisOverride", "300000");
+            self.config.set("queryapi", "autocomplete.timeoutMillis", "300000");
+        }
     }
 
     fn apply_task_push_config(&mut self, node: &ServiceNode) {

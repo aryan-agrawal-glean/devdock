@@ -36,6 +36,12 @@ pub async fn execute(
     }
     output::success("Profile validated");
 
+    // Set CLOUD_PLATFORM environment variable based on profile platform
+    // This is needed for platform-specific config loading (e.g., devdock_config_aws.json)
+    // Python code expects uppercase values: "AWS", "GOOGLE", "AZURE"
+    let platform_str = profile.platform.to_string().to_uppercase();
+    std::env::set_var("CLOUD_PLATFORM", &platform_str);
+
     // Step 2: Resolve dependencies
     let resolver = DependencyResolver::new();
     let resolved_components = resolver.resolve(&profile)?;

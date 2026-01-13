@@ -91,11 +91,21 @@ impl DependencyGraph {
             for dep in deps {
                 if !processed.contains(&dep) && !to_process.contains(&dep) {
                     // Check what type of component the dependency is
-                    let service_path = workspace_root
-                        .join(format!("devdock/config/services/{dep}/devdock_config.json"));
+                    // Try both platform-specific and generic config paths
+                    let platform =
+                        std::env::var("CLOUD_PLATFORM").unwrap_or_default().to_lowercase();
+                    let service_paths = [
+                        workspace_root.join(format!(
+                            "devdock/config/services/{dep}/devdock_config_{platform}.json"
+                        )),
+                        workspace_root
+                            .join(format!("devdock/config/services/{dep}/devdock_config.json")),
+                    ];
                     let infra_path = workspace_root.join(format!("devdock/config/infra/{dep}"));
 
-                    if service_path.exists() {
+                    let is_service = service_paths.iter().any(|p| p.exists());
+
+                    if is_service {
                         // It's a service, add with default remote type
                         if !expanded.services.contains_key(&dep) {
                             expanded.services.insert(
@@ -157,14 +167,23 @@ impl DependencyGraph {
 
     /// Find dependencies for a component
     async fn find_dependencies(workspace_root: &Path, name: &str) -> Vec<String> {
-        // Try service config
-        let service_path =
-            workspace_root.join(format!("devdock/config/services/{name}/devdock_config.json"));
+        // Try platform-specific service config first, then fallback to generic
+        // This matches the behavior of load_service_config
+        let config_paths = [
+            workspace_root.join(format!(
+                "devdock/config/services/{}/devdock_config_{}.json",
+                name,
+                std::env::var("CLOUD_PLATFORM").unwrap_or_default().to_lowercase()
+            )),
+            workspace_root.join(format!("devdock/config/services/{name}/devdock_config.json")),
+        ];
 
-        if service_path.exists() {
-            if let Ok(content) = tokio::fs::read_to_string(&service_path).await {
-                if let Ok(config) = serde_json::from_str::<ServiceConfig>(&content) {
-                    return config.dependencies;
+        for service_path in &config_paths {
+            if service_path.exists() {
+                if let Ok(content) = tokio::fs::read_to_string(&service_path).await {
+                    if let Ok(config) = serde_json::from_str::<ServiceConfig>(&content) {
+                        return config.dependencies;
+                    }
                 }
             }
         }

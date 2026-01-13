@@ -257,9 +257,10 @@ impl TempProfileGenerator {
         self.profile.project_number = temp_profile.project_number;
         self.profile.dns_kubectl = Some(temp_profile.dns_kubectl);
 
-        // For AWS platform, set aws_account_id from project
+        // For AWS platform, set aws_account_id and vault_key
         if temp_profile.platform == "aws" {
-            self.profile.aws_account_id = Some(temp_profile.project);
+            self.profile.aws_account_id = Some(temp_profile.project.clone());
+            self.profile.vault_key = "/tmp/stackdriver-exporter-key.json".to_string();
         }
     }
 
@@ -458,22 +459,26 @@ impl TempProfileGenerator {
 
     /// Apply infrastructure configuration from the profile
     fn apply_infra_config(&mut self, name: &str, profile: &Profile) {
-        let infra_config = match profile.infra.get(name) {
-            Some(c) => c,
-            None => return,
-        };
+        // Get infra config from profile, or create a default one for auto-added dependencies
+        let infra_config = profile.infra.get(name);
 
-        let infra_type = match infra_config.deployment_type {
-            devdock_core::types::DeploymentType::Local => "local",
-            devdock_core::types::DeploymentType::Remote => "remote",
+        let infra_type = match infra_config {
+            Some(c) => match c.deployment_type {
+                devdock_core::types::DeploymentType::Local => "local",
+                devdock_core::types::DeploymentType::Remote => "remote",
+            },
+            // Default to local for auto-added infra dependencies (matches Python behavior)
+            None => "local",
         }
         .to_string();
 
         let mut extra = HashMap::new();
 
-        // Copy all extra config from the profile
-        for (key, value) in &infra_config.config {
-            extra.insert(key.clone(), value.clone());
+        // Copy all extra config from the profile (if it exists)
+        if let Some(config) = infra_config {
+            for (key, value) in &config.config {
+                extra.insert(key.clone(), value.clone());
+            }
         }
 
         // SQL-specific configuration
@@ -501,6 +506,15 @@ impl TempProfileGenerator {
                 if !extra.contains_key("copy_where_queries") {
                     extra
                         .insert("copy_where_queries".to_string(), serde_json::Value::Array(vec![]));
+                }
+                if !extra.contains_key("use_full_instance_export") {
+                    extra.insert(
+                        "use_full_instance_export".to_string(),
+                        serde_json::Value::Bool(false),
+                    );
+                }
+                if !extra.contains_key("use_mysql_seed") {
+                    extra.insert("use_mysql_seed".to_string(), serde_json::Value::Bool(false));
                 }
             } else {
                 // Remote SQL configuration
