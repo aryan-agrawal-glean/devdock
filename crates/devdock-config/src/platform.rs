@@ -245,13 +245,50 @@ pub struct AWSPlatform {
 }
 
 impl AWSPlatform {
-    pub async fn new(project: String, _dynamic_config: Option<&ParsedIniConfig>) -> Result<Self> {
+    pub async fn new(project: String, dynamic_config: Option<&ParsedIniConfig>) -> Result<Self> {
         let region = std::env::var("AWS_REGION")
             .or_else(|_| std::env::var("AWS_DEFAULT_REGION"))
             .unwrap_or_else(|_| "us-east-1".to_string());
 
+        // Get AWS account ID from dynamic config or fetch from AWS
+        let aws_account_id = if let Some(config) = dynamic_config {
+            // Try to get from dynamic config first
+            config
+                .get("aws", "accountId")
+                .or_else(|| config.get("manifest", "project_number"))
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| project.clone())
+        } else {
+            // Fallback: try to get from AWS CLI
+            match Command::new("aws")
+                .args(["sts", "get-caller-identity", "--query", "Account", "--output", "text"])
+                .output()
+                .await
+            {
+                Ok(output) if output.status.success() => {
+                    String::from_utf8_lossy(&output.stdout).trim().to_string()
+                }
+                _ => project.clone(), // Fallback to project if we can't get account ID
+            }
+        };
+
+        // Download RDS SSL certificate (matches Python behavior)
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+        let cert_path = format!("{}/.devdock/global-bundle.pem", home);
+        if !std::path::Path::new(&cert_path).exists() {
+            let _ = Command::new("curl")
+                .args([
+                    "-L",
+                    "-o",
+                    &cert_path,
+                    "https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem",
+                ])
+                .status()
+                .await;
+        }
+
         Ok(Self {
-            project,
+            project: aws_account_id,
             zone: String::new(), // AWS doesn't use zones the same way
             region,
         })
@@ -276,6 +313,9 @@ impl Platform for AWSPlatform {
 
     fn update_devdock_config(&self, config: &mut IniConfig) {
         config.set("aws", "region", &self.region);
+        config.set("aws", "storage.configbucket", format!("config-{}", self.project));
+        config.set("aws", "apps.useCentralApp", "false");
+        config.set("aws", "docbuilderRequest.enabled", "true");
     }
 
     fn update_temp_profile(&self, profile: &mut TempProfile) {

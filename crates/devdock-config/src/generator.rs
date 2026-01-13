@@ -338,6 +338,7 @@ impl ConfigGenerator {
             multi_project: true,
             has_quality_pipelines: false,
             project: profile.project.clone(),
+            platform: profile.platform.to_string(),
             sql_metadata: None,
         };
 

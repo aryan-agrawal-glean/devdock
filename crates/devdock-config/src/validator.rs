@@ -38,7 +38,15 @@ impl ProfileValidator {
     }
 
     /// Validate that the current gcloud project matches the profile's project.
+    /// Only validates for Google platform - skips for AWS and Azure.
     pub fn validate_gcloud_project(&self, profile: &Profile) -> Result<()> {
+        use devdock_core::types::Platform;
+
+        // Skip gcloud validation for non-Google platforms
+        if !matches!(profile.platform, Platform::Google) {
+            return Ok(());
+        }
+
         let output = Command::new("gcloud")
             .args(["config", "get-value", "project"])
             .output()
