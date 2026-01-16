@@ -41,7 +41,7 @@ serde_json.workspace = true
 which.workspace = true
 libc.workspace = true
 reqwest.workspace = true
-openssl.workspace = true
+openssl = { workspace = true, features = ["vendored"] }
 regex.workspace = true
 walkdir.workspace = true
 chrono.workspace = true
