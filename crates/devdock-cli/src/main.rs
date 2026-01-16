@@ -345,6 +345,20 @@ enum SyncCommands {
 
     /// Show sync status
     Status,
+
+    /// Show sync history
+    History {
+        /// Number of recent entries to show
+        #[arg(long, short = 'n')]
+        tail: Option<usize>,
+    },
+
+    /// Show sync errors
+    Errors {
+        /// Number of recent errors to show
+        #[arg(long, short = 'n')]
+        tail: Option<usize>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -573,6 +587,8 @@ async fn main() {
             SyncCommands::Start { full } => commands::sync::start(full).await,
             SyncCommands::Stop => commands::sync::stop().await,
             SyncCommands::Status => commands::sync::status().await,
+            SyncCommands::History { tail } => commands::sync::history(tail).await,
+            SyncCommands::Errors { tail } => commands::sync::errors(tail).await,
         },
 
         Commands::Report { summary, description, command } => match (summary, description, command)
