@@ -24,8 +24,8 @@ chrono.workspace = true
 async-trait.workspace = true
 dirs.workspace = true
 reqwest.workspace = true
+openssl.workspace = true
 libc.workspace = true
 
 [dev-dependencies]
 pretty_assertions.workspace = true
-
