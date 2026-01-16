@@ -40,12 +40,12 @@ check_gh_cli() {
     if ! command -v gh >/dev/null 2>&1; then
         error "GitHub CLI (gh) is required but not installed.\nInstall it: https://cli.github.com/"
     fi
-    
+
     # Check if authenticated
     if ! gh auth status >/dev/null 2>&1; then
         error "GitHub CLI is not authenticated.\nRun: gh auth login"
     fi
-    
+
     success "GitHub CLI is authenticated"
 }
 
@@ -53,7 +53,7 @@ check_gh_cli() {
 detect_platform() {
     local os=""
     local arch=""
-    
+
     case "$(uname -s)" in
         Linux*)
             os="linux"
@@ -65,7 +65,7 @@ detect_platform() {
             error "Unsupported operating system: $(uname -s)"
             ;;
     esac
-    
+
     case "$(uname -m)" in
         x86_64|amd64)
             arch="x86_64"
@@ -81,7 +81,7 @@ detect_platform() {
             error "Unsupported architecture: $(uname -m)"
             ;;
     esac
-    
+
     echo "${os}-${arch}"
 }
 
@@ -89,11 +89,11 @@ detect_platform() {
 get_latest_version() {
     local version
     version=$(gh release list --repo "$REPO" --limit 1 --json tagName --jq '.[0].tagName')
-    
+
     if [ -z "$version" ]; then
         error "Failed to fetch latest version from GitHub"
     fi
-    
+
     echo "$version"
 }
 
@@ -101,61 +101,39 @@ get_latest_version() {
 download_binary() {
     local version="$1"
     local platform="$2"
-    local asset_name="${BINARY_NAME}-${platform}-${version}"
+    local asset_name="${BINARY_NAME}-${platform}-${version}.tar.gz"
     local temp_dir
     temp_dir=$(mktemp -d)
-    
+
     info "Downloading DevDock ${version} for ${platform}..."
-    
+
     # Download using gh CLI (works with private repos)
     if ! gh release download "$version" --repo "$REPO" --pattern "$asset_name" --dir "$temp_dir"; then
         error "Failed to download binary. Available assets:"
         gh release view "$version" --repo "$REPO" --json assets --jq '.assets[].name'
         exit 1
     fi
-    
+
     # Verify the download succeeded
     if [ ! -f "${temp_dir}/${asset_name}" ]; then
         error "Downloaded file not found: ${asset_name}"
     fi
-    
-    # Rename the downloaded file
-    mv "${temp_dir}/${asset_name}" "${temp_dir}/${BINARY_NAME}"
-    
+
+    # Extract the tarball
+    info "Extracting archive..."
+    if ! tar -xzf "${temp_dir}/${asset_name}" -C "$temp_dir"; then
+        error "Failed to extract archive"
+    fi
+
+    # Remove the tarball
+    rm "${temp_dir}/${asset_name}"
+
     # Verify it's a valid executable (basic check)
     if ! file "${temp_dir}/${BINARY_NAME}" | grep -q "executable"; then
         warning "Downloaded file may not be a valid executable:"
         file "${temp_dir}/${BINARY_NAME}" >&2
     fi
-    
-    # Download and verify checksums if available
-    info "Verifying checksum..."
-    if gh release download "$version" --repo "$REPO" --pattern "checksums.txt" --dir "$temp_dir" 2>/dev/null; then
-        local expected_checksum
-        expected_checksum=$(grep "$asset_name" "${temp_dir}/checksums.txt" | awk '{print $1}')
-        
-        if [ -n "$expected_checksum" ]; then
-            local actual_checksum
-            if command -v shasum >/dev/null 2>&1; then
-                actual_checksum=$(shasum -a 256 "${temp_dir}/${BINARY_NAME}" | awk '{print $1}')
-            elif command -v sha256sum >/dev/null 2>&1; then
-                actual_checksum=$(sha256sum "${temp_dir}/${BINARY_NAME}" | awk '{print $1}')
-            else
-                warning "Cannot verify checksum: shasum/sha256sum not found"
-                echo "$temp_dir"
-                return 0
-            fi
-            
-            if [ "$expected_checksum" != "$actual_checksum" ]; then
-                error "Checksum mismatch!\nExpected: ${expected_checksum}\nActual:   ${actual_checksum}"
-            fi
-            
-            success "Checksum verified"
-        fi
-    else
-        warning "Could not download checksums, skipping verification"
-    fi
-    
+
     echo "$temp_dir"
 }
 
@@ -163,16 +141,16 @@ download_binary() {
 install_binary() {
     local temp_dir="$1"
     local needs_sudo=false
-    
+
     if [ ! -w "$INSTALL_DIR" ]; then
         needs_sudo=true
         warning "Installation directory ${INSTALL_DIR} requires sudo access"
     fi
-    
+
     chmod +x "${temp_dir}/${BINARY_NAME}"
-    
+
     info "Installing to ${INSTALL_DIR}/${BINARY_NAME}..."
-    
+
     # Use install command for atomic operation with correct permissions
     if [ "$needs_sudo" = true ]; then
         if ! command -v sudo >/dev/null 2>&1; then
@@ -182,7 +160,7 @@ install_binary() {
     else
         install -m 755 "${temp_dir}/${BINARY_NAME}" "${INSTALL_DIR}/${BINARY_NAME}"
     fi
-    
+
     # On macOS, remove quarantine attribute to avoid Gatekeeper issues
     if [ "$(uname -s)" = "Darwin" ]; then
         info "Removing macOS quarantine attribute..."
@@ -192,14 +170,14 @@ install_binary() {
             xattr -d com.apple.quarantine "${INSTALL_DIR}/${BINARY_NAME}" 2>/dev/null || true
         fi
     fi
-    
+
     rm -rf "$temp_dir"
-    
+
     # Verify the binary actually works before declaring success
     if ! "${INSTALL_DIR}/${BINARY_NAME}" --version >/dev/null 2>&1; then
         error "Installed binary is not executable or corrupt. Try downloading again."
     fi
-    
+
     success "DevDock installed successfully!"
 }
 
@@ -208,7 +186,7 @@ check_path() {
     if ! echo "$PATH" | grep -q "$INSTALL_DIR"; then
         warning "${INSTALL_DIR} is not in your PATH"
         echo "" >&2
-        
+
         # Detect shell and config file
         local shell_config=""
         if [ -n "$BASH_VERSION" ]; then
@@ -234,12 +212,12 @@ check_path() {
                     ;;
             esac
         fi
-        
+
         if [ -n "$shell_config" ]; then
             echo "Would you like to add ${INSTALL_DIR} to your PATH automatically?" >&2
             read -p "Update $shell_config? [y/N] " -n 1 -r
             echo "" >&2
-            
+
             if [[ $REPLY =~ ^[Yy]$ ]]; then
                 # Check if already in config (avoid duplicates)
                 if grep -q "export PATH=\"${INSTALL_DIR}:\$PATH\"" "$shell_config" 2>/dev/null; then
@@ -272,26 +250,26 @@ main() {
     echo "║       DevDock Installation Script      ║"
     echo "╚════════════════════════════════════════╝"
     echo ""
-    
+
     # Check prerequisites
     check_gh_cli
-    
+
     # Detect platform
     local platform
     platform=$(detect_platform)
     info "Detected platform: ${platform}"
-    
+
     # Get latest version
     local version
     version=$(get_latest_version)
     info "Latest version: ${version}"
-    
+
     # Check if already installed
     if command -v devdock >/dev/null 2>&1; then
         local current_version
         current_version=$(devdock --version 2>/dev/null | awk '{print $2}' || echo "unknown")
         warning "DevDock ${current_version} is already installed"
-        
+
         if [ "$current_version" = "${version#v}" ]; then
             info "You already have the latest version installed"
             echo "" >&2
@@ -305,35 +283,35 @@ main() {
             info "Upgrading from ${current_version} to ${version#v}"
         fi
     fi
-    
+
     # Download binary
     local temp_dir
     temp_dir=$(download_binary "$version" "$platform")
-    
+
     # Install binary
     install_binary "$temp_dir"
-    
+
     # Verify installation
     if command -v devdock >/dev/null 2>&1; then
         local which_devdock
         which_devdock=$(which devdock)
-        
+
         success "Installed to: ${INSTALL_DIR}/${BINARY_NAME}"
-        
+
         # Check if using the correct binary location
         if [ "$which_devdock" != "${INSTALL_DIR}/${BINARY_NAME}" ]; then
             warning "Found existing devdock at: $which_devdock"
             info "This binary will take precedence (appears first in PATH)"
             echo "" >&2
             info "Overriding with new binary..."
-            
+
             # Use install command for proper permissions
             if [ -w "$(dirname "$which_devdock")" ]; then
                 install -m 755 "${INSTALL_DIR}/${BINARY_NAME}" "$which_devdock"
             else
                 sudo install -m 755 "${INSTALL_DIR}/${BINARY_NAME}" "$which_devdock"
             fi
-            
+
             # Remove quarantine on macOS
             if [ "$(uname -s)" = "Darwin" ]; then
                 if [ -w "$(dirname "$which_devdock")" ]; then
@@ -342,20 +320,20 @@ main() {
                     sudo xattr -d com.apple.quarantine "$which_devdock" 2>/dev/null || true
                 fi
             fi
-            
+
             success "Replaced $which_devdock"
         fi
-        
+
         # Final verification - test the binary actually runs
         local installed_version
         installed_version=$(devdock --version 2>/dev/null | awk '{print $2}')
-        
+
         if [ -z "$installed_version" ]; then
             error "Binary installed but not working. Run: xattr -d com.apple.quarantine $(which devdock)"
         fi
-        
+
         success "Active version: ${installed_version} ($(which devdock))"
-        
+
         # Verify version matches what we expected
         if [ "$installed_version" != "${version#v}" ]; then
             warning "Installed version (${installed_version}) doesn't match expected (${version#v})"
@@ -364,7 +342,7 @@ main() {
     else
         check_path
     fi
-    
+
     echo "" >&2
     echo "════════════════════════════════════════" >&2
     echo "" >&2
@@ -374,7 +352,7 @@ main() {
     echo "  devdock --help" >&2
     echo "  devdock start <profile>" >&2
     echo "" >&2
-    
+
     # Show troubleshooting tips if there are multiple devdock binaries
     if [ "$(which -a devdock 2>/dev/null | wc -l)" -gt 1 ]; then
         info "Multiple devdock binaries found in PATH:"
@@ -405,4 +383,3 @@ handle_error() {
 }
 
 main "$@"
-
