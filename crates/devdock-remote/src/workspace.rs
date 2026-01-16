@@ -234,6 +234,42 @@ where
         eprintln!("  💡 DevDock requires both gcloud auth AND application-default credentials.");
     }
 
+    // 1.6. Authenticate Docker with GCP Artifact Registry
+    if auth_ok || adc_ok {
+        info!("Authenticating Docker with GCP Artifact Registry...");
+        if verbose {
+            print!("  Authenticating Docker...");
+            std::io::Write::flush(&mut std::io::stdout()).ok();
+        }
+
+        let docker_login_cmd = "gcloud auth print-access-token | docker login -u oauth2accesstoken --password-stdin https://us-central1-docker.pkg.dev";
+
+        match ssh::ssh_exec_with_log(workspace, docker_login_cmd, log_file) {
+            Ok(output) if output.contains("Login Succeeded") => {
+                if verbose {
+                    println!(" ✓");
+                }
+            }
+            Ok(output) => {
+                if verbose {
+                    println!(" ? (check manually)");
+                    if !output.trim().is_empty() {
+                        eprintln!("  ⚠ Docker login output: {}", output.trim());
+                    }
+                }
+            }
+            Err(e) => {
+                if verbose {
+                    println!();
+                    eprintln!("  ⚠ Warning: Docker login failed: {e}");
+                    eprintln!(
+                        "  You may need to manually authenticate Docker on the remote workspace."
+                    );
+                }
+            }
+        }
+    }
+
     // 2. Start DevDock in tmux session on remote
     // Export environment variables before tmux, they will be inherited by the session
     let start_script = if let Some(svc) = services {
