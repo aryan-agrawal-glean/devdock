@@ -15,10 +15,10 @@ devdock-core = { path = "../devdock-core" }
 anyhow.workspace = true
 thiserror.workspace = true
 sqlx.workspace = true
+openssl.workspace = true
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
-
