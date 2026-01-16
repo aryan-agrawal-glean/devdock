@@ -83,7 +83,7 @@ impl SessionTiming {
         #[cfg(unix)]
         {
             use std::ffi::CStr;
-            let mut name = [0i8; 256];
+            let mut name = [0 as libc::c_char; 256];
             unsafe {
                 if libc::gethostname(name.as_mut_ptr(), 256) == 0 {
                     if let Ok(hostname) = CStr::from_ptr(name.as_ptr()).to_str() {
