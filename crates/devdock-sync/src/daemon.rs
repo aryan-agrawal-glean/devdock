@@ -1,11 +1,16 @@
 //! Sync daemon for background file synchronization.
 
 use crate::{
-    git, health::HealthMonitor, rsync::RsyncClient, watcher::FileWatcher, Result, SyncError,
+    git,
+    health::HealthMonitor,
+    rsync::RsyncClient,
+    stats::{StatsUpdate, SyncStatsTracker},
+    watcher::FileWatcher,
+    Result, SyncError,
 };
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tracing::{debug, error, info};
 
 /// Sync daemon state.
@@ -15,6 +20,7 @@ pub struct SyncDaemon {
     rsync_client: RsyncClient,
     file_watcher: FileWatcher,
     health_monitor: HealthMonitor,
+    stats_tracker: SyncStatsTracker,
     repo_path: PathBuf,
     full_mode: bool,
 }
@@ -33,6 +39,7 @@ impl SyncDaemon {
 
         let file_watcher = FileWatcher::new()?;
         let health_monitor = HealthMonitor::new(workspace_name.clone());
+        let stats_tracker = SyncStatsTracker::new(&devdock_id)?;
 
         Ok(Self {
             devdock_id,
@@ -40,6 +47,7 @@ impl SyncDaemon {
             rsync_client,
             file_watcher,
             health_monitor,
+            stats_tracker,
             repo_path,
             full_mode,
         })
@@ -135,22 +143,66 @@ impl SyncDaemon {
                         if files_to_sync.is_empty() {
                             eprintln!("[SYNC] All detected files were filtered out (not in monitored dirs or wrong extension)");
                         } else {
+                            // Update pending files in stats (for status visibility)
+                            self.stats_tracker.set_pending_files(files_to_sync.clone());
                             for file in files_to_sync.iter().take(5) {
                                 eprintln!("[SYNC]   Syncing: {file:?}");
                             }
 
-                            // Sync changed files
+                            // Mark files as currently syncing
+                            self.stats_tracker.start_syncing(&files_to_sync);
+
+                            // Sync changed files (measure duration)
+                            let sync_start = Instant::now();
                             match self.rsync_client.sync_files(&files_to_sync, self.full_mode) {
                                 Ok(()) => {
+                                    let duration = sync_start.elapsed();
+
+                                    // Estimate bytes (rough approximation)
+                                    let bytes = self.estimate_file_sizes(&files_to_sync);
+
+                                    // Clear syncing state
+                                    self.stats_tracker.finish_syncing();
+
+                                    // Record success in health monitor and stats
                                     self.health_monitor.record_success();
-                                    info!("Synced {} files", files_to_sync.len());
+                                    self.stats_tracker.record_success(files_to_sync.len(), bytes);
+
+                                    // Send detailed update to background writer
+                                    self.stats_tracker.send_update(StatsUpdate {
+                                        files: files_to_sync.clone(),
+                                        bytes,
+                                        duration_ms: duration.as_millis() as u64,
+                                        success: true,
+                                        error: None,
+                                    });
+
+                                    info!("Synced {} files in {:?}", files_to_sync.len(), duration);
                                     eprintln!(
-                                        "[SYNC] ✅ Successfully synced {} files",
-                                        files_to_sync.len()
+                                        "[SYNC] ✅ Successfully synced {} files in {}ms",
+                                        files_to_sync.len(),
+                                        duration.as_millis()
                                     );
                                 }
                                 Err(e) => {
+                                    let duration = sync_start.elapsed();
+
+                                    // Clear syncing state
+                                    self.stats_tracker.finish_syncing();
+
+                                    // Record failure
                                     self.health_monitor.record_failure();
+                                    self.stats_tracker.record_failure();
+
+                                    // Send error update to background writer
+                                    self.stats_tracker.send_update(StatsUpdate {
+                                        files: files_to_sync.clone(),
+                                        bytes: 0,
+                                        duration_ms: duration.as_millis() as u64,
+                                        success: false,
+                                        error: Some(e.to_string()),
+                                    });
+
                                     error!("Sync failed: {}", e);
                                     eprintln!("[SYNC] ❌ Sync failed: {e}");
                                 }
@@ -247,6 +299,18 @@ impl SyncDaemon {
         self.health_monitor.record_success();
         eprintln!("[SYNC] Health monitor updated, returning Ok");
         Ok(())
+    }
+
+    /// Estimate total size of files (rough approximation for stats)
+    fn estimate_file_sizes(&self, files: &[PathBuf]) -> u64 {
+        files
+            .iter()
+            .filter_map(|file| {
+                let full_path =
+                    if file.is_absolute() { file.clone() } else { self.repo_path.join(file) };
+                std::fs::metadata(&full_path).ok().map(|m| m.len())
+            })
+            .sum()
     }
 
     /// Filter files based on sync mode and patterns.

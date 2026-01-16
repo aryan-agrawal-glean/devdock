@@ -7,12 +7,14 @@ pub mod daemon;
 pub mod git;
 pub mod health;
 pub mod rsync;
+pub mod stats;
 pub mod watcher;
 
 pub use daemon::SyncDaemon;
-pub use git::{list_all_files, list_git_tracked_files};
+pub use git::{list_all_files, list_git_modified_files, list_git_tracked_files};
 pub use health::HealthMonitor;
 pub use rsync::RsyncClient;
+pub use stats::{StatsUpdate, SyncStatsTracker};
 pub use watcher::FileWatcher;
 
 use thiserror::Error;

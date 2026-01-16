@@ -40,6 +40,10 @@ const SYNC_EXTENSIONS: &[&str] = &[
 /// File names to always sync.
 const SYNC_FILENAMES: &[&str] = &["pom.xml", "Makefile", "package.json", "pnpm-lock.yaml"];
 
+/// Files that should sync without requiring git tracking.
+/// These are typically config files that may be .gitignore'd but still need to sync.
+const SYNC_WITHOUT_GIT_TRACKING: &[&str] = &["config/custom.ini", "devdock/custom.ini"];
+
 /// Check if a file should be synced based on patterns (monitored dirs + extensions).
 pub fn should_sync_file_by_pattern(path: &Path) -> bool {
     // Check if in monitored directory
@@ -177,17 +181,25 @@ pub fn list_git_modified_files(repo_path: &Path) -> Result<Vec<PathBuf>> {
 pub fn should_sync_file(repo_path: &Path, file_path: &Path, full_mode: bool) -> Result<bool> {
     if full_mode {
         // In full mode, sync all files (respecting .gitignore via WalkBuilder)
-        Ok(true)
-    } else {
-        // In git mode, only sync tracked files
-        let repo = Repository::open(repo_path)
-            .map_err(|_| SyncError::GitRepoNotFound(repo_path.display().to_string()))?;
-
-        let index = repo.index()?;
-        let relative_path = file_path
-            .strip_prefix(repo_path)
-            .map_err(|_| SyncError::GitRepoNotFound("Invalid path".to_string()))?;
-
-        Ok(index.get_path(relative_path, 0).is_some())
+        return Ok(true);
     }
+
+    // Get relative path for checking
+    let relative_path = file_path
+        .strip_prefix(repo_path)
+        .map_err(|_| SyncError::GitRepoNotFound("Invalid path".to_string()))?;
+
+    // Check if it's a special file that doesn't need git tracking
+    let path_str = relative_path.to_string_lossy();
+    if SYNC_WITHOUT_GIT_TRACKING.iter().any(|p| path_str == *p) {
+        debug!("File {} syncs without git tracking (special file)", path_str);
+        return Ok(true);
+    }
+
+    // Normal git tracking check
+    let repo = Repository::open(repo_path)
+        .map_err(|_| SyncError::GitRepoNotFound(repo_path.display().to_string()))?;
+
+    let index = repo.index()?;
+    Ok(index.get_path(relative_path, 0).is_some())
 }
