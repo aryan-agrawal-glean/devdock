@@ -246,6 +246,7 @@ impl TempProfileGenerator {
             devdock_root: self.profile.devdock_root.clone(),
             dns_kubectl: String::new(),
             current_profile: String::new(),
+            vault_key: None,
         };
 
         platform.update_temp_profile(&mut temp_profile);

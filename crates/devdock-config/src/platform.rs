@@ -74,6 +74,7 @@ pub struct TempProfile {
     pub devdock_root: String,
     pub dns_kubectl: String,
     pub current_profile: String,
+    pub vault_key: Option<String>,
 }
 
 /// DNS kubectl enabled projects
@@ -222,6 +223,7 @@ impl Platform for GooglePlatform {
         profile.project_number = self.project_number.clone();
         profile.dns_kubectl =
             if self.dns_kubectl_enabled { "enabled" } else { "disabled" }.to_string();
+        profile.vault_key = None; // Google uses ADC, not vault key
     }
 
     fn name(&self) -> &'static str {
@@ -287,6 +289,39 @@ impl AWSPlatform {
                 .await;
         }
 
+        // Create stackdriver-exporter-key.json for AWS->GCP monitoring
+        // This enables AWS credentials to authenticate to GCP services via Workload Identity Federation
+        // Matches Python behavior in platforms.py:AWSPlatform.__init__
+        if let Some(config) = dynamic_config {
+            if let (Some(gcp_project), Some(gcp_project_number)) = (
+                config.get("aws", "gcpConnectorProject"),
+                config.get("aws", "gcpConnectorProjectNumber"),
+            ) {
+                let credentials_json = format!(
+                    r#"{{
+  "type": "external_account",
+  "project_id": "{}",
+  "audience": "//iam.googleapis.com/projects/{}/locations/global/workloadIdentityPools/aws-access-pool/providers/aws-provider",
+  "subject_token_type": "urn:ietf:params:aws:token-type:aws4_request",
+  "service_account_impersonation_url": "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/stackdriver-exporter@{}.iam.gserviceaccount.com:generateAccessToken",
+  "token_url": "https://sts.googleapis.com/v1/token",
+  "credential_source": {{
+    "environment_id": "aws1",
+    "regional_cred_verification_url": "https://sts.{}.amazonaws.com?Action=GetCallerIdentity&Version=2011-06-15"
+  }}
+}}"#,
+                    gcp_project, gcp_project_number, gcp_project, region
+                );
+
+                // Write to /tmp/stackdriver-exporter-key.json
+                if let Err(e) =
+                    tokio::fs::write("/tmp/stackdriver-exporter-key.json", credentials_json).await
+                {
+                    eprintln!("Warning: Failed to create stackdriver-exporter-key.json: {}", e);
+                }
+            }
+        }
+
         Ok(Self {
             project: aws_account_id,
             zone: String::new(), // AWS doesn't use zones the same way
@@ -323,6 +358,8 @@ impl Platform for AWSPlatform {
         profile.platform = "aws".to_string();
         profile.region = self.region.clone();
         profile.dns_kubectl = "disabled".to_string();
+        // Set vault_key for GCP monitoring (matches Python platforms.py:190)
+        profile.vault_key = Some("/tmp/stackdriver-exporter-key.json".to_string());
     }
 
     fn name(&self) -> &'static str {
@@ -395,6 +432,7 @@ impl Platform for AzurePlatform {
         profile.platform = "azure".to_string();
         profile.region = self.region.clone();
         profile.dns_kubectl = "disabled".to_string();
+        profile.vault_key = None; // Azure uses az cli auth, not vault key
     }
 
     fn name(&self) -> &'static str {
@@ -447,6 +485,7 @@ impl Platform for MockPlatform {
         profile.project = self.project.clone();
         profile.zone = "us-central1-a".to_string();
         profile.region = "us-central1".to_string();
+        profile.vault_key = None; // Mock platform doesn't need vault key
     }
 
     fn name(&self) -> &str {

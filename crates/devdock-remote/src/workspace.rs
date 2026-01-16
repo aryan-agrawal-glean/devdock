@@ -270,15 +270,85 @@ where
         }
     }
 
+    // 1.7. Verify AWS credentials (if synced)
+    info!("Checking AWS credentials on remote...");
+    if verbose {
+        print!("  Verifying AWS auth...");
+        std::io::Write::flush(&mut std::io::stdout()).ok();
+    }
+
+    match ssh::ssh_exec_with_log(
+        workspace,
+        "aws sts get-caller-identity --query Account --output text 2>&1",
+        log_file,
+    ) {
+        Ok(output)
+            if !output.contains("Unable to locate credentials")
+                && !output.contains("could not be found") =>
+        {
+            let account = output.trim();
+            if output.contains("ExpiredToken") {
+                if verbose {
+                    println!(" ✗ EXPIRED");
+                    eprintln!("  ⚠ AWS credentials have expired");
+                    eprintln!("  💡 Refresh locally: aws sso login (or get new session tokens)");
+                }
+            } else if account.len() == 12 && account.chars().all(|c| c.is_ascii_digit()) {
+                if verbose {
+                    println!(" ✓ [account: {}]", account);
+                }
+            } else if verbose {
+                println!(" ?");
+            }
+        }
+        Ok(_) | Err(_) => {
+            if verbose {
+                println!(" (not configured)");
+            }
+        }
+    }
+
     // 2. Start DevDock in tmux session on remote
     // Export environment variables before tmux, they will be inherited by the session
+
+    // Build environment variable exports (quote values to handle special characters)
+    let mut env_exports =
+        format!("export DEVDOCK_ID='{devdock_id}' && export DEVDOCK_PORT_OFFSET={offset}");
+
+    // Export ALL AWS environment variables if set locally
+    // This allows users to use either:
+    //   1. Environment variables (export AWS_ACCESS_KEY_ID=...) OR
+    //   2. Credential files (~/.aws/credentials + ~/.aws/config)
+    // Both approaches are now fully supported and consistent
+    let aws_env_vars = vec![
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_SESSION_TOKEN",
+        "AWS_REGION",
+        "AWS_DEFAULT_REGION",
+        "AWS_PROFILE",
+    ];
+
+    let mut exported_aws_vars = Vec::new();
+    for var in aws_env_vars {
+        if let Ok(value) = std::env::var(var) {
+            // Quote the value to handle spaces and special characters
+            env_exports.push_str(&format!(" && export {var}='{value}'"));
+            exported_aws_vars.push(var);
+        }
+    }
+
+    if verbose && !exported_aws_vars.is_empty() {
+        println!("  AWS env vars exported: {}", exported_aws_vars.join(", "));
+    }
+
     let start_script = if let Some(svc) = services {
         format!(
-            "export DEVDOCK_ID={devdock_id} && export DEVDOCK_PORT_OFFSET={offset} && cd /home/workspace/scio && tmux new-session -d -s devdock 'devdock start {profile} -s {svc}'"
+            "{env_exports} && cd /home/workspace/scio && tmux new-session -d -s devdock 'devdock start {profile} -s {svc}'"
         )
     } else {
         format!(
-            "export DEVDOCK_ID={devdock_id} && export DEVDOCK_PORT_OFFSET={offset} && cd /home/workspace/scio && tmux new-session -d -s devdock 'devdock start {profile}'"
+            "{env_exports} && cd /home/workspace/scio && tmux new-session -d -s devdock 'devdock start {profile}'"
         )
     };
 
