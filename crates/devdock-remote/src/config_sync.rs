@@ -389,292 +389,62 @@ pub fn sync_gcloud_credentials(workspace: &str, verbose: bool) -> Result<()> {
     Ok(())
 }
 
-/// Sync AWS credentials to remote workspace.
+/// Validate AWS credentials via environment variables.
 ///
-/// This syncs ~/.aws/credentials and ~/.aws/config files if they exist.
-/// Users can also use environment variables (AWS_ACCESS_KEY_ID, etc.) which
-/// are automatically exported to the remote session - see workspace.rs.
+/// For AWS profiles, users must set these environment variables:
+/// - AWS_ACCESS_KEY_ID (required)
+/// - AWS_SECRET_ACCESS_KEY (required)
+/// - AWS_SESSION_TOKEN (optional, for temporary credentials)
+/// - AWS_REGION (required)
 ///
-/// Both approaches are supported:
-/// 1. Environment variables: export AWS_* vars before start-remote
-/// 2. Credential files: use `aws configure` (files synced here)
-pub fn sync_aws_credentials(workspace: &str, verbose: bool) -> Result<()> {
-    info!("Syncing AWS credentials to {}", workspace);
+/// These will be automatically exported to the remote session.
+pub fn sync_aws_credentials(_workspace: &str, verbose: bool) -> Result<()> {
+    info!("Validating AWS credentials");
     if verbose {
-        println!("    → Syncing AWS credentials files...");
+        println!("    → Validating AWS environment variables...");
     }
 
-    // Check if AWS credentials exist locally (either files or env vars)
-    let aws_dir = dirs::home_dir()
-        .ok_or_else(|| RemoteError::ConfigSyncError("Cannot determine home directory".to_string()))?
-        .join(".aws");
+    // Check required AWS environment variables
+    let has_access_key = std::env::var("AWS_ACCESS_KEY_ID").is_ok();
+    let has_secret_key = std::env::var("AWS_SECRET_ACCESS_KEY").is_ok();
+    let has_region =
+        std::env::var("AWS_REGION").is_ok() || std::env::var("AWS_DEFAULT_REGION").is_ok();
 
-    let has_credential_files = aws_dir.exists()
-        && (aws_dir.join("credentials").exists() || aws_dir.join("config").exists());
-
-    let has_env_vars = std::env::var("AWS_ACCESS_KEY_ID").is_ok()
-        && std::env::var("AWS_SECRET_ACCESS_KEY").is_ok();
-
-    // Fail fast if no credentials available at all
-    if !has_credential_files && !has_env_vars {
+    // Fail fast if required credentials are missing
+    if !has_access_key || !has_secret_key {
         return Err(RemoteError::ConfigSyncError(
-            "No AWS credentials found. AWS profiles require credentials to be configured.\n\n\
-             Please use one of these methods:\n\n\
-             Option 1 - Credential Files (Recommended):\n\
-               aws configure\n\
-               # Then enter your credentials when prompted\n\n\
-             Option 2 - Environment Variables:\n\
-               export AWS_ACCESS_KEY_ID=your_key_id\n\
-               export AWS_SECRET_ACCESS_KEY=your_secret_key\n\
-               export AWS_SESSION_TOKEN=your_token  # If using temporary credentials\n\
+            "AWS credentials not found in environment variables.\n\n\
+             AWS profiles require these environment variables to be set:\n\n\
+             Required:\n\
+               export AWS_ACCESS_KEY_ID=your_access_key_id\n\
+               export AWS_SECRET_ACCESS_KEY=your_secret_access_key\n\
                export AWS_REGION=us-east-1\n\n\
-             Option 3 - AWS SSO:\n\
-               aws configure sso\n\
-               aws sso login\n"
+             Optional (for temporary credentials):\n\
+               export AWS_SESSION_TOKEN=your_session_token\n\n\
+             These variables will be automatically exported to the remote workspace.\n"
                 .to_string(),
         ));
     }
 
-    // Check if AWS_REGION is configured (warn if missing but don't fail)
-    let has_region = std::env::var("AWS_REGION").is_ok()
-        || std::env::var("AWS_DEFAULT_REGION").is_ok()
-        || (has_credential_files && aws_dir.join("config").exists());
-
-    if !has_region && verbose {
-        println!("    ⚠️  Warning: AWS_REGION not configured");
-        println!("      Services may default to us-east-1 or fail");
-        println!("      Set region: export AWS_REGION=us-east-1");
-        println!("      Or add to ~/.aws/config");
-    }
-
-    if !has_credential_files {
-        debug!("No ~/.aws found; will use environment variables only");
-        if verbose {
-            println!("    → No ~/.aws/ directory found");
-            println!("      ✓ Using environment variables (AWS_ACCESS_KEY_ID, etc.)");
-            println!("      💡 For persistence, consider running: aws configure");
-        }
-        return Ok(());
-    }
-
-    // Create temp directory for staging
-    let temp_dir = tempfile::tempdir().map_err(|e| {
-        RemoteError::ConfigSyncError(format!("Failed to create temp directory: {e}"))
-    })?;
-    let temp_path = temp_dir.path();
-    let aws_temp = temp_path.join("aws");
-
-    std::fs::create_dir_all(&aws_temp)
-        .map_err(|e| RemoteError::ConfigSyncError(format!("Failed to create aws temp dir: {e}")))?;
-
-    // Core files needed for AWS auth
-    let aws_files = vec!["credentials", "config"];
-
-    // Copy files to temp directory
-    info!("Staging AWS credential files...");
-    let mut staged_files = Vec::new();
-
-    for file in &aws_files {
-        let src = aws_dir.join(file);
-        if src.exists() {
-            let dest = aws_temp.join(file);
-            std::fs::copy(&src, &dest)
-                .map_err(|e| RemoteError::ConfigSyncError(format!("Failed to copy {file}: {e}")))?;
-
-            // Set permissions to 0600
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let mut perms = std::fs::metadata(&dest)
-                    .map_err(|e| {
-                        RemoteError::ConfigSyncError(format!("Failed to get metadata: {e}"))
-                    })?
-                    .permissions();
-                perms.set_mode(0o600);
-                std::fs::set_permissions(&dest, perms).map_err(|e| {
-                    RemoteError::ConfigSyncError(format!("Failed to set permissions: {e}"))
-                })?;
-            }
-
-            debug!("Staged file: {}", file);
-            staged_files.push(file);
-        }
-    }
-
-    if staged_files.is_empty() {
-        debug!("No AWS credential files found to sync");
-        if verbose {
-            println!("    → No AWS credential files to sync");
-            println!("      Using environment variables if set (AWS_ACCESS_KEY_ID, etc.)");
-            println!("      Or run 'aws configure' to create credential files");
-        }
-        return Ok(());
+    // Warn if region is missing
+    if !has_region {
+        eprintln!("\n⚠️  Warning: AWS_REGION not set");
+        eprintln!("   Services may default to us-east-1 or fail");
+        eprintln!("   Set region: export AWS_REGION=us-east-1\n");
     }
 
     if verbose {
-        println!("    → Staged {} credential file(s)", staged_files.len());
-    }
-    info!("Staged {} AWS files", staged_files.len());
-
-    // Copy to workspace using scp (copy individual files, not directory)
-    // Note: ~/.secrets-sync directory is created by sync_all_config
-    info!("Copying AWS credentials to remote...");
-    if verbose {
-        println!("      (copying files via scp...)");
-    }
-
-    // Copy files individually to ensure they end up in ~/.secrets-sync/ directly
-    // This matches the gcloud pattern
-    for file in &staged_files {
-        let src = aws_temp.join(file);
-        let scp_target = format!("{workspace}.coder:~/.secrets-sync/");
-
-        let output = Command::new("scp")
-            .arg("-q")
-            .arg("-o")
-            .arg("StrictHostKeyChecking=no")
-            .arg("-o")
-            .arg("UserKnownHostsFile=/dev/null")
-            .arg("-o")
-            .arg("ConnectTimeout=30")
-            .arg("-o")
-            .arg("ServerAliveInterval=10")
-            .arg("-o")
-            .arg("ServerAliveCountMax=3")
-            .arg(&src)
-            .arg(&scp_target)
-            .output()
-            .map_err(|e| {
-                RemoteError::ConfigSyncError(format!("Failed to run scp for {file}: {e}"))
-            })?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(RemoteError::ConfigSyncError(format!("Failed to copy {file}: {stderr}")));
+        println!("      ✓ AWS_ACCESS_KEY_ID: set");
+        println!("      ✓ AWS_SECRET_ACCESS_KEY: set");
+        if std::env::var("AWS_SESSION_TOKEN").is_ok() {
+            println!("      ✓ AWS_SESSION_TOKEN: set");
         }
-    }
-
-    // Move to final location on remote
-    debug!("Moving AWS credentials to final location...");
-    let move_script = r#"
-        set -e
-
-        # Debug: Check what was actually synced
-        echo "=== Files synced to staging ==="
-        ls -la ~/.secrets-sync/ 2>&1 || echo "ERROR: No secrets-sync dir!"
-
-        # Create AWS config directory
-        mkdir -p ~/.aws
-
-        # Copy AWS credentials from staging (files are in ~/.secrets-sync/ directly)
-        echo "=== Copying to ~/.aws ==="
-        if [ -f ~/.secrets-sync/credentials ]; then
-            cp ~/.secrets-sync/credentials ~/.aws/credentials 2>&1
-            echo "✓ Copied credentials"
-        fi
-        if [ -f ~/.secrets-sync/config ]; then
-            cp ~/.secrets-sync/config ~/.aws/config 2>&1
-            echo "✓ Copied config"
-        fi
-
-        # Verify at least credentials file was copied
-        if [ ! -f ~/.aws/credentials ]; then
-            echo "ERROR: credentials file not found after copy!"
-            exit 1
-        fi
-
-        # Set proper permissions
-        chmod 700 ~/.aws 2>/dev/null || true
-        chmod 600 ~/.aws/credentials 2>/dev/null || true
-        chmod 600 ~/.aws/config 2>/dev/null || true
-
-        # Clean up staging files
-        rm -f ~/.secrets-sync/credentials ~/.secrets-sync/config 2>/dev/null || true
-
-        echo "=== AWS credential sync complete ==="
-    "#;
-
-    let output = Command::new("coder")
-        .arg("ssh")
-        .arg(workspace)
-        .arg("--")
-        .arg(move_script)
-        .output()
-        .map_err(|e| {
-            RemoteError::ConfigSyncError(format!("Failed to move AWS credentials: {e}"))
-        })?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-
-    if verbose && !stdout.trim().is_empty() {
-        for line in stdout.lines() {
-            if !line.trim().is_empty() {
-                debug!("    {line}");
-            }
-        }
-    }
-
-    if !output.status.success() {
-        return Err(RemoteError::ConfigSyncError(format!(
-            "AWS credential sync failed: {}\nstdout: {}\nstderr: {}",
-            output.status, stdout, stderr
-        )));
-    }
-
-    // Verify AWS credentials work (optional - get caller identity)
-    debug!("Verifying AWS credentials...");
-    if verbose {
-        println!("    → Verifying AWS credentials...");
-    }
-
-    let verify_output = Command::new("coder")
-        .arg("ssh")
-        .arg(workspace)
-        .arg("--")
-        .arg("aws sts get-caller-identity --query Account --output text 2>&1")
-        .output()
-        .map_err(|e| {
-            RemoteError::ConfigSyncError(format!("Failed to verify AWS credentials: {e}"))
-        })?;
-
-    let verify_result = String::from_utf8_lossy(&verify_output.stdout);
-    let verify_error = String::from_utf8_lossy(&verify_output.stderr);
-
-    if verify_output.status.success()
-        && !verify_result.trim().is_empty()
-        && !verify_result.contains("Unable to locate credentials")
-    {
-        let account = verify_result.trim();
-        info!("AWS credentials synced and verified: account {}", account);
-        if verbose {
-            println!("      ✓ Authenticated as account: {}", account);
-        }
-    } else {
-        // Credentials may not be working - warn but don't fail
-        if verify_result.contains("ExpiredToken") || verify_error.contains("ExpiredToken") {
-            eprintln!("\n⚠️  WARNING: AWS credentials appear to be expired!");
-            eprintln!("   Session tokens have expired. To fix:");
-            eprintln!("     1. Refresh locally: aws sso login (or get new session tokens)");
-            eprintln!("     2. Re-run: devdock start-remote");
-            eprintln!();
-        } else if verify_result.contains("Unable to locate credentials")
-            || verify_error.contains("Unable to locate credentials")
+        if let Ok(region) =
+            std::env::var("AWS_REGION").or_else(|_| std::env::var("AWS_DEFAULT_REGION"))
         {
-            if verbose {
-                println!("      ⚠ Could not verify AWS credentials on remote");
-                println!("      Files synced, but AWS CLI may need configuration");
-            }
-        } else if verbose && (!verify_result.trim().is_empty() || !verify_error.trim().is_empty()) {
-            println!("      ⚠ AWS verification returned: {}", verify_result.trim());
-            if !verify_error.trim().is_empty() {
-                println!("      Error: {}", verify_error.trim());
-            }
+            println!("      ✓ AWS_REGION: {}", region);
         }
-    }
-
-    if verbose {
-        println!("    ✓ AWS credentials synced");
+        println!("    ✓ AWS credentials validated (will be exported to remote)");
     }
 
     Ok(())
