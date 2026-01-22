@@ -404,17 +404,55 @@ pub fn sync_aws_credentials(workspace: &str, verbose: bool) -> Result<()> {
         println!("    → Syncing AWS credentials files...");
     }
 
-    // Check if AWS credentials exist locally
+    // Check if AWS credentials exist locally (either files or env vars)
     let aws_dir = dirs::home_dir()
         .ok_or_else(|| RemoteError::ConfigSyncError("Cannot determine home directory".to_string()))?
         .join(".aws");
 
-    if !aws_dir.exists() {
-        debug!("No ~/.aws found; skipping AWS file sync (env vars still work)");
+    let has_credential_files = aws_dir.exists()
+        && (aws_dir.join("credentials").exists() || aws_dir.join("config").exists());
+
+    let has_env_vars = std::env::var("AWS_ACCESS_KEY_ID").is_ok()
+        && std::env::var("AWS_SECRET_ACCESS_KEY").is_ok();
+
+    // Fail fast if no credentials available at all
+    if !has_credential_files && !has_env_vars {
+        return Err(RemoteError::ConfigSyncError(
+            "No AWS credentials found. AWS profiles require credentials to be configured.\n\n\
+             Please use one of these methods:\n\n\
+             Option 1 - Credential Files (Recommended):\n\
+               aws configure\n\
+               # Then enter your credentials when prompted\n\n\
+             Option 2 - Environment Variables:\n\
+               export AWS_ACCESS_KEY_ID=your_key_id\n\
+               export AWS_SECRET_ACCESS_KEY=your_secret_key\n\
+               export AWS_SESSION_TOKEN=your_token  # If using temporary credentials\n\
+               export AWS_REGION=us-east-1\n\n\
+             Option 3 - AWS SSO:\n\
+               aws configure sso\n\
+               aws sso login\n"
+                .to_string(),
+        ));
+    }
+
+    // Check if AWS_REGION is configured (warn if missing but don't fail)
+    let has_region = std::env::var("AWS_REGION").is_ok()
+        || std::env::var("AWS_DEFAULT_REGION").is_ok()
+        || (has_credential_files && aws_dir.join("config").exists());
+
+    if !has_region && verbose {
+        println!("    ⚠️  Warning: AWS_REGION not configured");
+        println!("      Services may default to us-east-1 or fail");
+        println!("      Set region: export AWS_REGION=us-east-1");
+        println!("      Or add to ~/.aws/config");
+    }
+
+    if !has_credential_files {
+        debug!("No ~/.aws found; will use environment variables only");
         if verbose {
             println!("    → No ~/.aws/ directory found");
-            println!("      Using environment variables if set (AWS_ACCESS_KEY_ID, etc.)");
-            println!("      Or run 'aws configure' to set up credential files");
+            println!("      ✓ Using environment variables (AWS_ACCESS_KEY_ID, etc.)");
+            println!("      💡 For persistence, consider running: aws configure");
         }
         return Ok(());
     }

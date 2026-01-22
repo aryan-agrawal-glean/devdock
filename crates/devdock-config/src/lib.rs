@@ -17,6 +17,7 @@ pub mod opensearch;
 pub mod opensearch_import;
 pub mod platform;
 pub mod profile_generator;
+pub mod s3_storage;
 pub mod service_config;
 pub mod sql;
 pub mod sql_import;
@@ -34,6 +35,7 @@ pub use ini_parser::{parse_db_specs, parse_db_tables_query, ParsedIniConfig};
 pub use loader::ProfileLoader;
 pub use platform::{create_platform, IniConfig, Platform, TempProfile};
 pub use profile_generator::TempProfileGenerator;
+pub use s3_storage::{S3DynamicIniLoader, S3Storage};
 pub use service_config::{ServiceConfig, ServiceType};
 pub use validator::ProfileValidator;
 

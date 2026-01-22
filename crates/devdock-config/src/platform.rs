@@ -292,6 +292,8 @@ impl AWSPlatform {
         // Create stackdriver-exporter-key.json for AWS->GCP monitoring
         // This enables AWS credentials to authenticate to GCP services via Workload Identity Federation
         // Matches Python behavior in platforms.py:AWSPlatform.__init__
+
+        // Get gcpConnector info from dynamic_config (now properly fetched from S3)
         if let Some(config) = dynamic_config {
             if let (Some(gcp_project), Some(gcp_project_number)) = (
                 config.get("aws", "gcpConnectorProject"),
@@ -314,12 +316,31 @@ impl AWSPlatform {
                 );
 
                 // Write to /tmp/stackdriver-exporter-key.json
-                if let Err(e) =
-                    tokio::fs::write("/tmp/stackdriver-exporter-key.json", credentials_json).await
+                match tokio::fs::write("/tmp/stackdriver-exporter-key.json", &credentials_json)
+                    .await
                 {
-                    eprintln!("Warning: Failed to create stackdriver-exporter-key.json: {}", e);
+                    Ok(_) => {
+                        println!("✅ Created stackdriver-exporter-key.json for GCP monitoring");
+                        println!(
+                            "   GCP Connector: {} (project #{})",
+                            gcp_project, gcp_project_number
+                        );
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "⚠️  Warning: Failed to write stackdriver-exporter-key.json: {}",
+                            e
+                        );
+                    }
                 }
+            } else {
+                eprintln!("⚠️  Warning: gcpConnectorProject not found in dynamic config");
+                eprintln!("   GCP monitoring (Stackdriver) will not be available");
+                eprintln!("   This is expected for local dev environments");
             }
+        } else {
+            eprintln!("⚠️  Warning: No dynamic config loaded for AWS platform");
+            eprintln!("   Stackdriver monitoring key cannot be generated");
         }
 
         Ok(Self {
