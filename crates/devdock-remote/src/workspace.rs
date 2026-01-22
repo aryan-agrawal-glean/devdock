@@ -270,7 +270,7 @@ where
         }
     }
 
-    // 1.7. Verify AWS credentials (if synced)
+    // 1.7. Verify AWS credentials on remote (via exported env vars)
     info!("Checking AWS credentials on remote...");
     if verbose {
         print!("  Verifying AWS auth...");
