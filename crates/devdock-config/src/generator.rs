@@ -12,6 +12,8 @@ use anyhow::{Context, Result};
 use devdock_core::profile::Profile;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use tokio::process::Command;
+use tracing::debug;
 
 /// Strategy for generating watch files
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -95,7 +97,7 @@ impl ConfigGenerator {
         let step_start = std::time::Instant::now();
         let (graph_result, dynamic_ini) = tokio::join!(
             DependencyGraph::build(profile, &self.workspace_root),
-            self.load_dynamic_ini(&profile.project),
+            self.load_dynamic_ini(profile),
         );
 
         let graph = graph_result?;
@@ -387,28 +389,109 @@ impl ConfigGenerator {
         Ok(())
     }
 
-    /// Load dynamic INI configuration from GCS
-    async fn load_dynamic_ini(&self, project: &str) -> Option<ParsedIniConfig> {
+    /// Load dynamic INI configuration from GCS or S3 (platform-specific)
+    async fn load_dynamic_ini(&self, profile: &Profile) -> Option<ParsedIniConfig> {
+        use crate::s3_storage::S3DynamicIniLoader;
+
         if !self.fetch_dynamic_config {
             return None;
         }
 
-        match DynamicIniLoader::new(project, self.workspace_root.clone()) {
-            Ok(loader) => match loader.fetch_dynamic_ini().await {
-                Ok(config) => {
-                    if config.is_some() {
-                        println!("✅ Fetched dynamic.ini from GCS");
+        // Determine which storage backend to use based on platform
+        let platform_str = profile.platform.to_string();
+
+        match platform_str.as_str() {
+            "aws" => {
+                // For AWS, we need to get the AWS account ID first
+                // Try from profile project (might be account ID) or fetch via AWS CLI
+                let account_id = if profile.project.chars().all(|c| c.is_ascii_digit())
+                    && profile.project.len() == 12
+                {
+                    // Already an account ID
+                    profile.project.clone()
+                } else {
+                    // Fetch account ID from AWS CLI
+                    match Command::new("aws")
+                        .args([
+                            "sts",
+                            "get-caller-identity",
+                            "--query",
+                            "Account",
+                            "--output",
+                            "text",
+                        ])
+                        .output()
+                        .await
+                    {
+                        Ok(output) if output.status.success() => {
+                            String::from_utf8_lossy(&output.stdout).trim().to_string()
+                        }
+                        _ => {
+                            eprintln!("Warning: Failed to get AWS account ID for S3 bucket");
+                            return None;
+                        }
                     }
-                    config
+                };
+
+                let region = std::env::var("AWS_REGION")
+                    .or_else(|_| std::env::var("AWS_DEFAULT_REGION"))
+                    .ok();
+
+                match S3DynamicIniLoader::new(&account_id, self.workspace_root.clone(), region) {
+                    Ok(loader) => match loader.fetch_dynamic_ini().await {
+                        Ok(config) => {
+                            if config.is_some() {
+                                println!("✅ Fetched dynamic.ini from S3");
+                            }
+                            config
+                        }
+                        Err(e) => {
+                            eprintln!("Warning: Failed to fetch dynamic.ini from S3: {e}");
+                            None
+                        }
+                    },
+                    Err(e) => {
+                        eprintln!("Warning: Failed to create S3 INI loader: {e}");
+                        None
+                    }
                 }
-                Err(e) => {
-                    eprintln!("Warning: Failed to fetch dynamic.ini: {e}");
-                    None
+            }
+            "google" | "gcp" => {
+                // For Google Cloud, use GCS
+                match DynamicIniLoader::new(&profile.project, self.workspace_root.clone()) {
+                    Ok(loader) => match loader.fetch_dynamic_ini().await {
+                        Ok(config) => {
+                            if config.is_some() {
+                                println!("✅ Fetched dynamic.ini from GCS");
+                            }
+                            config
+                        }
+                        Err(e) => {
+                            eprintln!("Warning: Failed to fetch dynamic.ini from GCS: {e}");
+                            None
+                        }
+                    },
+                    Err(e) => {
+                        eprintln!("Warning: Failed to create GCS INI loader: {e}");
+                        None
+                    }
                 }
-            },
-            Err(e) => {
-                eprintln!("Warning: Failed to create INI loader: {e}");
-                None
+            }
+            _ => {
+                // For other platforms (azure, unknown), try GCS as fallback
+                match DynamicIniLoader::new(&profile.project, self.workspace_root.clone()) {
+                    Ok(loader) => match loader.fetch_dynamic_ini().await {
+                        Ok(config) => config,
+                        Err(e) => {
+                            debug!("Failed to fetch dynamic.ini: {e}");
+                            None
+                        }
+                    },
+                    Err(e) => {
+                        debug!("Failed to create INI loader: {e}");
+                        None
+                    }
+                }
             }
         }
     }
