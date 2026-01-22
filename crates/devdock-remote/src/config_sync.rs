@@ -232,15 +232,14 @@ pub fn sync_gcloud_credentials(workspace: &str, verbose: bool) -> Result<()> {
     let move_script = r#"
         set -e
 
-        # Debug: Check what was actually synced (files are in ~/.secrets-sync/ directly, not in a gcloud/ subdir)
+        # Debug: Check what was actually synced
         echo "=== Files synced to staging ==="
-        ls -la ~/.secrets-sync/ 2>&1 || echo "ERROR: No secrets-sync dir!"
+        ls -la ~/.secrets-sync/gcloud/ 2>&1 || echo "ERROR: No secrets-sync/gcloud dir!"
 
         # Copy to home directory for gcloud CLI (DON'T suppress errors)
-        # Note: SCP puts files directly in ~/.secrets-sync/, not in a gcloud/ subdir
         echo "=== Copying to ~/.config/gcloud ==="
         mkdir -p ~/.config/gcloud ~/.config/gcloud/configurations
-        rsync -av ~/.secrets-sync/ ~/.config/gcloud/ 2>&1
+        rsync -av ~/.secrets-sync/gcloud/ ~/.config/gcloud/ 2>&1
 
         # Verify the critical ADC file
         if [ ! -f ~/.config/gcloud/application_default_credentials.json ]; then
@@ -251,7 +250,7 @@ pub fn sync_gcloud_credentials(workspace: &str, verbose: bool) -> Result<()> {
         # Also copy to /tmp/.config for services
         echo "=== Copying to /tmp/.config/gcloud ==="
         mkdir -p /tmp/.config/gcloud/configurations
-        rsync -av ~/.secrets-sync/ /tmp/.config/gcloud/ 2>&1
+        rsync -av ~/.secrets-sync/gcloud/ /tmp/.config/gcloud/ 2>&1
 
         # Set proper permissions
         chmod 700 ~/.config/gcloud ~/.config/gcloud/configurations 2>/dev/null || true
