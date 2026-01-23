@@ -226,6 +226,26 @@ enum Commands {
         #[arg(long)]
         no_notify: bool,
     },
+
+    /// Update devdock to latest or specific version
+    Update {
+        /// Version to install (e.g., '0.2.7', '@0.2.7', or 'latest')
+        /// Omit to update to latest version
+        /// Using a specific version will pin it
+        version: Option<String>,
+
+        /// Only check for updates without installing
+        #[arg(long)]
+        check: bool,
+
+        /// Force update even if pinned
+        #[arg(long)]
+        force: bool,
+
+        /// List available versions
+        #[arg(long)]
+        list: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -483,6 +503,11 @@ async fn main() {
 
     let cli = Cli::parse();
 
+    // Check for updates on startup (unless running update command itself)
+    if !matches!(cli.command, Commands::Update { .. }) {
+        let _ = commands::update::check_on_startup().await;
+    }
+
     // Set up logging
     let log_level = match cli.verbose {
         0 => "warn",
@@ -599,6 +624,10 @@ async fn main() {
 
         Commands::Monitor { timeout, interval, no_notify } => {
             commands::monitor::execute(timeout, interval, no_notify).await
+        }
+
+        Commands::Update { version, check, force, list } => {
+            commands::update::execute(version, check, force, list).await
         }
 
         Commands::Service { command } => match command {

@@ -73,6 +73,27 @@ cargo install --path crates/devdock-cli
 devdock --version
 ```
 
+### Updating DevDock
+
+DevDock includes a built-in self-update mechanism:
+
+```bash
+# Update to latest version
+devdock update
+
+# Update to specific version (and pin)
+devdock update 0.2.7
+
+# Check for updates
+devdock update --check
+
+# List available versions
+devdock update --list
+
+# Force update (bypass pin)
+devdock update --force
+```
+
 ### Uninstall
 
 ```bash
