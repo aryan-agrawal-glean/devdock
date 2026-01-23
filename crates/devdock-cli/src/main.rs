@@ -10,7 +10,7 @@ use std::process;
 
 #[derive(Parser)]
 #[command(name = "devdock")]
-#[command(version, about = "Standalone development environment orchestrator", long_about = None)]
+#[command(version = concat!(env!("CARGO_PKG_VERSION"), env!("DEV_VERSION_SUFFIX")), about = "Standalone development environment orchestrator", long_about = None)]
 struct Cli {
     /// Increase logging verbosity (-v, -vv, -vvv)
     #[arg(short, long, action = clap::ArgAction::Count)]
