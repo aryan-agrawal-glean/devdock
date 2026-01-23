@@ -44,6 +44,14 @@ const SYNC_FILENAMES: &[&str] = &["pom.xml", "Makefile", "package.json", "pnpm-l
 /// These are typically config files that may be .gitignore'd but still need to sync.
 const SYNC_WITHOUT_GIT_TRACKING: &[&str] = &["config/custom.ini", "devdock/custom.ini"];
 
+/// Path patterns that should sync without requiring git tracking.
+/// These support prefix matching for directories.
+const SYNC_WITHOUT_GIT_TRACKING_PATTERNS: &[&str] = &[
+    "devdock/profiles/user_profiles/",
+    "devdock/profiles/integration_tests/",
+    "devdock/profiles/user_profile.yaml",
+];
+
 /// Check if a file should be synced based on patterns (monitored dirs + extensions).
 pub fn should_sync_file_by_pattern(path: &Path) -> bool {
     // Check if in monitored directory
@@ -193,6 +201,12 @@ pub fn should_sync_file(repo_path: &Path, file_path: &Path, full_mode: bool) -> 
     let path_str = relative_path.to_string_lossy();
     if SYNC_WITHOUT_GIT_TRACKING.iter().any(|p| path_str == *p) {
         debug!("File {} syncs without git tracking (special file)", path_str);
+        return Ok(true);
+    }
+
+    // Check if it matches a path pattern that doesn't need git tracking
+    if SYNC_WITHOUT_GIT_TRACKING_PATTERNS.iter().any(|pattern| path_str.starts_with(pattern)) {
+        debug!("File {} syncs without git tracking (pattern match)", path_str);
         return Ok(true);
     }
 

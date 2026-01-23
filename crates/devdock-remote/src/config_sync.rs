@@ -17,39 +17,87 @@ pub fn sync_profile(workspace: &str, profile_path: &Path, verbose: bool) -> Resu
         return Err(RemoteError::ConfigSyncError(format!("Profile not found: {profile_path:?}")));
     }
 
-    // Note: Directory creation is handled by sync_all_config for efficiency
     debug!("Copying profile using coder: {:?} -> {}", profile_path, workspace);
 
     // Read the file content
     let content = std::fs::read_to_string(profile_path)
         .map_err(|e| RemoteError::ConfigSyncError(format!("Failed to read profile: {e}")))?;
 
-    // Write it to remote using cat via SSH
-    let filename = profile_path
-        .file_name()
-        .ok_or_else(|| RemoteError::ConfigSyncError("Invalid profile path".to_string()))?
-        .to_string_lossy();
+    // Determine the relative path from workspace root to preserve directory structure
+    // This ensures initial sync and file sync put files in the same location
+    let devdock_root = std::env::var("DEVDOCK_ROOT")
+        .or_else(|_| std::env::var("PWD"))
+        .unwrap_or_else(|_| ".".to_string());
 
+    let workspace_root = std::path::PathBuf::from(&devdock_root);
+    let profiles_base = workspace_root.join("devdock/profiles");
+
+    // Get relative path from devdock/profiles/ to the profile file
+    // This preserves subdirectories like user_profiles/, integration_tests/, etc.
+    let relative_path = if profile_path.starts_with(&profiles_base) {
+        profile_path
+            .strip_prefix(&profiles_base)
+            .unwrap_or(profile_path)
+            .to_string_lossy()
+            .to_string()
+    } else {
+        // Fallback: just use the filename
+        profile_path
+            .file_name()
+            .ok_or_else(|| RemoteError::ConfigSyncError("Invalid profile path".to_string()))?
+            .to_string_lossy()
+            .to_string()
+    };
+
+    let remote_path = format!("/home/workspace/scio/devdock/profiles/{relative_path}");
+
+    // Get the directory path (may include subdirectories like user_profiles/)
+    let remote_dir = if let Some(parent_idx) = remote_path.rfind('/') {
+        &remote_path[..parent_idx]
+    } else {
+        "/home/workspace/scio/devdock/profiles"
+    };
+
+    debug!("Syncing profile: local={:?} -> remote={}", profile_path, remote_path);
+    if verbose {
+        println!("      → Target: {}", remote_path);
+    }
+
+    // Create directory structure first, then write file
+    // This is more reliable than combining with heredoc
     let write_cmd = format!(
-        "cat > /home/workspace/scio/devdock/profiles/{filename} << 'DEVDOCK_EOF'\n{content}\nDEVDOCK_EOF"
+        "mkdir -p '{}' && cat > '{}' << 'DEVDOCK_EOF'\n{}\nDEVDOCK_EOF",
+        remote_dir, remote_path, content
     );
 
     let output = Command::new("coder")
         .arg("ssh")
         .arg(workspace)
         .arg("--")
-        .arg("bash")
-        .arg("-c")
         .arg(&write_cmd)
         .output()
         .map_err(|e| RemoteError::ConfigSyncError(format!("Failed to copy profile: {e}")))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(RemoteError::ConfigSyncError(stderr.to_string()));
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        eprintln!("\n❌ Profile sync failed!");
+        eprintln!("   Local:  {:?}", profile_path);
+        eprintln!("   Remote: {}", remote_path);
+        eprintln!("   Error:  {}", stderr);
+        if !stdout.is_empty() {
+            eprintln!("   Output: {}", stdout);
+        }
+        return Err(RemoteError::ConfigSyncError(format!(
+            "Failed to sync profile to {}: {}",
+            remote_path, stderr
+        )));
     }
 
-    debug!("Profile synced successfully");
+    debug!("Profile synced successfully to: {}", remote_path);
+    if verbose {
+        println!("      ✓ Profile synced");
+    }
     Ok(())
 }
 
@@ -529,18 +577,25 @@ pub fn sync_all_config(
     }
 
     // Create directories - clean .secrets-sync first to ensure it's not a stale file
+    // Create all profile subdirectories to support user_profiles/, integration_tests/, etc.
     // Note: coder ssh already invokes a shell, so we don't need bash -c
     let mkdir_output = Command::new("coder")
         .arg("ssh")
         .arg(workspace)
         .arg("--")
-        .arg("rm -rf ~/.secrets-sync && mkdir -p /home/workspace/scio/devdock/profiles/ /home/workspace/scio/config/ ~/.secrets-sync")
+        .arg("rm -rf ~/.secrets-sync && mkdir -p /home/workspace/scio/devdock/profiles/user_profiles /home/workspace/scio/devdock/profiles/integration_tests /home/workspace/scio/config/ ~/.secrets-sync")
         .output()
         .map_err(|e| RemoteError::ConfigSyncError(format!("Failed to create remote directories: {e}")))?;
 
     if !mkdir_output.status.success() {
         let stderr = String::from_utf8_lossy(&mkdir_output.stderr);
         let stdout = String::from_utf8_lossy(&mkdir_output.stdout);
+        eprintln!("\n❌ Failed to create directories on remote workspace");
+        eprintln!("   Workspace: {}", workspace);
+        eprintln!("   Error: {}", stderr);
+        if !stdout.is_empty() {
+            eprintln!("   Output: {}", stdout);
+        }
         return Err(RemoteError::ConfigSyncError(format!(
             "Failed to create directories on remote: {}\nstdout: {}\nstderr: {}",
             mkdir_output.status, stdout, stderr
