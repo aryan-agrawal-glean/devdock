@@ -3,6 +3,7 @@
 use crate::output;
 use anyhow::Result;
 use devdock_config::docker;
+use devdock_remote::ssh;
 use devdock_state::{InstanceStatus, StateManager};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -237,6 +238,27 @@ fn clean_old_logs(devdock_dir: &PathBuf) -> Result<()> {
 /// - ALL Stopped and Error instances (cleanup all old instances)
 async fn clean_stale_instances(clean_local: bool) -> Result<usize> {
     let state_manager = StateManager::new().await?;
+    _clean_stale_instances(CleanStaleInstancesParams {
+        state_manager: &state_manager,
+        clean_local,
+        is_tilt_running,
+    })
+    .await
+}
+
+struct CleanStaleInstancesParams<'a, F>
+where
+    F: Fn(&devdock_state::Instance) -> Result<bool>,
+{
+    state_manager: &'a StateManager,
+    clean_local: bool,
+    is_tilt_running: F,
+}
+async fn _clean_stale_instances<F>(params: CleanStaleInstancesParams<'_, F>) -> Result<usize>
+where
+    F: Fn(&devdock_state::Instance) -> Result<bool>,
+{
+    let CleanStaleInstancesParams { state_manager, clean_local, is_tilt_running } = params;
     let instances = state_manager.list_instances().await?;
 
     let mut cleaned_count = 0;
@@ -250,7 +272,7 @@ async fn clean_stale_instances(clean_local: bool) -> Result<usize> {
         let should_clean = match instance.status {
             InstanceStatus::Running | InstanceStatus::Starting => {
                 // Check if Tilt is actually running in this workspace
-                !is_tilt_running(&instance.workspace_path, clean_local)
+                !is_tilt_running(&instance)?
             }
             InstanceStatus::Stopping => {
                 // Stopping instances that never completed should be cleaned
@@ -280,29 +302,54 @@ async fn clean_stale_instances(clean_local: bool) -> Result<usize> {
     Ok(cleaned_count)
 }
 
-/// Check if Tilt is running in a specific workspace
+/// Check if Tilt is running for an instance.
+fn is_tilt_running(instance: &devdock_state::Instance) -> Result<bool> {
+    match instance.mode.as_str() {
+        "local" => Ok(is_tilt_running_locally(&instance.workspace_path)),
+        "remote" => is_tilt_running_remotely(instance),
+        _ => anyhow::bail!("invalid instance mode: {}", instance.mode.as_str()),
+    }
+}
+
+/// Check if Tilt is running in a specific local workspace
 ///
 /// This checks for:
 /// 1. A Tilt process with the workspace path as current directory
 /// 2. Any devdock containers for this workspace
-fn is_tilt_running(workspace_path: &str, docker: bool) -> bool {
+fn is_tilt_running_locally(workspace_path: &str) -> bool {
     // Check for Tilt process
     if is_process_running_in_workspace("tilt", workspace_path) {
         return true;
     }
 
     // Check for DevDock containers (as a backup check)
-    if docker {
-        if let Ok(containers) = docker::get_devdock_containers() {
-            if !containers.is_empty() {
-                // If there are DevDock containers running, consider it active
-                // This handles cases where Tilt might have a different process name
-                return true;
-            }
+    if let Ok(containers) = docker::get_devdock_containers() {
+        if !containers.is_empty() {
+            // If there are DevDock containers running, consider it active
+            // This handles cases where Tilt might have a different process name
+            return true;
         }
     }
 
     false
+}
+
+fn is_tilt_running_remotely(instance: &devdock_state::Instance) -> Result<bool> {
+    let workspace = instance.workspace_name.as_deref().ok_or_else(|| {
+        anyhow::anyhow!("missing workspace name for remote instance {}", instance.id)
+    })?;
+
+    // Primary: Tilt UI port is open.
+    if ssh::ssh_check(workspace, "lsof -i:10350 >/dev/null 2>&1", None)? {
+        return Ok(true);
+    }
+
+    // Fallback: Tilt process is running.
+    if ssh::ssh_check(workspace, "pgrep -f 'tilt up' >/dev/null 2>&1", None)? {
+        return Ok(true);
+    }
+
+    Ok(false)
 }
 
 /// Check if a process is running in a specific workspace directory
@@ -385,4 +432,139 @@ fn get_process_cwd(pid: i32) -> Result<String> {
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
 fn get_process_cwd(_pid: i32) -> Result<String> {
     anyhow::bail!("get_process_cwd not supported on this platform")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use devdock_state::{Instance, InstanceStatus};
+    use tempfile::NamedTempFile;
+
+    async fn setup_state_manager() -> Result<(StateManager, NamedTempFile)> {
+        let db_file = NamedTempFile::new()?;
+        let state_manager = StateManager::with_path(db_file.path()).await?;
+        Ok((state_manager, db_file))
+    }
+
+    fn make_instance(id: &str, mode: &str, status: InstanceStatus) -> Instance {
+        Instance {
+            id: id.to_string(),
+            workspace_path: format!("/workspaces/{id}"),
+            workspace_name: if mode == "remote" { Some(format!("ws-{id}")) } else { None },
+            branch: "master".to_string(),
+            profile: "default".to_string(),
+            mode: mode.to_string(),
+            status,
+            port_base: 10000,
+            created_at: 1,
+            updated_at: 1,
+        }
+    }
+
+    fn instance_ids(instances: &[Instance]) -> Vec<String> {
+        let mut ids: Vec<String> = instances.iter().map(|instance| instance.id.clone()).collect();
+        ids.sort();
+        ids
+    }
+
+    #[tokio::test]
+    async fn clean_stale_instances_keeps_running_when_tilt_running() -> Result<()> {
+        let (state_manager, _db_file) = setup_state_manager().await?;
+        let instance = make_instance("inst-0001", "local", InstanceStatus::Running);
+        let instance_id = instance.id.clone();
+        state_manager.register_instance(&instance).await?;
+
+        let cleaned = _clean_stale_instances(CleanStaleInstancesParams {
+            state_manager: &state_manager,
+            clean_local: true,
+            is_tilt_running: |_| Ok(true),
+        })
+        .await?;
+
+        assert_eq!(cleaned, 0);
+        let remaining = state_manager.list_instances().await?;
+        assert_eq!(instance_ids(&remaining), vec![instance_id]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn clean_stale_instances_cleans_running_when_tilt_not_running() -> Result<()> {
+        let (state_manager, _db_file) = setup_state_manager().await?;
+        let instance = make_instance("inst-0001", "local", InstanceStatus::Running);
+        state_manager.register_instance(&instance).await?;
+
+        let cleaned = _clean_stale_instances(CleanStaleInstancesParams {
+            state_manager: &state_manager,
+            clean_local: true,
+            is_tilt_running: |_| Ok(false),
+        })
+        .await?;
+
+        assert_eq!(cleaned, 1);
+        let remaining = state_manager.list_instances().await?;
+        assert!(remaining.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn clean_stale_instances_cleans_stopping_instances() -> Result<()> {
+        let (state_manager, _db_file) = setup_state_manager().await?;
+        let instance = make_instance("inst-0001", "local", InstanceStatus::Stopping);
+        state_manager.register_instance(&instance).await?;
+
+        let cleaned = _clean_stale_instances(CleanStaleInstancesParams {
+            state_manager: &state_manager,
+            clean_local: true,
+            is_tilt_running: |_| Ok(true),
+        })
+        .await?;
+
+        assert_eq!(cleaned, 1);
+        let remaining = state_manager.list_instances().await?;
+        assert!(remaining.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn clean_stale_instances_cleans_stopped_and_error_instances() -> Result<()> {
+        let (state_manager, _db_file) = setup_state_manager().await?;
+        let stopped = make_instance("inst-0001", "local", InstanceStatus::Stopped);
+        let errored = make_instance("inst-0002", "local", InstanceStatus::Error);
+        state_manager.register_instance(&stopped).await?;
+        state_manager.register_instance(&errored).await?;
+
+        let cleaned = _clean_stale_instances(CleanStaleInstancesParams {
+            state_manager: &state_manager,
+            clean_local: true,
+            is_tilt_running: |_| Ok(true),
+        })
+        .await?;
+
+        assert_eq!(cleaned, 2);
+        let remaining = state_manager.list_instances().await?;
+        assert!(remaining.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn clean_stale_instances_skips_local_when_clean_local_false() -> Result<()> {
+        let (state_manager, _db_file) = setup_state_manager().await?;
+        let local = make_instance("inst-local", "local", InstanceStatus::Stopped);
+        let remote = make_instance("inst-remote", "remote", InstanceStatus::Stopped);
+        let local_id = local.id.clone();
+        state_manager.register_instance(&local).await?;
+        state_manager.register_instance(&remote).await?;
+
+        let cleaned = _clean_stale_instances(CleanStaleInstancesParams {
+            state_manager: &state_manager,
+            clean_local: false,
+            is_tilt_running: |_| Ok(false),
+        })
+        .await?;
+
+        assert_eq!(cleaned, 1);
+        let remaining = state_manager.list_instances().await?;
+        assert_eq!(instance_ids(&remaining), vec![local_id]);
+        Ok(())
+    }
 }
