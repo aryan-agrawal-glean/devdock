@@ -11,65 +11,76 @@ use std::process::Command;
 const CLEANUP_PORTS: &[u16] = &[8888, 8880, 7070, 8090, 7972, 3407, 3408];
 
 /// Execute the cleanup command
-pub async fn execute(soft: bool, clean_logs: bool) -> Result<()> {
+pub async fn execute(soft: bool, clean_logs: bool, clean_local: bool) -> Result<()> {
     output::header("DevDock Cleanup");
-
-    // Check Docker is running
-    docker::check_docker()?;
 
     let home = std::env::var("HOME").unwrap_or_default();
     let devdock_dir = PathBuf::from(&home).join(".devdock");
     let devdock_root = std::env::var("DEVDOCK_ROOT")
         .unwrap_or_else(|_| std::env::current_dir().unwrap().display().to_string());
 
-    // Step 1: Clean up service containers
-    output::step(1, 6, "Cleaning service containers...");
-    let containers = docker::get_devdock_containers()?;
-    let mut cleaned = 0;
+    let total_steps = if clean_local { 6 } else { 4 };
+    let mut step = 1;
 
-    for container in &containers {
-        // In soft mode, skip infra containers
-        if soft && is_infra_container(container) {
-            continue;
+    if clean_local {
+        docker::check_docker()?;
+
+        // Step 1: Clean up service containers
+        output::step(step, total_steps, "Cleaning service containers...");
+        let containers = docker::get_devdock_containers()?;
+        let mut cleaned = 0;
+
+        for container in &containers {
+            // In soft mode, skip infra containers
+            if soft && is_infra_container(container) {
+                continue;
+            }
+
+            output::info(&format!("Removing {container}..."));
+            docker::remove_container(container)?;
+            cleaned += 1;
         }
-
-        output::info(&format!("Removing {container}..."));
-        docker::remove_container(container)?;
-        cleaned += 1;
+        output::success(&format!("Cleaned {cleaned} containers"));
+        step += 1;
     }
-    output::success(&format!("Cleaned {cleaned} containers"));
 
     // Step 2: Clean up generated files
-    output::step(2, 6, "Cleaning generated files...");
+    output::step(step, total_steps, "Cleaning generated files...");
     clean_generated_files(&devdock_root, &devdock_dir)?;
     output::success("Generated files cleaned");
+    step += 1;
 
     // Step 3: Clean up Grafana/observability stack
-    output::step(3, 6, "Cleaning observability stack...");
-    clean_grafana_stack(&devdock_dir)?;
+    output::step(step, total_steps, "Cleaning observability stack...");
+    clean_grafana_stack(&devdock_dir, clean_local)?;
     output::success("Observability stack cleaned");
+    step += 1;
 
-    // Step 4: Clean up dangling images
-    output::step(4, 6, "Cleaning dangling images...");
-    let removed = docker::remove_dangling_images()?;
-    if removed > 0 {
-        output::success(&format!("Removed {removed} dangling images"));
-    } else {
-        output::info("No dangling images found");
+    if clean_local {
+        // Step 4: Clean up dangling images
+        output::step(step, total_steps, "Cleaning dangling images...");
+        let removed = docker::remove_dangling_images()?;
+        if removed > 0 {
+            output::success(&format!("Removed {removed} dangling images"));
+        } else {
+            output::info("No dangling images found");
+        }
+        step += 1;
     }
 
     // Step 5: Clean up ports
-    output::step(5, 6, "Cleaning up ports...");
+    output::step(step, total_steps, "Cleaning up ports...");
     let killed = docker::cleanup_ports(CLEANUP_PORTS)?;
     if killed > 0 {
         output::success(&format!("Killed {killed} processes on ports"));
     } else {
         output::info("No processes to kill");
     }
+    step += 1;
 
     // Step 6: Clean up stale instance records from database
-    output::step(6, 6, "Cleaning stale instance records...");
-    match clean_stale_instances().await {
+    output::step(step, total_steps, "Cleaning stale instance records...");
+    match clean_stale_instances(clean_local).await {
         Ok(count) => {
             if count > 0 {
                 output::success(&format!("Cleaned {count} stale instance record(s)"));
@@ -157,11 +168,15 @@ fn clean_generated_files(devdock_root: &str, devdock_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-fn clean_grafana_stack(devdock_dir: &Path) -> Result<()> {
+fn clean_grafana_stack(devdock_dir: &Path, docker: bool) -> Result<()> {
     // Remove Grafana data
     let grafana_dir = devdock_dir.join("grafana");
     if grafana_dir.exists() {
         let _ = std::fs::remove_dir_all(&grafana_dir);
+    }
+
+    if !docker {
+        return Ok(());
     }
 
     // Stop and remove Grafana containers
@@ -220,18 +235,22 @@ fn clean_old_logs(devdock_dir: &PathBuf) -> Result<()> {
 /// - Instances marked as Running/Starting but without active Tilt processes
 /// - Instances in Stopping state that never completed
 /// - ALL Stopped and Error instances (cleanup all old instances)
-async fn clean_stale_instances() -> Result<usize> {
+async fn clean_stale_instances(clean_local: bool) -> Result<usize> {
     let state_manager = StateManager::new().await?;
     let instances = state_manager.list_instances().await?;
 
     let mut cleaned_count = 0;
 
     for instance in instances {
+        if !clean_local && instance.mode == "local" {
+            continue;
+        }
+
         // Check if instance should be cleaned up
         let should_clean = match instance.status {
             InstanceStatus::Running | InstanceStatus::Starting => {
                 // Check if Tilt is actually running in this workspace
-                !is_tilt_running(&instance.workspace_path)
+                !is_tilt_running(&instance.workspace_path, clean_local)
             }
             InstanceStatus::Stopping => {
                 // Stopping instances that never completed should be cleaned
@@ -266,18 +285,20 @@ async fn clean_stale_instances() -> Result<usize> {
 /// This checks for:
 /// 1. A Tilt process with the workspace path as current directory
 /// 2. Any devdock containers for this workspace
-fn is_tilt_running(workspace_path: &str) -> bool {
+fn is_tilt_running(workspace_path: &str, docker: bool) -> bool {
     // Check for Tilt process
     if is_process_running_in_workspace("tilt", workspace_path) {
         return true;
     }
 
     // Check for DevDock containers (as a backup check)
-    if let Ok(containers) = docker::get_devdock_containers() {
-        if !containers.is_empty() {
-            // If there are DevDock containers running, consider it active
-            // This handles cases where Tilt might have a different process name
-            return true;
+    if docker {
+        if let Ok(containers) = docker::get_devdock_containers() {
+            if !containers.is_empty() {
+                // If there are DevDock containers running, consider it active
+                // This handles cases where Tilt might have a different process name
+                return true;
+            }
         }
     }
 

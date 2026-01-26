@@ -130,6 +130,10 @@ enum Commands {
         /// Also clean old logs
         #[arg(long)]
         logs: bool,
+
+        /// Skip local cleanup steps and only clenaup remotes (default: false)
+        #[arg(long = "no-local")]
+        no_local: bool,
     },
 
     /// Execute command in a container
@@ -574,7 +578,9 @@ async fn main() {
             commands::generate::execute(&profile, output.as_deref()).await
         }
 
-        Commands::Cleanup { soft, logs } => commands::cleanup::execute(soft, logs).await,
+        Commands::Cleanup { soft, logs, no_local } => {
+            commands::cleanup::execute(soft, logs, !no_local).await
+        }
 
         Commands::Exec { container, command } => {
             commands::exec::execute(&container, &command).await
