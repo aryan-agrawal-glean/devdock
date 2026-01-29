@@ -13,6 +13,22 @@
 //! 3. **Common deps**: Always watch `config/`, `data/`, `openapi/` for data changes
 //! 4. **Cached cquery results**: Fall back to cached results if available
 //!
+//! ## Configuration
+//!
+//! Watch patterns are loaded from JSON files in the following order:
+//!
+//! 1. `$DEVDOCK_WATCH_PATTERNS` env var (for pointing to scio repo or custom location)
+//! 2. `<workspace>/watch_patterns.json` (default location)
+//! 3. `<workspace>/devdock/config/watch_patterns.json`
+//! 4. `<workspace>/.devdock/watch_patterns.json`
+//! 5. YAML files (backward compatibility)
+//! 6. Hardcoded defaults (fallback)
+//!
+//! This allows maintaining patterns in the scio repository:
+//! ```bash
+//! export DEVDOCK_WATCH_PATTERNS=/path/to/scio/watch_patterns.json
+//! ```
+//!
 //! ## Trade-offs
 //!
 //! - **Pros**: Sub-millisecond startup vs seconds with cquery
@@ -130,21 +146,77 @@ impl WatchPatternConfig {
         map
     }
 
-    /// Load config from YAML file, with defaults as fallback
+    /// Load config from JSON or YAML file, with defaults as fallback
+    ///
+    /// Search order:
+    /// 1. Environment variable DEVDOCK_WATCH_PATTERNS (for scio repo)
+    /// 2. workspace_root/watch_patterns.json (default location)
+    /// 3. workspace_root/devdock/config/watch_patterns.json
+    /// 4. workspace_root/.devdock/watch_patterns.json
+    /// 5. workspace_root/devdock/config/watch_patterns.yaml (backward compat)
+    /// 6. workspace_root/.devdock/watch_patterns.yaml (backward compat)
+    /// 7. Hardcoded defaults
     pub fn load(workspace_root: &Path) -> Result<Self> {
-        let config_paths = [
+        // 1. Check environment variable first (allows pointing to scio repo)
+        if let Ok(env_path) = std::env::var("DEVDOCK_WATCH_PATTERNS") {
+            let path = PathBuf::from(env_path);
+            if path.exists() {
+                let content = std::fs::read_to_string(&path)?;
+                return Self::load_from_content(&content, &path);
+            }
+        }
+
+        // 2. Check JSON files (preferred format)
+        let json_paths = [
+            workspace_root.join("watch_patterns.json"),
+            workspace_root.join("devdock/config/watch_patterns.json"),
+            workspace_root.join(".devdock/watch_patterns.json"),
+        ];
+
+        for path in &json_paths {
+            if path.exists() {
+                let content = std::fs::read_to_string(path)?;
+                return Self::load_from_content(&content, path);
+            }
+        }
+
+        // 3. Check YAML files (backward compatibility)
+        let yaml_paths = [
             workspace_root.join("devdock/config/watch_patterns.yaml"),
             workspace_root.join(".devdock/watch_patterns.yaml"),
         ];
 
-        for path in &config_paths {
+        for path in &yaml_paths {
             if path.exists() {
                 let content = std::fs::read_to_string(path)?;
-                return Ok(serde_yaml::from_str(&content)?);
+                return Self::load_from_content(&content, path);
             }
         }
 
+        // 4. Fall back to defaults
         Ok(Self::default())
+    }
+
+    /// Load from file content, auto-detecting format from extension
+    fn load_from_content(content: &str, path: &Path) -> Result<Self> {
+        let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
+
+        match ext {
+            "json" => Ok(serde_json::from_str(content)?),
+            "yaml" | "yml" => Ok(serde_yaml::from_str(content)?),
+            _ => {
+                // Try JSON first, then YAML as fallback
+                serde_json::from_str(content).or_else(|_| serde_yaml::from_str(content)).map_err(
+                    |e| {
+                        anyhow::anyhow!(
+                            "Failed to parse watch patterns from {}: {}",
+                            path.display(),
+                            e
+                        )
+                    },
+                )
+            }
+        }
     }
 }
 

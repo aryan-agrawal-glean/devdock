@@ -1,0 +1,39 @@
+{
+  "common_patterns": [
+    "config/",
+    "data/",
+    "openapi/"
+  ],
+  "exclude_patterns": [
+    "**/node_modules/**",
+    "**/.git/**",
+    "**/bazel-*/**",
+    "**/__pycache__/**",
+    "**/scio_env/**"
+  ],
+  "service_overrides": {},
+  "type_patterns": {
+    "frontend": [
+      "typescript/web/",
+      "typescript/core/",
+      "typescript/elements/"
+    ],
+    "go": [
+      "go/core/",
+      "go/platform/",
+      "go/query_endpoint/",
+      "go/tracer/",
+      "go/auth/"
+    ],
+    "java": [
+      "java/com/askscio/"
+    ],
+    "python": [
+      "python_scio/core/",
+      "python_scio/platform/",
+      "python_scio/quality/",
+      "python_scio/deployment/",
+      "python_scio/agents/"
+    ]
+  }
+}
