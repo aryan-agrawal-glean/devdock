@@ -111,7 +111,6 @@ openssl = { version = "0.10", features = ["vendored"] }
 
 # Testing
 pretty_assertions = "1.4"
-serial_test = "3.0"
 
 [profile.release]
 opt-level = 3
