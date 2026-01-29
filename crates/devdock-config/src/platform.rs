@@ -552,8 +552,10 @@ pub async fn create_platform_with_multi_project(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     #[test]
+    #[serial]
     fn test_dns_kubectl_enabled_by_default() {
         // DNS kubectl should be enabled by default for whitelisted projects (opt-out model)
         std::env::remove_var("ENABLE_DNS_KUBECTL");
@@ -564,6 +566,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_dns_kubectl_explicit_disable() {
         // Should be disabled when explicitly set to false
         std::env::set_var("ENABLE_DNS_KUBECTL", "false");
@@ -575,6 +578,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_dns_kubectl_explicit_enable() {
         // Should be enabled when explicitly set to true
         std::env::set_var("ENABLE_DNS_KUBECTL", "true");
@@ -586,6 +590,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_dns_kubectl_not_supported_project() {
         // Should be disabled for projects not in the whitelist
         std::env::remove_var("ENABLE_DNS_KUBECTL");
@@ -596,6 +601,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_dns_kubectl_all_whitelisted_projects() {
         // Verify all whitelisted projects are supported
         std::env::remove_var("ENABLE_DNS_KUBECTL");
