@@ -10,7 +10,7 @@ services:
     type: local
     env:
       SERVICE_NAME: "service-a"
-  
+
   service-b:
     type: local
     env:

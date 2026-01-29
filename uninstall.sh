@@ -38,13 +38,13 @@ error() {
 # Find all installations of devdock
 find_installations() {
     local found=()
-    
+
     for location in "${INSTALL_LOCATIONS[@]}"; do
         if [ -f "${location}/${BINARY_NAME}" ]; then
             found+=("${location}/${BINARY_NAME}")
         fi
     done
-    
+
     # Also check if devdock is in PATH
     if command -v devdock >/dev/null 2>&1; then
         local devdock_path
@@ -54,7 +54,7 @@ find_installations() {
             found+=("$devdock_path")
         fi
     fi
-    
+
     echo "${found[@]}"
 }
 
@@ -62,12 +62,12 @@ find_installations() {
 remove_binary() {
     local path="$1"
     local needs_sudo=false
-    
+
     # Check if we need sudo
     if [ ! -w "$(dirname "$path")" ]; then
         needs_sudo=true
     fi
-    
+
     if [ "$needs_sudo" = true ]; then
         info "Removing ${path} (requires sudo)..."
         if ! command -v sudo >/dev/null 2>&1; then
@@ -79,14 +79,14 @@ remove_binary() {
         info "Removing ${path}..."
         rm -f "$path"
     fi
-    
+
     success "Removed ${path}"
 }
 
 # Clean up state and cache
 cleanup_data() {
     local cleaned=false
-    
+
     # DevDock state directory (usually ~/.devdock or /tmp/devdock-*)
     if [ -d "$HOME/.devdock" ]; then
         echo ""
@@ -98,7 +98,7 @@ cleanup_data() {
             cleaned=true
         fi
     fi
-    
+
     # Temporary DevDock files
     local temp_dirs
     temp_dirs=$(find /tmp -maxdepth 1 -name "devdock-*" -type d 2>/dev/null || true)
@@ -115,7 +115,7 @@ cleanup_data() {
             cleaned=true
         fi
     fi
-    
+
     if [ "$cleaned" = false ]; then
         info "No DevDock data directories found"
     fi
@@ -128,11 +128,11 @@ main() {
     echo "║     DevDock Uninstallation Script     ║"
     echo "╚════════════════════════════════════════╝"
     echo ""
-    
+
     # Find installations
     local installations
     installations=($(find_installations))
-    
+
     if [ ${#installations[@]} -eq 0 ]; then
         warning "DevDock is not installed or not found in standard locations"
         echo ""
@@ -144,7 +144,7 @@ main() {
         cleanup_data
         exit 0
     fi
-    
+
     # Show found installations
     info "Found DevDock installations:"
     for install in "${installations[@]}"; do
@@ -157,7 +157,7 @@ main() {
         echo "  - ${install} (${version})"
     done
     echo ""
-    
+
     # Confirm uninstallation
     read -p "Uninstall DevDock? [y/N] " -n 1 -r
     echo ""
@@ -165,7 +165,7 @@ main() {
         info "Uninstallation cancelled"
         exit 0
     fi
-    
+
     # Remove all installations
     echo ""
     local removed=0
@@ -174,11 +174,11 @@ main() {
             ((removed++))
         fi
     done
-    
+
     # Clean up data
     echo ""
     cleanup_data
-    
+
     # Summary
     echo ""
     echo "════════════════════════════════════════"
@@ -189,7 +189,7 @@ main() {
         warning "No binaries were removed"
     fi
     echo ""
-    
+
     # Verify removal
     if command -v devdock >/dev/null 2>&1; then
         warning "devdock command is still in PATH at: $(command -v devdock)"
@@ -199,4 +199,3 @@ main() {
 
 # Run main function
 main "$@"
-

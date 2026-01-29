@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `devdock start <profile> --enable-logs` - Enable rich logging (Grafana/Loki stack) automatically during startup
+- Production-ready observability configs in `config/helpers/observability/grafana/`:
+  - `docker-compose.yaml` - Full Loki stack with read/write separation, gateway (nginx)
+  - `alloy-local-config.yaml` - Docker log collection configuration
+  - `loki-config.yaml` - Loki configuration with S3-compatible storage (Minio)
+  - `prometheus.yaml` - Prometheus configuration for metrics
+
+### Fixed
+- **CRITICAL**: Remote mode now correctly respects profile service types (local/remote)
+  - Previously: Profile had `qe: type: local` but generated `temp_profile.yaml` incorrectly changed it to `remote`
+  - Root cause: Code was using service type from `devdock_config.json` instead of user's profile
+  - Fix: Now prioritizes profile's `deployment_type` field over devdock_config.json defaults
+  - This affected all services where users explicitly set `type: local` in their profile
+- Rich logging now uses production configs from scio monorepo and logs appear correctly in Grafana
+- Profile directory structure now preserved during remote sync (e.g., `user_profiles/` subdirectory maintained)
+- Simplified config directory search (prioritizes local devdock repo, monorepo is fallback)
+
+### Improved
+- Cleaned up CLI output when using `--enable-logs` flag (minimal 2-line output vs verbose headers)
+- Parallelized Docker image pulls for rich logging (pulls all 6 images concurrently, ~6x faster)
+
 ## [0.1.0] - 2025-12-29
 
 ### Added - First Release 🎉
@@ -96,4 +118,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 [0.1.0]: https://github.com/askscio/devdock/releases/tag/v0.1.0
 [Unreleased]: https://github.com/askscio/devdock/compare/v0.1.0...HEAD
-

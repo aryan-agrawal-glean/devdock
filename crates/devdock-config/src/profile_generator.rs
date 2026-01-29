@@ -129,7 +129,7 @@ impl TempProfileGenerator {
             project_number: String::new(),
             enable_service_metrics: "True".to_string(),
             current_profile: profile_path.map(std::string::ToString::to_string),
-            dns_kubectl: Some("disabled".to_string()),
+            dns_kubectl: Some("enabled".to_string()), // Default to enabled (matches Python)
             k8s_service_account: None,
             debug_mode: "False".to_string(),
             vault_key: String::new(),
@@ -159,17 +159,17 @@ impl TempProfileGenerator {
 
     /// Get OpenSearch namespace from dynamic.ini
     ///
-    /// Reads indexing.index.nodePool from dynamic.ini and converts to namespace.
-    /// Falls back to elasticsearch-1-namespace if not found.
+    /// Reads indexing.nodePool.name from dynamic.ini and converts to namespace.
+    /// Falls back to elasticsearch-2-namespace if not found (matches Python behavior).
     fn get_opensearch_namespace(&self, staging: bool) -> String {
-        let default_namespace = "elasticsearch-1-namespace".to_string();
+        let default_namespace = "elasticsearch-2-namespace".to_string();
 
         let Some(ref dynamic_ini) = self.dynamic_ini else {
             return default_namespace;
         };
 
-        // Get the nodepool key based on staging flag
-        let nodepool_key = if staging { "index.staging.nodePool" } else { "index.nodePool" };
+        // Get the nodepool key based on staging flag (matches Python IndexingConfig constants)
+        let nodepool_key = if staging { "staging.nodePool.name" } else { "nodePool.name" };
 
         // Try to read nodepool from dynamic.ini
         let nodepool = match dynamic_ini.get("indexing", nodepool_key) {
@@ -374,10 +374,19 @@ impl TempProfileGenerator {
                     let profile_service = profile.services.get(&node.name);
 
                     // Use profile's deployment type (local/remote), not devdock_config.json's service type
-                    let service_type = if node.config.is_local() {
-                        "local".to_string()
+                    let service_type = if let Some(svc) = profile_service {
+                        // Use deployment_type from profile if explicitly specified
+                        match svc.deployment_type {
+                            devdock_core::types::DeploymentType::Local => "local".to_string(),
+                            devdock_core::types::DeploymentType::Remote => "remote".to_string(),
+                        }
                     } else {
-                        "remote".to_string()
+                        // Fallback to devdock_config.json if not in profile
+                        if node.config.is_local() {
+                            "local".to_string()
+                        } else {
+                            "remote".to_string()
+                        }
                     };
 
                     // Only include env from the PROFILE, not from devdock_config.json
@@ -886,5 +895,87 @@ impl TempProfileGenerator {
     pub fn generate(self) -> Result<String> {
         serde_yaml::to_string(&self.profile)
             .map_err(|e| anyhow::anyhow!("Failed to serialize temp profile: {e}"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ini_parser::ParsedIniConfig;
+    use std::path::PathBuf;
+
+    #[test]
+    fn test_opensearch_namespace_default() {
+        // When dynamic.ini is not available, should default to elasticsearch-2-namespace
+        let generator = TempProfileGenerator::new(&PathBuf::from("/tmp"), None);
+        let namespace = generator.get_opensearch_namespace(false);
+        assert_eq!(
+            namespace, "elasticsearch-2-namespace",
+            "Should default to elasticsearch-2-namespace when dynamic.ini is not available"
+        );
+    }
+
+    #[test]
+    fn test_opensearch_namespace_from_dynamic_ini() {
+        // When dynamic.ini has nodePool.name, should convert to namespace
+        let mut dynamic_ini = ParsedIniConfig::default();
+        dynamic_ini.set("indexing", "nodePool.name", "elastic-node-pool-3");
+
+        let generator =
+            TempProfileGenerator::new(&PathBuf::from("/tmp"), None).with_dynamic_ini(dynamic_ini);
+
+        let namespace = generator.get_opensearch_namespace(false);
+        assert_eq!(
+            namespace, "elasticsearch-3-namespace",
+            "Should convert elastic-node-pool-3 to elasticsearch-3-namespace"
+        );
+    }
+
+    #[test]
+    fn test_opensearch_namespace_staging() {
+        // Test staging nodepool key
+        let mut dynamic_ini = ParsedIniConfig::default();
+        dynamic_ini.set("indexing", "staging.nodePool.name", "elastic-node-pool-5");
+
+        let generator =
+            TempProfileGenerator::new(&PathBuf::from("/tmp"), None).with_dynamic_ini(dynamic_ini);
+
+        let namespace = generator.get_opensearch_namespace(true);
+        assert_eq!(
+            namespace, "elasticsearch-5-namespace",
+            "Should convert staging.nodePool.name to correct namespace"
+        );
+    }
+
+    #[test]
+    fn test_opensearch_namespace_invalid_nodepool() {
+        // When nodepool is invalid, should fall back to default
+        let mut dynamic_ini = ParsedIniConfig::default();
+        dynamic_ini.set("indexing", "nodePool.name", "invalid-pool");
+
+        let generator =
+            TempProfileGenerator::new(&PathBuf::from("/tmp"), None).with_dynamic_ini(dynamic_ini);
+
+        let namespace = generator.get_opensearch_namespace(false);
+        assert_eq!(
+            namespace, "elasticsearch-2-namespace",
+            "Should fall back to default when nodepool is invalid"
+        );
+    }
+
+    #[test]
+    fn test_opensearch_namespace_empty_nodepool() {
+        // When nodepool is empty, should use default
+        let mut dynamic_ini = ParsedIniConfig::default();
+        dynamic_ini.set("indexing", "nodePool.name", "");
+
+        let generator =
+            TempProfileGenerator::new(&PathBuf::from("/tmp"), None).with_dynamic_ini(dynamic_ini);
+
+        let namespace = generator.get_opensearch_namespace(false);
+        assert_eq!(
+            namespace, "elasticsearch-2-namespace",
+            "Should use default when nodepool is empty"
+        );
     }
 }

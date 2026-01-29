@@ -89,4 +89,3 @@ audit:
 coverage:
 	cargo llvm-cov --workspace --all-features --html
 	@echo "Coverage report: target/llvm-cov/html/index.html"
-

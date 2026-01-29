@@ -37,8 +37,14 @@ pub const PYTHON_IMAGES: &[&str] =
     &["us-central1-docker.pkg.dev/scio-engineering/glean-images/devdock_python_base:latest"];
 
 /// Rich logging images (Grafana stack)
-pub const RICH_LOGGING_IMAGES: &[&str] =
-    &["grafana/loki:latest", "grafana/alloy:latest", "minio/minio", "grafana/grafana:latest"];
+pub const RICH_LOGGING_IMAGES: &[&str] = &[
+    "grafana/loki:latest",
+    "grafana/alloy:latest",
+    "minio/minio",
+    "grafana/grafana:latest",
+    "nginx:latest",
+    "prom/prometheus:latest",
+];
 
 /// Check if Docker daemon is running
 pub fn check_docker() -> Result<()> {

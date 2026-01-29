@@ -25,6 +25,7 @@ devdock start <profile>               # Start with profile
   -m remote                           # Remote mode (Coder workspace)
   --auto-forward                      # Auto-forward ports (remote)
   --ci-mode                           # Non-interactive mode
+  --enable-logs                       # Enable rich logging before starting
 
 devdock stop [target]                 # Stop instance/service
   -f, --force                         # Force stop without cleanup
@@ -241,11 +242,15 @@ devdock start <profile> -m remote --port-base 8000
 
 # Start with verbose progress output
 devdock start <profile> --verbose
+
+# Enable rich logging (Grafana/Loki) before starting
+devdock start <profile> --enable-logs
 ```
 
 **Options:**
 - `profile`: Profile name (e.g., `default_profile`)
 - `-s, --services <services>`: Comma-separated list of services to start
+- `--enable-logs`: Enable rich logging stack (Grafana/Loki) before starting DevDock
 - `--ci-mode`: Run in non-interactive CI mode
 - `-m, --mode <mode>`: Start mode - `local` (default) or `remote`
 - `--vm <name>`: Use existing Coder workspace
@@ -928,4 +933,3 @@ devdock --version
 
 *Last updated: January 2026*
 *DevDock version: 0.1.0+*
-

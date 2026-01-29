@@ -78,7 +78,8 @@ pub struct TempProfile {
 }
 
 /// DNS kubectl enabled projects
-const DNS_KUBECTL_ENABLED_PROJECTS: &[&str] = &["dev-sandbox-334901", "salessavvy-test"];
+const DNS_KUBECTL_ENABLED_PROJECTS: &[&str] =
+    &["dev-sandbox-334901", "salessavvy-test", "scio-test-273415"];
 
 /// Google Cloud Platform implementation
 #[allow(dead_code)]
@@ -127,10 +128,13 @@ impl GooglePlatform {
     }
 
     /// Check if DNS-based kubectl should be enabled
+    ///
+    /// DNS-based kubectl is enabled by default for supported projects.
+    /// Set ENABLE_DNS_KUBECTL=false to explicitly opt out.
     fn should_use_dns_kubectl(project: &str) -> bool {
         let env_flag = std::env::var("ENABLE_DNS_KUBECTL")
-            .map(|v| matches!(v.to_lowercase().as_str(), "true" | "1" | "yes"))
-            .unwrap_or(false);
+            .map(|v| !matches!(v.to_lowercase().as_str(), "false" | "0" | "no"))
+            .unwrap_or(true); // Default to true (opt-out model)
         let project_supported = DNS_KUBECTL_ENABLED_PROJECTS.contains(&project);
         env_flag && project_supported
     }
@@ -542,5 +546,61 @@ pub async fn create_platform_with_multi_project(
             Ok(Box::new(AzurePlatform::new(project, dynamic_config).await?))
         }
         _ => anyhow::bail!("Unsupported platform: {platform_name}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_dns_kubectl_enabled_by_default() {
+        // DNS kubectl should be enabled by default for whitelisted projects (opt-out model)
+        std::env::remove_var("ENABLE_DNS_KUBECTL");
+        assert!(
+            GooglePlatform::should_use_dns_kubectl("salessavvy-test"),
+            "DNS kubectl should be enabled by default for salessavvy-test"
+        );
+    }
+
+    #[test]
+    fn test_dns_kubectl_explicit_disable() {
+        // Should be disabled when explicitly set to false
+        std::env::set_var("ENABLE_DNS_KUBECTL", "false");
+        assert!(
+            !GooglePlatform::should_use_dns_kubectl("salessavvy-test"),
+            "DNS kubectl should be disabled when ENABLE_DNS_KUBECTL=false"
+        );
+        std::env::remove_var("ENABLE_DNS_KUBECTL");
+    }
+
+    #[test]
+    fn test_dns_kubectl_explicit_enable() {
+        // Should be enabled when explicitly set to true
+        std::env::set_var("ENABLE_DNS_KUBECTL", "true");
+        assert!(
+            GooglePlatform::should_use_dns_kubectl("salessavvy-test"),
+            "DNS kubectl should be enabled when ENABLE_DNS_KUBECTL=true"
+        );
+        std::env::remove_var("ENABLE_DNS_KUBECTL");
+    }
+
+    #[test]
+    fn test_dns_kubectl_not_supported_project() {
+        // Should be disabled for projects not in the whitelist
+        std::env::remove_var("ENABLE_DNS_KUBECTL");
+        assert!(
+            !GooglePlatform::should_use_dns_kubectl("unsupported-project"),
+            "DNS kubectl should be disabled for non-whitelisted projects"
+        );
+    }
+
+    #[test]
+    fn test_dns_kubectl_all_whitelisted_projects() {
+        // Verify all whitelisted projects are supported
+        std::env::remove_var("ENABLE_DNS_KUBECTL");
+        assert!(GooglePlatform::should_use_dns_kubectl("dev-sandbox-334901"));
+        assert!(GooglePlatform::should_use_dns_kubectl("salessavvy-test"));
+        assert!(GooglePlatform::should_use_dns_kubectl("scio-test-273415"));
     }
 }

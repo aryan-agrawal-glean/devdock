@@ -6,136 +6,190 @@ use devdock_config::docker;
 use std::path::PathBuf;
 use std::process::Command;
 
-/// Docker compose file for Grafana stack
-const GRAFANA_COMPOSE: &str = r#"
-version: '3.8'
-services:
-  loki:
-    container_name: devdock-grafana-loki
-    image: grafana/loki:latest
-    ports:
-      - "3100:3100"
-    networks:
-      - devdock_infra
-    volumes:
-      - ${HOME}/.devdock/grafana/.data/loki:/loki
+/// Enable rich logging in quiet mode (for use with --enable-logs flag)
+pub async fn enable_quiet() -> Result<()> {
+    enable_internal(true).await
+}
 
-  alloy:
-    container_name: devdock-grafana-alloy
-    image: grafana/alloy:latest
-    ports:
-      - "12345:12345"
-    networks:
-      - devdock_infra
-    depends_on:
-      - loki
+/// Find the observability config directory
+fn find_observability_config_dir() -> Result<PathBuf> {
+    let cwd = std::env::current_dir()?;
+    let home = std::env::var("HOME").unwrap_or_default();
 
-  minio:
-    container_name: devdock-grafana-minio
-    image: minio/minio
-    ports:
-      - "9000:9000"
-      - "9001:9001"
-    environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
-    command: server /data --console-address ":9001"
-    networks:
-      - devdock_infra
-    volumes:
-      - ${HOME}/.devdock/grafana/.data/minio:/data
+    // Try locations in priority order
+    let search_paths = vec![
+        // 1. Development: Running from devdock repo root
+        cwd.join("config/helpers/observability/grafana"),
+        // 2. Common devdock repo location (primary)
+        PathBuf::from(format!("{}/workspace/devdock/config/helpers/observability/grafana", home)),
+        // 3. Alternative home location
+        PathBuf::from(format!("{}/devdock/config/helpers/observability/grafana", home)),
+        // 4. System-wide installation
+        PathBuf::from("/usr/local/share/devdock/config/helpers/observability/grafana"),
+    ];
 
-  grafana:
-    container_name: devdock-grafana
-    image: grafana/grafana:latest
-    ports:
-      - "3000:3000"
-    environment:
-      - GF_AUTH_ANONYMOUS_ENABLED=true
-      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
-    networks:
-      - devdock_infra
-    depends_on:
-      - loki
-    volumes:
-      - ${HOME}/.devdock/grafana/.data/grafana:/var/lib/grafana
+    // Check each path
+    for path in &search_paths {
+        if path.exists() && path.join("docker-compose.yaml").exists() {
+            return Ok(path.clone());
+        }
+    }
 
-networks:
-  devdock_infra:
-    external: true
-"#;
+    // If running from scio monorepo, use those configs (optional fallback)
+    if let Ok(root) = std::env::var("DEVDOCK_ROOT") {
+        let monorepo_path =
+            PathBuf::from(&root).join("devdock/config/helpers/observability/grafana");
+        if monorepo_path.exists() && monorepo_path.join("docker-compose.yaml").exists() {
+            return Ok(monorepo_path);
+        }
+    }
+
+    anyhow::bail!(
+        "Could not find observability config directory.\n\
+        \n\
+        The config files should be at one of:\n\
+        - {}/workspace/devdock/config/helpers/observability/grafana\n\
+        - Current directory: {}/config/helpers/observability/grafana\n\
+        \n\
+        These files are included in the devdock repository.\n\
+        Please clone/update the devdock repo at $HOME/workspace/devdock/",
+        home,
+        cwd.display()
+    )
+}
 
 /// Enable rich logging stack
 pub async fn enable() -> Result<()> {
-    output::header("Enabling Rich Logging");
+    enable_internal(false).await
+}
+
+/// Internal implementation with verbosity control
+async fn enable_internal(quiet: bool) -> Result<()> {
+    if !quiet {
+        output::header("Enabling Rich Logging");
+    }
 
     // Check Docker
     docker::check_docker()?;
 
-    // Setup networks
-    output::step(1, 4, "Setting up Docker networks...");
+    // Setup networks (use devdock_network as expected by the compose file)
+    if !quiet {
+        output::step(1, 4, "Setting up Docker networks...");
+    }
     docker::setup_networks()?;
-    output::success("Networks ready");
+    if !quiet {
+        output::success("Networks ready");
+    }
 
     // Create directories
-    output::step(2, 4, "Creating data directories...");
+    if !quiet {
+        output::step(2, 4, "Creating data directories...");
+    }
     let home = std::env::var("HOME")?;
-    let grafana_dir = PathBuf::from(&home).join(".devdock/grafana/.data");
-    std::fs::create_dir_all(grafana_dir.join("loki"))?;
-    std::fs::create_dir_all(grafana_dir.join("minio"))?;
-    std::fs::create_dir_all(grafana_dir.join("grafana"))?;
+    let grafana_data_dir = PathBuf::from(&home).join(".devdock/grafana/.data/minio");
+    std::fs::create_dir_all(&grafana_data_dir)?;
 
-    // Set permissions (for Linux compatibility)
+    // Set permissions with setgid bit (for Linux compatibility)
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let perms = std::fs::Permissions::from_mode(0o775);
+        // 2775 = setgid bit (2000) + rwxrwxr-x (0775)
+        let grafana_dir = PathBuf::from(&home).join(".devdock/grafana");
+        let perms = std::fs::Permissions::from_mode(0o2775);
         let _ = std::fs::set_permissions(&grafana_dir, perms);
     }
-    output::success("Directories created");
+    if !quiet {
+        output::success("Directories created");
+    }
 
-    // Load cached images or pull
-    output::step(3, 4, "Loading images...");
+    // Load cached images or pull (in parallel for speed)
+    if !quiet {
+        output::step(3, 4, "Loading images...");
+    }
+
+    // Collect images that need to be pulled
+    let mut images_to_pull = Vec::new();
     for image in docker::RICH_LOGGING_IMAGES {
         if !docker::load_cached_image(image)? {
-            output::info(&format!("Pulling {image}..."));
-            docker::pull_images(&[image], false)?;
+            images_to_pull.push(*image);
         }
     }
-    output::success("Images ready");
 
-    // Write compose file and start services
-    output::step(4, 4, "Starting Grafana stack...");
-    let compose_path = grafana_dir.parent().unwrap().join("docker-compose.yaml");
-    std::fs::write(&compose_path, GRAFANA_COMPOSE)?;
+    // Pull images in parallel if needed
+    if !images_to_pull.is_empty() {
+        use tokio::task;
 
-    let status = Command::new("docker")
-        .args(["compose", "-f", compose_path.to_str().unwrap(), "up", "-d"])
+        let pull_tasks: Vec<_> = images_to_pull
+            .iter()
+            .map(|&image| task::spawn_blocking(move || docker::pull_images(&[image], false)))
+            .collect();
+
+        // Wait for all pulls to complete
+        for (i, task) in pull_tasks.into_iter().enumerate() {
+            if let Err(e) = task.await? {
+                if !quiet {
+                    output::warn(&format!("Failed to pull {}: {}", images_to_pull[i], e));
+                }
+            }
+        }
+    }
+
+    if !quiet {
+        output::success("Images ready");
+    }
+
+    // Find the config directory
+    if !quiet {
+        output::step(4, 4, "Starting Grafana stack...");
+    }
+    let config_dir = find_observability_config_dir()?;
+    let compose_path = config_dir.join("docker-compose.yaml");
+
+    // Determine which docker compose command to use
+    let docker_compose_cmd = if Command::new("docker")
+        .args(["compose", "version"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
         .status()
-        .context("Failed to start Grafana stack")?;
+        .map(|s| s.success())
+        .unwrap_or(false)
+    {
+        vec!["docker", "compose"]
+    } else if Command::new("docker-compose")
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+    {
+        vec!["docker-compose"]
+    } else {
+        anyhow::bail!("Neither 'docker compose' nor 'docker-compose' command found. Please install Docker Compose.");
+    };
+
+    // Run docker compose from the config directory (so relative paths in compose file work)
+    let mut cmd = Command::new(docker_compose_cmd[0]);
+    cmd.args(&docker_compose_cmd[1..])
+        .args(["-f", compose_path.to_str().unwrap(), "up", "-d"])
+        .current_dir(&config_dir); // Important: run from config dir for relative volume mounts
+
+    // Suppress output in quiet mode
+    if quiet {
+        cmd.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    }
+
+    let status = cmd.status().context("Failed to start Grafana stack")?;
 
     if !status.success() {
-        // Try docker-compose (older syntax)
-        let status = Command::new("docker-compose")
-            .args(["-f", compose_path.to_str().unwrap(), "up", "-d"])
-            .status()
-            .context("Failed to start Grafana stack")?;
-
-        if !status.success() {
-            anyhow::bail!("Failed to start Grafana stack");
-        }
+        anyhow::bail!("Failed to start Grafana stack");
     }
 
-    output::success("Grafana stack started");
-
-    output::header("Rich Logging Enabled");
-    output::success("✅ Rich logging is now available!");
-    println!();
-    output::info("📊 Grafana UI:    http://localhost:3000/explore");
-    output::info("📊 Loki:          http://localhost:3100");
-    output::info("📊 Minio Console: http://localhost:9001");
-    println!();
-    output::info("💡 Use Grafana to explore logs from all DevDock services");
+    if !quiet {
+        output::success(
+            "Started Log viewer (Grafana). To view logs GOTO: http://localhost:3000/explore",
+        );
+    }
 
     Ok(())
 }
@@ -146,13 +200,17 @@ pub async fn disable() -> Result<()> {
 
     docker::check_docker()?;
 
-    // Stop containers
+    // Stop containers (from the production docker-compose)
     output::step(1, 2, "Stopping Grafana stack...");
     let containers = [
-        "devdock-grafana",
-        "devdock-grafana-loki",
+        "devdock-grafana-server",
+        "devdock-grafana-loki-read",
+        "devdock-grafana-loki-write",
+        "devdock-grafana-loki-backend",
+        "devdock-grafana-nginx",
         "devdock-grafana-alloy",
         "devdock-grafana-minio",
+        "devdock-prometheus",
     ];
 
     for container in containers {
@@ -182,10 +240,14 @@ pub async fn status() -> Result<()> {
     docker::check_docker()?;
 
     let containers = [
-        ("Grafana", "devdock-grafana", "http://localhost:3000"),
-        ("Loki", "devdock-grafana-loki", "http://localhost:3100"),
+        ("Grafana", "devdock-grafana-server", "http://localhost:3000"),
+        ("Loki (Gateway)", "devdock-grafana-nginx", "http://localhost:3100"),
+        ("Loki (Read)", "devdock-grafana-loki-read", "http://localhost:3101"),
+        ("Loki (Write)", "devdock-grafana-loki-write", "http://localhost:3102"),
+        ("Loki (Backend)", "devdock-grafana-loki-backend", ""),
         ("Alloy", "devdock-grafana-alloy", "http://localhost:12345"),
-        ("Minio", "devdock-grafana-minio", "http://localhost:9001"),
+        ("Minio", "devdock-grafana-minio", ""),
+        ("Prometheus", "devdock-prometheus", "http://localhost:9090"),
     ];
 
     let mut running = 0;
@@ -199,7 +261,11 @@ pub async fn status() -> Result<()> {
             output.map(|o| String::from_utf8_lossy(&o.stdout).trim() == "true").unwrap_or(false);
 
         if is_running {
-            output::success(&format!("✅ {name} is running: {url}"));
+            if !url.is_empty() {
+                output::success(&format!("✅ {name} is running: {url}"));
+            } else {
+                output::success(&format!("✅ {name} is running"));
+            }
             running += 1;
         } else {
             output::warn(&format!("❌ {name} is not running"));
