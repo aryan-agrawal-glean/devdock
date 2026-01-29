@@ -633,13 +633,17 @@ fn get_current_branch() -> Result<String> {
 
 /// Sanitize workspace name for use with Coder.
 /// Replaces non-alphanumeric characters with hyphens and truncates to 32 chars.
+/// Coder requires names to be alphanumeric with hyphens, but cannot start or end with hyphens.
 fn sanitize_workspace_name(name: &str) -> String {
     // Replace non-alphanumeric (except hyphens) with hyphens
     let sanitized: String =
         name.chars().map(|c| if c.is_alphanumeric() || c == '-' { c } else { '-' }).collect();
 
     // Truncate to 32 characters (Coder workspace name limit)
-    sanitized.chars().take(32).collect()
+    let truncated: String = sanitized.chars().take(32).collect();
+
+    // Trim leading/trailing hyphens (Coder doesn't allow them)
+    truncated.trim_matches('-').to_string()
 }
 
 /// Find profile file path.
