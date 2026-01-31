@@ -78,6 +78,66 @@ impl SqlState {
         }
         Ok(())
     }
+
+    /// Get the path to the MySQL seed cache directory
+    fn seed_cache_path(&self) -> PathBuf {
+        self.state_dir.join("mysql-seed")
+    }
+
+    /// Check if the seed cache is valid (exists and not expired)
+    /// Cache validity: 4 hours (matches shell script behavior)
+    fn is_seed_cache_valid(&self, max_age_hours: u64) -> bool {
+        let timestamp_file = self.state_dir.join("seed_timestamp.txt");
+        if !timestamp_file.exists() {
+            return false;
+        }
+
+        let seed_dir = self.seed_cache_path();
+        if !seed_dir.exists() || !seed_dir.is_dir() {
+            return false;
+        }
+
+        // Check if directory has content
+        if std::fs::read_dir(&seed_dir).map(|mut d| d.next().is_none()).unwrap_or(true) {
+            return false;
+        }
+
+        // Check timestamp
+        if let Ok(content) = std::fs::read_to_string(&timestamp_file) {
+            if let Ok(timestamp) = content.trim().parse::<i64>() {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0);
+                let age_hours = (now - timestamp) / 3600;
+                return age_hours < max_age_hours as i64;
+            }
+        }
+
+        false
+    }
+
+    /// Set the seed cache timestamp to now
+    fn set_seed_timestamp(&self) -> Result<()> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        self.write_file("seed_timestamp.txt", &now.to_string())
+    }
+
+    /// Clear the seed cache directory
+    fn clear_seed_cache(&self) -> Result<()> {
+        let seed_dir = self.seed_cache_path();
+        if seed_dir.exists() {
+            std::fs::remove_dir_all(&seed_dir)?;
+        }
+        let timestamp_file = self.state_dir.join("seed_timestamp.txt");
+        if timestamp_file.exists() {
+            std::fs::remove_file(&timestamp_file)?;
+        }
+        Ok(())
+    }
 }
 
 /// Wait for MySQL container to be healthy
@@ -142,6 +202,54 @@ fn docker_mysql_import(container: &str, sql_file: &PathBuf) -> Result<()> {
     Ok(())
 }
 
+/// Set proper permissions on the MySQL seed directory
+///
+/// Matches shell script behavior from devdock.sh:
+/// - chmod 755 for directories
+/// - chmod 644 for files
+/// - chmod 600 for secure files (*.pem, auto.cnf, binlog.*)
+/// - chown 999:999 (MySQL user) for container access
+fn set_seed_permissions(seed_dir: &Path) -> Result<()> {
+    output::info("Setting proper permissions for MySQL seed data...");
+
+    // Set directory permissions (755)
+    let _ = Command::new("find")
+        .args([seed_dir.to_str().unwrap(), "-type", "d", "-exec", "chmod", "755", "{}", ";"])
+        .status();
+
+    // Set file permissions (644)
+    let _ = Command::new("find")
+        .args([seed_dir.to_str().unwrap(), "-type", "f", "-exec", "chmod", "644", "{}", ";"])
+        .status();
+
+    // Set secure file permissions (600) for *.pem, auto.cnf, binlog.*
+    for pattern in &["*.pem", "auto.cnf", "binlog.*"] {
+        let _ = Command::new("find")
+            .args([
+                seed_dir.to_str().unwrap(),
+                "-name",
+                pattern,
+                "-exec",
+                "chmod",
+                "600",
+                "{}",
+                ";",
+            ])
+            .status();
+    }
+
+    // Change ownership to MySQL user (999:999) for container access
+    // This requires sudo, so we try it but don't fail if it doesn't work
+    if Command::new("which").arg("sudo").status().map(|s| s.success()).unwrap_or(false) {
+        let _ = Command::new("sudo")
+            .args(["chown", "-R", "999:999", seed_dir.to_str().unwrap()])
+            .status();
+    }
+
+    output::success("Permissions set for MySQL seed data");
+    Ok(())
+}
+
 /// Get SQL scripts path for a project
 fn get_sql_scripts_path(devdock_root: &Path, project: &str) -> PathBuf {
     let base = devdock_root.join("java/com/askscio/storage/sql/scripts");
@@ -164,7 +272,19 @@ pub async fn sql_setup(
     force_copy: bool,
     full_cleanup: bool,
     copy_keyval: bool,
+    use_mysql_seed: bool,
+    use_full_instance: bool,
 ) -> Result<()> {
+    // Handle seed mode (fastest startup)
+    if use_mysql_seed {
+        return sql_setup_with_seed(project, platform, region, db_tables, mode, force_copy).await;
+    }
+
+    // Handle full instance mode
+    if use_full_instance {
+        return sql_setup_with_full_instance(project, platform, region, db_tables, mode).await;
+    }
+
     output::info(&format!("Setting up SQL for project {project} ({platform})"));
 
     let devdock_root =
@@ -282,23 +402,145 @@ pub async fn sql_setup(
 
     output::success("Schema hydration complete");
 
-    // Export data from cloud
+    // Export data from cloud (parallelized for speed)
     if !tables_to_copy.is_empty() {
         output::info(&format!("Exporting tables: {tables_to_copy}"));
 
         let export_dir = state.scripts_dir();
         std::fs::create_dir_all(&export_dir)?;
 
-        for entry in tables_to_copy.split(';') {
-            let entry = entry.trim();
-            if entry.is_empty() {
-                continue;
+        // Collect all entries to export
+        let entries: Vec<&str> =
+            tables_to_copy.split(';').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+
+        // Separate fast exports (GCS downloads) from slow exports (gcloud sql)
+        // Fast exports can be fully parallelized, slow exports are rate-limited
+        let fast_export_config = manager.get_fast_export_config_public();
+        let mut fast_entries = Vec::new();
+        let mut slow_entries = Vec::new();
+
+        for entry in &entries {
+            let (db, _tables, query) = devdock_config::ini_parser::parse_db_tables_query(entry);
+            let is_fast = query.is_none()
+                && fast_export_config.projects.contains(project)
+                && fast_export_config.dbs.contains(&db)
+                && mode == "fast";
+
+            if is_fast {
+                fast_entries.push(*entry);
+            } else {
+                slow_entries.push(*entry);
             }
-            output::info(&format!("Processing: {entry}"));
-            manager.export_from_cloud(entry, &export_dir, mode).await?;
         }
 
-        // Import exported dumps
+        // Run exports with optimal parallelism:
+        // - Fast exports (GCS downloads): fully parallel
+        // - Slow exports (gcloud sql): SEQUENTIAL (Cloud SQL only allows one export per instance)
+        output::info(&format!(
+            "🚀 Running {} fast exports (parallel) + {} slow exports (sequential)",
+            fast_entries.len(),
+            slow_entries.len()
+        ));
+
+        // Run fast exports in parallel (GCS downloads are independent)
+        let fast_future = async {
+            if fast_entries.is_empty() {
+                return Ok::<(), anyhow::Error>(());
+            }
+
+            let fast_futures: Vec<_> = fast_entries
+                .iter()
+                .map(|entry| {
+                    let manager = &manager;
+                    let export_dir = &export_dir;
+                    async move {
+                        output::info(&format!("  ⚡ Fast: {entry}"));
+                        let result = manager.export_from_cloud(entry, export_dir, mode).await;
+                        if result.is_ok() {
+                            output::success(&format!("  ✅ Fast done: {entry}"));
+                        }
+                        result
+                    }
+                })
+                .collect();
+
+            let results = futures::future::join_all(fast_futures).await;
+            for result in results {
+                result?;
+            }
+            output::success(&format!("✅ {} fast exports complete", fast_entries.len()));
+            Ok(())
+        };
+
+        // Run slow exports sequentially with retry logic
+        // Cloud SQL only allows one export operation per instance at a time
+        let slow_future = async {
+            if slow_entries.is_empty() {
+                return Ok::<(), anyhow::Error>(());
+            }
+
+            for entry in &slow_entries {
+                output::info(&format!("  🐢 Slow: {entry}"));
+
+                // Retry logic with exponential backoff for 409 conflicts
+                let max_retries = 3;
+                let mut retry_count = 0;
+                let mut last_error = None;
+
+                while retry_count < max_retries {
+                    match manager.export_from_cloud(entry, &export_dir, mode).await {
+                        Ok(()) => {
+                            output::success(&format!("  ✅ Slow done: {entry}"));
+                            last_error = None;
+                            break;
+                        }
+                        Err(e) => {
+                            let error_str = e.to_string();
+                            // Check if it's a 409 conflict (another operation in progress)
+                            if error_str.contains("409")
+                                || error_str.contains("already in progress")
+                            {
+                                retry_count += 1;
+                                if retry_count < max_retries {
+                                    let delay = 2u64.pow(retry_count as u32) * 5; // 10s, 20s, 40s
+                                    output::warn(&format!(
+                                        "  ⏳ Cloud SQL busy, retrying in {delay}s ({retry_count}/{max_retries})..."
+                                    ));
+                                    tokio::time::sleep(Duration::from_secs(delay)).await;
+                                } else {
+                                    last_error = Some(e);
+                                }
+                            } else {
+                                // Non-retryable error
+                                last_error = Some(e);
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                if let Some(e) = last_error {
+                    return Err(e);
+                }
+            }
+
+            output::success(&format!("✅ {} slow exports complete", slow_entries.len()));
+            Ok(())
+        };
+
+        // Run fast and slow exports concurrently
+        // Fast exports run in parallel among themselves
+        // Slow exports run sequentially among themselves (but concurrent with fast)
+        let (fast_result, slow_result) = futures::future::join(fast_future, slow_future).await;
+        fast_result?;
+        slow_result?;
+
+        output::success(&format!(
+            "✅ All {} exports complete",
+            fast_entries.len() + slow_entries.len()
+        ));
+
+        // Import exported dumps (sequential - MySQL handles one write connection best)
         output::info("Importing exported data...");
         let mut dump_files: Vec<_> = std::fs::read_dir(&export_dir)?
             .filter_map(std::result::Result::ok)
@@ -329,6 +571,267 @@ pub async fn sql_setup(
     state.clear_scripts()?;
 
     output::success("✅ SQL setup complete");
+    Ok(())
+}
+
+/// SQL setup using pre-seeded MySQL data directory (fastest startup)
+///
+/// This downloads a pre-built MySQL data directory from GCS and uses it directly,
+/// avoiding the need for schema hydration and data import.
+///
+/// GCS path: gs://sql-{project}/devdock/devdock-seeds/latest.tar.zst
+async fn sql_setup_with_seed(
+    project: &str,
+    platform: &str,
+    region: &str,
+    db_tables: &str,
+    mode: &str,
+    force_copy: bool,
+) -> Result<()> {
+    output::info(&format!("Setting up SQL with MySQL seed for project {project}"));
+
+    let state = SqlState::new()?;
+    let seed_cache_max_age_hours = 4; // Match shell script behavior
+
+    // Check if we have a valid cached seed
+    if !force_copy && state.is_seed_cache_valid(seed_cache_max_age_hours) {
+        output::success("Using cached MySQL seed (less than 4 hours old)");
+    } else {
+        // Download fresh seed
+        output::info("Downloading MySQL seed from GCS...");
+
+        let devdock_root =
+            std::env::var("DEVDOCK_ROOT").context("DEVDOCK_ROOT environment variable not set")?;
+        let devdock_root = PathBuf::from(&devdock_root);
+
+        // Load config to create SqlOperationsManager
+        let ini_loader = DynamicIniLoader::new(project, devdock_root)?;
+        let config = ini_loader.load_merged_config().await?;
+        let manager = SqlOperationsManager::new(project, platform, region, config);
+
+        // Clear old cache
+        state.clear_seed_cache()?;
+
+        // Download and extract seed
+        let seed_dir = state.seed_cache_path();
+        std::fs::create_dir_all(&seed_dir)?;
+
+        manager
+            .download_mysql_seed(&seed_dir)
+            .await
+            .map_err(|e| {
+                output::warn(&format!("Seed download failed: {e}"));
+                output::info("Falling back to table-by-table import...");
+                e
+            })
+            .context("Failed to download MySQL seed. Use --use-full-instance or remove the flag to use table-by-table import.")?;
+
+        // Set proper permissions on the seed directory (matches devdock.sh behavior)
+        set_seed_permissions(&seed_dir)?;
+
+        state.set_seed_timestamp()?;
+        output::success("MySQL seed downloaded and extracted");
+    }
+
+    // Set DEVDOCK_MYSQL_DATA_DIR environment variable for Docker to use
+    let seed_dir = state.seed_cache_path();
+    output::info(&format!("MySQL data directory: {}", seed_dir.display()));
+    std::env::set_var("DEVDOCK_MYSQL_DATA_DIR", &seed_dir);
+
+    // If additional tables were specified, overlay them on top of seed
+    if !db_tables.is_empty() {
+        output::info(&format!("Applying incremental overlay: {db_tables}"));
+
+        // Wait for MySQL to be ready with the seed data
+        let container =
+            if project == "glean-apps-canary" { "devdock-mysql-gac" } else { "devdock-mysql" };
+        wait_for_mysql(container, Duration::from_secs(120))?;
+
+        // Reset master and import overlay tables
+        docker_mysql_exec(container, "RESET MASTER;")?;
+        docker_mysql_exec(container, "SET GLOBAL max_allowed_packet=512*1024*1024;")?;
+
+        let devdock_root =
+            std::env::var("DEVDOCK_ROOT").context("DEVDOCK_ROOT environment variable not set")?;
+        let devdock_root = PathBuf::from(&devdock_root);
+        let ini_loader = DynamicIniLoader::new(project, devdock_root)?;
+        let config = ini_loader.load_merged_config().await?;
+        let manager = SqlOperationsManager::new(project, platform, region, config);
+
+        let export_dir = state.scripts_dir();
+        std::fs::create_dir_all(&export_dir)?;
+
+        for entry in db_tables.split(';') {
+            let entry = entry.trim();
+            if entry.is_empty() {
+                continue;
+            }
+            output::info(&format!("Processing overlay: {entry}"));
+            manager.export_from_cloud(entry, &export_dir, mode).await?;
+        }
+
+        // Import exported dumps
+        output::info("Importing overlay data...");
+        let mut dump_files: Vec<_> = std::fs::read_dir(&export_dir)?
+            .filter_map(std::result::Result::ok)
+            .map(|e| e.path())
+            .filter(|p| {
+                p.extension().is_some_and(|e| e == "sql")
+                    && !p.to_string_lossy().ends_with(".template")
+            })
+            .collect();
+        dump_files.sort();
+
+        for dump_file in &dump_files {
+            output::info(&format!("⏩ Importing {:?}", dump_file.file_name().unwrap()));
+            docker_mysql_import(container, dump_file)?;
+            output::success(&format!("✅ Imported {:?}", dump_file.file_name().unwrap()));
+        }
+
+        state.clear_scripts()?;
+    }
+
+    output::success("✅ SQL setup with seed complete");
+    Ok(())
+}
+
+/// SQL setup using full instance dump
+///
+/// Downloads and imports a complete MySQL dump file instead of table-by-table.
+/// This is faster than table-by-table for large databases but slower than seed mode.
+///
+/// GCS path: gs://sql-{project}/devdock/{sql_instance_id}-full.sql.gz
+///
+/// Matches shell script behavior from sql_hydrator.sh lines 289-318
+async fn sql_setup_with_full_instance(
+    project: &str,
+    platform: &str,
+    region: &str,
+    db_tables: &str,
+    mode: &str,
+) -> Result<()> {
+    output::info(&format!("Setting up SQL with full instance dump for project {project}"));
+
+    let devdock_root =
+        std::env::var("DEVDOCK_ROOT").context("DEVDOCK_ROOT environment variable not set")?;
+    let devdock_root = PathBuf::from(&devdock_root);
+
+    // Determine container name
+    let container =
+        if project == "glean-apps-canary" { "devdock-mysql-gac" } else { "devdock-mysql" };
+
+    // Wait for MySQL
+    wait_for_mysql(container, Duration::from_secs(120))?;
+
+    // State tracking
+    let state = SqlState::new()?;
+
+    // Load config
+    let ini_loader = DynamicIniLoader::new(project, devdock_root.clone())?;
+    let config = ini_loader.load_merged_config().await?;
+    let manager = SqlOperationsManager::new(project, platform, region, config);
+
+    // Reset MySQL master
+    output::info("Resetting MySQL master...");
+    docker_mysql_exec(container, "RESET MASTER;")?;
+    docker_mysql_exec(container, "SET GLOBAL max_allowed_packet=512*1024*1024;")?;
+
+    // Copy and run schema scripts first (same as regular setup)
+    let source_scripts = get_sql_scripts_path(&devdock_root, project);
+    let target_scripts = state.scripts_dir().join(project);
+    std::fs::create_dir_all(&target_scripts)?;
+
+    if source_scripts.exists() {
+        output::info(&format!("Copying SQL scripts from {source_scripts:?}"));
+        for entry in std::fs::read_dir(&source_scripts)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.is_file() {
+                let dest = target_scripts.join(path.file_name().unwrap());
+                std::fs::copy(&path, &dest)?;
+            }
+        }
+    }
+
+    // Run schema files
+    output::info("Running schema hydration...");
+    let mut sql_files: Vec<_> = std::fs::read_dir(&target_scripts)?
+        .filter_map(std::result::Result::ok)
+        .map(|e| e.path())
+        .filter(|p| {
+            p.extension().is_some_and(|e| e == "sql") && !p.to_string_lossy().ends_with(".template")
+        })
+        .collect();
+    sql_files.sort();
+
+    for sql_file in &sql_files {
+        output::info(&format!("⏩ Executing {:?}", sql_file.file_name().unwrap()));
+        docker_mysql_import(container, sql_file)?;
+        output::success(&format!("✅ Executed {:?}", sql_file.file_name().unwrap()));
+    }
+
+    output::success("Schema hydration complete");
+
+    // Download and import full instance dump
+    output::info("Downloading full instance dump from GCS...");
+
+    let export_dir = state.scripts_dir();
+    std::fs::create_dir_all(&export_dir)?;
+
+    let dump_path = manager
+        .download_full_instance(&export_dir)
+        .await
+        .map_err(|e| {
+            output::warn(&format!("Full instance download failed: {e}"));
+            output::info(
+                "To use table-by-table import instead, remove the --use-full-instance flag",
+            );
+            e
+        })
+        .context("Failed to download full instance dump")?;
+
+    // Import the dump
+    output::info(&format!("Importing full instance dump: {dump_path:?}"));
+    manager.import_full_instance_dump(&dump_path)?;
+    output::success("Full instance dump imported");
+
+    // Overlay incremental tables with latest data (matches shell script lines 309-318)
+    if !db_tables.is_empty() {
+        output::info(&format!("⏩ Overlaying incremental tables with latest data: {db_tables}"));
+
+        for entry in db_tables.split(';') {
+            let entry = entry.trim();
+            if entry.is_empty() {
+                continue;
+            }
+            output::info(&format!("Processing overlay: {entry}"));
+            manager.export_from_cloud(entry, &export_dir, mode).await?;
+        }
+
+        // Import exported overlay dumps
+        output::info("Importing overlay data...");
+        let mut dump_files: Vec<_> = std::fs::read_dir(&export_dir)?
+            .filter_map(std::result::Result::ok)
+            .map(|e| e.path())
+            .filter(|p| {
+                p.extension().is_some_and(|e| e == "sql")
+                    && !p.to_string_lossy().ends_with(".template")
+                    && !p.to_string_lossy().contains("-full.sql") // Skip the full dump we already imported
+            })
+            .collect();
+        dump_files.sort();
+
+        for dump_file in &dump_files {
+            output::info(&format!("⏩ Importing {:?}", dump_file.file_name().unwrap()));
+            docker_mysql_import(container, dump_file)?;
+            output::success(&format!("✅ Imported {:?}", dump_file.file_name().unwrap()));
+        }
+    }
+
+    // Cleanup
+    state.clear_scripts()?;
+
+    output::success("✅ SQL setup with full instance complete");
     Ok(())
 }
 

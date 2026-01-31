@@ -58,7 +58,7 @@ pub use constants::{
 pub use opensearch::{get_elastic_namespace, get_elastic_node_pool, IndexType, OpenSearchConfig};
 pub use opensearch_import::OpenSearchCopier;
 pub use sql::{get_backend_databases, get_bastion_port_map, get_frontend_databases, SqlUtils};
-pub use sql_import::{AwsSqlManager, GoogleSqlManager, SqlOperationsManager};
+pub use sql_import::{AwsSqlManager, FastExportConfig, GoogleSqlManager, SqlOperationsManager};
 pub use watch_patterns::{
     HybridWatchStrategy, ServiceType as WatchServiceType, WatchPatternConfig, WatchPatternGenerator,
 };
