@@ -439,6 +439,14 @@ enum InfraSqlCommands {
         /// Copy keyval table (default: true)
         #[arg(long, default_value = "true")]
         copy_keyval: bool,
+
+        /// Use pre-seeded MySQL data directory (fastest startup)
+        #[arg(long)]
+        use_mysql_seed: bool,
+
+        /// Use full instance dump instead of table-by-table
+        #[arg(long)]
+        use_full_instance: bool,
     },
 
     /// Clean SQL databases/tables
@@ -671,6 +679,8 @@ async fn main() {
                     force_copy,
                     full_cleanup,
                     copy_keyval,
+                    use_mysql_seed,
+                    use_full_instance,
                 } => {
                     commands::infra::sql_setup(
                         &project,
@@ -681,6 +691,8 @@ async fn main() {
                         force_copy,
                         full_cleanup,
                         copy_keyval,
+                        use_mysql_seed,
+                        use_full_instance,
                     )
                     .await
                 }

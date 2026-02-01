@@ -175,6 +175,88 @@ impl GcsStorage {
             .map(|o| o.status.success())
             .unwrap_or(false)
     }
+
+    /// Fetch and extract a tar.zst (zstandard compressed tar) archive from GCS
+    ///
+    /// Downloads the archive to a temp file, then decompresses and extracts to target_dir.
+    pub async fn fetch_and_extract_tar_zst(&self, gcs_path: &str, target_dir: &Path) -> Result<()> {
+        info!("Fetching tar.zst archive from {}", gcs_path);
+
+        // Download to temp file
+        let temp_name = format!("seed_{}.tar.zst", uuid_simple());
+        let temp_path = self.fetch_file(gcs_path, &temp_name).await?;
+
+        info!("Extracting to {}", target_dir.display());
+
+        // Ensure target directory exists
+        std::fs::create_dir_all(target_dir)?;
+
+        // Decompress zstd and extract tar
+        let zst_file = std::fs::File::open(&temp_path)
+            .with_context(|| format!("Failed to open temp file: {}", temp_path.display()))?;
+
+        let decoder =
+            zstd::stream::Decoder::new(zst_file).context("Failed to create zstd decoder")?;
+
+        let mut archive = tar::Archive::new(decoder);
+        archive.unpack(target_dir).context("Failed to extract tar archive")?;
+
+        // Clean up temp file
+        let _ = std::fs::remove_file(&temp_path);
+
+        info!("Extraction complete");
+        Ok(())
+    }
+
+    /// Fetch and decompress a gzip file from GCS
+    ///
+    /// Downloads the .gz file and decompresses it to target_path.
+    pub async fn fetch_and_decompress_gzip(
+        &self,
+        gcs_path: &str,
+        target_path: &Path,
+    ) -> Result<()> {
+        use std::io::{Read, Write};
+
+        info!("Fetching gzip file from {}", gcs_path);
+
+        // Download to temp file
+        let temp_name = format!("dump_{}.gz", uuid_simple());
+        let temp_path = self.fetch_file(gcs_path, &temp_name).await?;
+
+        info!("Decompressing to {}", target_path.display());
+
+        // Ensure parent directory exists
+        if let Some(parent) = target_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        // Decompress gzip
+        let gz_file = std::fs::File::open(&temp_path)
+            .with_context(|| format!("Failed to open temp file: {}", temp_path.display()))?;
+
+        let mut decoder = flate2::read::GzDecoder::new(gz_file);
+        let mut output_file = std::fs::File::create(target_path)
+            .with_context(|| format!("Failed to create output file: {}", target_path.display()))?;
+
+        // Use a buffer for efficient copying
+        let mut buffer = vec![0u8; 64 * 1024]; // 64KB buffer
+        loop {
+            let bytes_read = decoder.read(&mut buffer).context("Failed to decompress gzip data")?;
+            if bytes_read == 0 {
+                break;
+            }
+            output_file
+                .write_all(&buffer[..bytes_read])
+                .context("Failed to write decompressed data")?;
+        }
+
+        // Clean up temp file
+        let _ = std::fs::remove_file(&temp_path);
+
+        info!("Decompression complete");
+        Ok(())
+    }
 }
 
 /// Dynamic INI config fetcher

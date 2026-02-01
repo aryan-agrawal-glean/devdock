@@ -12,7 +12,7 @@ use crate::ini_parser::ParsedIniConfig;
 use crate::sql::SqlUtils;
 use anyhow::{Context, Result};
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 use tokio::process::Command as TokioCommand;
@@ -1040,6 +1040,143 @@ impl SqlOperationsManager {
         Ok(())
     }
 
+    /// Download MySQL seed from GCS
+    ///
+    /// Downloads and extracts the pre-built MySQL data directory seed.
+    /// GCS path: gs://sql-{project}/devdock/devdock-seeds/latest.tar.zst
+    pub async fn download_mysql_seed(&self, target_dir: &Path) -> Result<()> {
+        let gcs_path = format!(
+            "{}/devdock-seeds/latest.tar.zst",
+            SQL_BUCKET_PATTERN.replace("{project}", &self.project)
+        );
+
+        info!("Downloading MySQL seed from {}", gcs_path);
+        println!("     📥 GCS path: {gcs_path}");
+        println!("     📁 Target: {}", target_dir.display());
+
+        let storage = GcsStorage::with_default_cache(&self.project)?;
+        storage.fetch_and_extract_tar_zst(&gcs_path, target_dir).await.with_context(|| {
+            format!(
+                "Failed to download MySQL seed. Check:\n\
+                     1. GCS bucket exists: gs://sql-{}/devdock/devdock-seeds/\n\
+                     2. File exists: latest.tar.zst\n\
+                     3. You have read permissions\n\
+                     4. Your zstd installation is working",
+                self.project
+            )
+        })?;
+
+        info!("MySQL seed extracted to {}", target_dir.display());
+        Ok(())
+    }
+
+    /// Get the SQL instance ID for the frontend instance from config
+    ///
+    /// This matches Python's `_get_sql_instance_name` which finds the first
+    /// database using frontendInstance and gets its instance ID.
+    pub fn get_frontend_instance_id(&self) -> Option<String> {
+        let sql_utils = SqlUtils::new(&self.project);
+
+        // Find any database that uses frontendInstance
+        if let Some(sql_section) = self.config.section("sql") {
+            for (key, value) in sql_section {
+                if key.ends_with(".db.instance") && value == "frontendInstance" {
+                    let db_name = key.strip_suffix(".db.instance").unwrap_or(key);
+                    return sql_utils.get_instance_id_for_db(&self.config, db_name);
+                }
+            }
+        }
+
+        // Fallback: try to get frontendInstance directly
+        sql_utils.get_instance_id_for_db(&self.config, "keyval")
+    }
+
+    /// Download full instance dump from GCS
+    ///
+    /// Downloads and decompresses a complete MySQL dump file.
+    /// GCS path: gs://sql-{project}/devdock/{sql_instance_id}-full.sql.gz
+    ///
+    /// The instance ID is determined from the config (e.g., "frontend-sql-1"),
+    /// not a hardcoded name.
+    pub async fn download_full_instance(&self, target_dir: &Path) -> Result<PathBuf> {
+        // Get the actual SQL instance ID from config (matches Python behavior)
+        let sql_instance_id = self.get_frontend_instance_id().ok_or_else(|| {
+            anyhow::anyhow!(
+                "Could not find frontend SQL instance ID in config.\n\
+                 Check that frontendInstance is configured in default.ini or dynamic.ini"
+            )
+        })?;
+
+        let gcs_path = format!(
+            "{}/{}-full.sql.gz",
+            SQL_BUCKET_PATTERN.replace("{project}", &self.project),
+            sql_instance_id
+        );
+
+        let target_path = target_dir.join(format!("{}-full.sql", self.project));
+
+        info!("Downloading full instance dump from {}", gcs_path);
+        println!("     📥 GCS path: {gcs_path}");
+        println!("     📁 Target: {}", target_path.display());
+
+        let storage = GcsStorage::with_default_cache(&self.project)?;
+        storage.fetch_and_decompress_gzip(&gcs_path, &target_path).await.with_context(|| {
+            format!(
+                "Failed to download full instance dump. Check:\n\
+                     1. GCS bucket exists: gs://sql-{}/devdock/\n\
+                     2. File exists: {}-full.sql.gz\n\
+                     3. You have read permissions\n\
+                     4. The full instance export job has been run",
+                self.project, sql_instance_id
+            )
+        })?;
+
+        let metadata = std::fs::metadata(&target_path)?;
+        info!("Full instance dump downloaded ({} bytes)", metadata.len());
+        println!("     ✅ Downloaded {} bytes", metadata.len());
+
+        Ok(target_path)
+    }
+
+    /// Import full instance dump into MySQL container
+    ///
+    /// Pipes the decompressed SQL dump directly into MySQL.
+    pub fn import_full_instance_dump(&self, dump_path: &Path) -> Result<()> {
+        info!("Importing full instance dump from {:?}", dump_path);
+        println!("     ⏳ Importing {} (this may take a while)...", dump_path.display());
+
+        // Read and strip GTID statements
+        let content = std::fs::read_to_string(dump_path)?;
+        let re = regex::Regex::new(r"SET @@GLOBAL\.GTID_[A-Z_]+=[^;]*;").unwrap();
+        let cleaned = re.replace_all(&content, "");
+
+        // Pipe to mysql
+        let mut child = Command::new("docker")
+            .args(["exec", "-i", &self.sql_container, "mysql", "-u", "root"])
+            .stdin(Stdio::piped())
+            .spawn()
+            .context("Failed to start mysql import")?;
+
+        if let Some(ref mut stdin) = child.stdin {
+            use std::io::Write;
+            stdin.write_all(cleaned.as_bytes())?;
+        }
+
+        let status = child.wait()?;
+        if !status.success() {
+            anyhow::bail!("Failed to import full instance dump");
+        }
+
+        info!("Full instance dump imported successfully");
+        Ok(())
+    }
+
+    /// Get fast export configuration (public version for parallelization decisions)
+    /// Loaded from devdock/config/infra/sql/util/fast_export_dbs.yaml
+    pub fn get_fast_export_config_public(&self) -> FastExportConfig {
+        self.get_fast_export_config()
+    }
+
     /// Get fast export configuration
     /// Loaded from devdock/config/infra/sql/util/fast_export_dbs.yaml
     fn get_fast_export_config(&self) -> FastExportConfig {
@@ -1080,9 +1217,9 @@ impl SqlOperationsManager {
 /// Fast export configuration
 /// Loaded from devdock/config/infra/sql/util/fast_export_dbs.yaml
 #[derive(Default)]
-struct FastExportConfig {
-    projects: HashSet<String>,
-    dbs: HashSet<String>,
+pub struct FastExportConfig {
+    pub projects: HashSet<String>,
+    pub dbs: HashSet<String>,
 }
 
 impl FastExportConfig {
