@@ -354,11 +354,19 @@ pub struct AwsSqlManager {
     #[allow(dead_code)]
     project: String,
     region: String,
+    config: ParsedIniConfig,
+    /// Cached RDS endpoint resolved during setup_proxy
+    rds_endpoint: std::sync::Mutex<Option<String>>,
 }
 
 impl AwsSqlManager {
-    pub fn new(project: &str, region: &str) -> Self {
-        Self { project: project.to_string(), region: region.to_string() }
+    pub fn new(project: &str, region: &str, config: ParsedIniConfig) -> Self {
+        Self {
+            project: project.to_string(),
+            region: region.to_string(),
+            config,
+            rds_endpoint: std::sync::Mutex::new(None),
+        }
     }
 
     /// Get bastion instance ID
@@ -386,23 +394,68 @@ impl AwsSqlManager {
         Ok(String::from_utf8(output.stdout)?.trim().to_string())
     }
 
-    /// Get SQL endpoint from config
-    pub fn get_sql_endpoint(&self, config: &ParsedIniConfig, db_name: &str) -> Option<String> {
-        let instance_type = config.get("sql", &format!("{db_name}.db.instance"))?;
-        config.get("sql", &format!("{instance_type}.aws.instanceEndpoint")).cloned()
+    /// Get SQL endpoint from config for a database
+    fn get_sql_endpoint_for_db(&self, db_name: &str) -> Result<String> {
+        let instance_type = self
+            .config
+            .get("sql", &format!("{db_name}.db.instance"))
+            .cloned()
+            .unwrap_or_else(|| "frontendInstance".to_string());
+
+        self.config
+            .get("sql", &format!("{instance_type}.aws.instanceEndpoint"))
+            .cloned()
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Could not find AWS RDS endpoint for instance type '{}' (database: {})\n\
+                     Check that {}.aws.instanceEndpoint is set in your config",
+                    instance_type,
+                    db_name,
+                    instance_type
+                )
+            })
+    }
+
+    /// Resolve RDS hostname to IP address (matching Python implementation)
+    fn resolve_rds_host(&self, rds_hostname: &str) -> String {
+        // Try DNS resolution first (works if local machine has VPN access)
+        match std::net::ToSocketAddrs::to_socket_addrs(&format!("{}:3306", rds_hostname)) {
+            Ok(mut addrs) => {
+                if let Some(addr) = addrs.next() {
+                    let ip = addr.ip().to_string();
+                    println!("     Resolved {rds_hostname} to {ip}");
+                    return ip;
+                }
+            }
+            Err(_) => {
+                println!("     DNS resolution failed, using hostname directly");
+            }
+        }
+        rds_hostname.to_string()
     }
 }
 
 impl SqlPlatformManager for AwsSqlManager {
-    fn setup_proxy(&self, _db_name: &str, _port: u16) -> Result<Option<std::process::Child>> {
-        let bastion_id = self.get_bastion_instance_id()?;
+    fn setup_proxy(&self, db_name: &str, _port: u16) -> Result<Option<std::process::Child>> {
+        // Get the RDS endpoint for this database
+        let rds_endpoint = self.get_sql_endpoint_for_db(db_name)?;
+        let rds_hostname = rds_endpoint.split(':').next().unwrap_or(&rds_endpoint);
 
-        info!("Starting AWS SSM session to bastion {}...", bastion_id);
+        println!("     🔍 Found RDS endpoint: {rds_hostname}");
+
+        // Cache the endpoint for import_data to use
+        *self.rds_endpoint.lock().unwrap() = Some(rds_hostname.to_string());
+
+        let bastion_id = self.get_bastion_instance_id()?;
+        println!("     🔌 Starting AWS SSM session to bastion {bastion_id}...");
+
+        // Resolve hostname to IP (matching Python's behavior for DNS issues on bastion)
+        let host_to_use = self.resolve_rds_host(rds_hostname);
 
         let payload = serde_json::json!({
             "portNumber": ["3306"],
             "localPortNumber": ["3309"],
-            "host": ["rds-endpoint"]  // Would need actual endpoint
+            "host": [host_to_use]
         });
 
         let child = Command::new("aws")
@@ -424,8 +477,10 @@ impl SqlPlatformManager for AwsSqlManager {
             .context("Failed to start SSM session")?;
 
         // Wait for port
+        println!("     ⏳ Waiting for SSM tunnel to be ready...");
         GoogleSqlManager::wait_for_port(3309, Duration::from_secs(60))?;
 
+        println!("     ✅ SSM tunnel ready on port 3309");
         Ok(Some(child))
     }
 
@@ -437,15 +492,30 @@ impl SqlPlatformManager for AwsSqlManager {
         output_path: &Path,
         _port: u16,
     ) -> Result<()> {
-        info!("Importing {} from AWS RDS...", db_name);
+        println!("     📊 Exporting {db_name} from AWS RDS...");
+
+        // Get the cached RDS endpoint (set during setup_proxy)
+        let rds_hostname = self
+            .rds_endpoint
+            .lock()
+            .unwrap()
+            .clone()
+            .or_else(|| {
+                // Fallback: try to get from config
+                self.get_sql_endpoint_for_db(db_name)
+                    .ok()
+                    .map(|e| e.split(':').next().unwrap_or(&e).to_string())
+            })
+            .ok_or_else(|| anyhow::anyhow!("RDS endpoint not available for {db_name}"))?;
 
         // Generate IAM auth token
+        println!("     🔑 Generating IAM auth token...");
         let token_output = Command::new("aws")
             .args([
                 "rds",
                 "generate-db-auth-token",
                 "--hostname",
-                "rds-endpoint", // Would need actual endpoint
+                &rds_hostname,
                 "--port",
                 "3306",
                 "--region",
@@ -455,6 +525,13 @@ impl SqlPlatformManager for AwsSqlManager {
             ])
             .output()
             .context("Failed to generate auth token")?;
+
+        if !token_output.status.success() {
+            anyhow::bail!(
+                "Failed to generate IAM auth token: {}",
+                String::from_utf8_lossy(&token_output.stderr)
+            );
+        }
 
         let password = String::from_utf8(token_output.stdout)?.trim().to_string();
 
@@ -480,22 +557,34 @@ impl SqlPlatformManager for AwsSqlManager {
             for table in tables.split(',') {
                 cmd.arg(table.trim());
             }
-            if !query.is_empty() {
-                cmd.arg(format!("--where={query}"));
-            }
         }
 
+        if !query.is_empty() {
+            cmd.arg(format!("--where={query}"));
+        }
+
+        println!("     ⏳ Running mysqldump (this may take a while)...");
         let output = cmd.output().context("Failed to run mysqldump")?;
 
         if !output.status.success() {
-            anyhow::bail!("mysqldump failed: {}", String::from_utf8_lossy(&output.stderr));
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!(
+                "mysqldump failed:\n{stderr}\n\nTroubleshooting:\n\
+                 1. Verify SSM tunnel is connected (port 3309)\n\
+                 2. Check IAM permissions for 'glean' user\n\
+                 3. Ensure --enable-cleartext-plugin is supported"
+            );
         }
 
         std::fs::write(output_path, &output.stdout)?;
+
+        let size = output.stdout.len();
+        println!("     ✅ Exported {db_name} ({size} bytes) to {output_path:?}");
         Ok(())
     }
 
     fn cleanup_proxy(&self, mut process: std::process::Child) {
+        println!("     🧹 Cleaning up SSM session...");
         let _ = process.kill();
         let _ = process.wait();
     }
@@ -701,13 +790,31 @@ impl SqlOperationsManager {
             println!("  ✅ Query-based export complete for {db}");
         } else {
             // For "latest" mode or non-fast-export DBs
-            // Use gcloud sql export (Cloud SQL Admin API) - same as Python's export_databases_from_cloud
-            println!("  🐢 SLOW EXPORT: {db} (via gcloud sql export)");
+            // Use platform-specific export method
+            println!("  🐢 SLOW EXPORT: {db}");
             println!(
                 "     Reason: mode_is_fast={mode_ok}, project_in_list={project_ok}, db_in_list={db_ok}"
             );
 
-            self.export_via_gcloud_sql_export(&db, &tables, target_dir).await?;
+            match self.platform.as_str() {
+                "google" => {
+                    // GCP: Use gcloud sql export (Cloud SQL Admin API)
+                    println!("     Method: gcloud sql export (Cloud SQL Admin API)");
+                    self.export_via_gcloud_sql_export(&db, &tables, target_dir).await?;
+                }
+                "aws" => {
+                    // AWS: Use SSM tunnel + mysqldump (no WHERE clause for full export)
+                    println!("     Method: SSM tunnel + mysqldump");
+                    self.export_via_proxy_mysqldump(&db, &tables, "", target_dir)?;
+                }
+                "azure" => {
+                    anyhow::bail!(
+                        "Slow export for Azure is not yet implemented.\n\
+                         Use Python devdock for Azure exports, or configure fast export."
+                    );
+                }
+                _ => anyhow::bail!("Unsupported platform: {}", self.platform),
+            }
             println!("  ✅ Slow export complete for {db}");
         }
 
@@ -846,7 +953,7 @@ impl SqlOperationsManager {
             "google" => {
                 Box::new(GoogleSqlManager::new(&self.project, "us-central1", self.config.clone()))
             }
-            "aws" => Box::new(AwsSqlManager::new(&self.project, "us-west-2")),
+            "aws" => Box::new(AwsSqlManager::new(&self.project, &self.region, self.config.clone())),
             "azure" => {
                 // Azure query-based export not yet implemented in Rust
                 anyhow::bail!(
@@ -1009,7 +1116,7 @@ impl SqlOperationsManager {
                 result
             }
             "aws" => {
-                let manager = AwsSqlManager::new(&self.project, &self.region);
+                let manager = AwsSqlManager::new(&self.project, &self.region, self.config.clone());
                 let proxy = manager.setup_proxy(db, 3309)?;
 
                 let result = manager.import_data(
