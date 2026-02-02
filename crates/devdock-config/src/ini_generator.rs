@@ -17,6 +17,8 @@ pub struct IniGeneratorContext {
     pub project: String,
     /// Platform name (aws, google, azure)
     pub platform: String,
+    /// AWS account ID (for AWS-specific config)
+    pub account_id: Option<String>,
     /// SQL remote metadata (for remote SQL configuration)
     pub sql_metadata: Option<crate::sql::SqlRemoteMetadata>,
 }
@@ -31,6 +33,7 @@ impl IniGeneratorContext {
             has_quality_pipelines,
             project: profile.project.clone(),
             platform: profile.platform.to_string(),
+            account_id: None,
             sql_metadata: None,
         }
     }
@@ -146,6 +149,9 @@ impl IniGenerator {
         // Docbuilder
         config.set("docbuilder", "sharedLinkExpirationBufferSecs", "0");
         config.set("docbuilder", "streamingScan.full.scanFrequencyMins", "1440");
+
+        // Tools
+        config.set("tools", "enableHostedComposio", "false");
     }
 
     /// Apply platform-specific configuration
@@ -227,14 +233,13 @@ impl IniGenerator {
             let instances: Vec<&str> = if self.context.project == "glean-apps-canary"
                 || self.context.project == "scio-apps"
             {
-                vec!["", "internal", "frontendInstance"]
+                vec!["internal", "frontendInstance"]
             } else {
-                vec!["", "frontendInstance", "backendInstance"]
+                vec!["frontendInstance", "backendInstance"]
             };
 
             for instance in instances {
-                let instance_prefix =
-                    if instance.is_empty() { String::new() } else { format!("{instance}.") };
+                let instance_prefix = format!("{instance}.");
 
                 self.config.set("sql", &format!("{instance_prefix}db.password"), "");
                 self.config.set("sql", &format!("{instance_prefix}db.user"), "root");
@@ -246,6 +251,10 @@ impl IniGenerator {
                 self.config.set("sql", "internal.googlecloud.instanceName", "");
                 self.config.set("sql", "frontendInstance.googlecloud.instanceName", "");
                 self.config.set("sql", "googlecloud.instanceName", "");
+                // Set unprefixed fields for special projects
+                self.config.set("sql", "db.user", "root");
+                self.config.set("sql", "db.password", "");
+                self.config.set("sql", "db.host", &sql_host);
             } else {
                 self.config.set("sql", "frontendInstance.googlecloud.instanceName", "");
                 self.config.set("sql", "backendInstance.googlecloud.instanceName", "");
@@ -264,13 +273,6 @@ impl IniGenerator {
                         &sql_host,
                     );
                 }
-            }
-
-            // Special handling for glean-apps-canary and scio-apps
-            if self.context.project == "glean-apps-canary" || self.context.project == "scio-apps" {
-                self.config.set("sql", "db.user", "root");
-                self.config.set("sql", "db.password", "");
-                self.config.set("sql", "db.host", &sql_host);
             }
         } else {
             // Remote SQL configuration
@@ -424,7 +426,7 @@ impl IniGenerator {
 
         self.config.set("queryapi", "baseURL", &glean_base_url);
         self.config.set("queryapi", "baseInternalURL", &glean_base_url);
-        self.config.set("queryapi", "preferClusterBaseUrl", "false");
+        // Note: preferClusterBaseUrl is set by deployment_wizard, not QE
 
         // AWS-specific timeouts for local QE (matches Python behavior)
         if node.config.is_local() && self.context.platform == "aws" {
@@ -568,6 +570,7 @@ mod tests {
         IniGeneratorContext {
             project: project.to_string(),
             platform: "google".to_string(),
+            account_id: None,
             ..Default::default()
         }
     }
@@ -723,6 +726,19 @@ mod tests {
         assert!(
             !ini_output.contains("internal.db.host"),
             "Remote standard project should NOT have internal instance"
+        );
+    }
+
+    #[test]
+    fn test_tools_section_in_defaults() {
+        // Verify that [tools] section is included in generated INI
+        let generator = IniGenerator::new();
+        let ini_output = generator.generate();
+
+        assert!(ini_output.contains("[tools]"), "Generated INI should contain [tools] section");
+        assert!(
+            ini_output.contains("enableHostedComposio = false"),
+            "Generated INI should have enableHostedComposio = false"
         );
     }
 }

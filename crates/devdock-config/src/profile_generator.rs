@@ -21,19 +21,35 @@ pub struct TempProfileGenerator {
     sql_remote_metadata: Option<crate::sql::SqlRemoteMetadata>,
 }
 
+/// Helper function to skip empty strings (but not for zone field)
+fn is_empty_string(_s: &str) -> bool {
+    // Never skip - Python always outputs zone even if empty
+    false
+}
+
+/// Helper function to skip "disabled" dns_kubectl
+fn is_disabled_or_none(opt: &Option<String>) -> bool {
+    match opt {
+        None => true,
+        Some(s) => s == "disabled",
+    }
+}
+
 #[derive(Debug, Serialize)]
 pub struct TempProfileData {
     pub project: String,
     pub platform: String,
     pub devdock_root: String,
     pub region: String,
+    #[serde(skip_serializing_if = "is_empty_string")]
     pub zone: String,
     pub architecture: String,
+    #[serde(skip_serializing_if = "is_empty_string")]
     pub project_number: String,
     pub enable_service_metrics: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub current_profile: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "is_disabled_or_none")]
     pub dns_kubectl: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub k8s_service_account: Option<String>,
@@ -242,6 +258,7 @@ impl TempProfileGenerator {
             zone: String::new(),
             region: String::new(),
             project_number: String::new(),
+            account_id: None,
             architecture: self.profile.architecture.clone(),
             devdock_root: self.profile.devdock_root.clone(),
             dns_kubectl: String::new(),
@@ -258,9 +275,9 @@ impl TempProfileGenerator {
         self.profile.project_number = temp_profile.project_number;
         self.profile.dns_kubectl = Some(temp_profile.dns_kubectl);
 
-        // For AWS platform, set aws_account_id and vault_key
+        // For AWS platform, set aws_account_id from temp_profile and vault_key
         if temp_profile.platform == "aws" {
-            self.profile.aws_account_id = Some(temp_profile.project.clone());
+            self.profile.aws_account_id = temp_profile.account_id;
             self.profile.vault_key = "/tmp/stackdriver-exporter-key.json".to_string();
         }
     }

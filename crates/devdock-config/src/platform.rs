@@ -70,6 +70,7 @@ pub struct TempProfile {
     pub zone: String,
     pub region: String,
     pub project_number: String,
+    pub account_id: Option<String>, // AWS account ID (for AWS platform)
     pub architecture: String,
     pub devdock_root: String,
     pub dns_kubectl: String,
@@ -250,37 +251,86 @@ impl Platform for GooglePlatform {
 
 /// AWS Platform implementation
 pub struct AWSPlatform {
-    project: String,
+    account_id: String,
+    gcp_connector_project: String,
     region: String,
     zone: String,
 }
 
 impl AWSPlatform {
+    /// Get AWS account ID dynamically (matches Python _get_aws_account_id)
+    ///
+    /// Priority order:
+    /// 1. AWS_ACCOUNT_ID environment variable
+    /// 2. AWS STS get-caller-identity API call
+    /// 3. Empty string if both fail
+    async fn get_aws_account_id() -> String {
+        // First check environment variable
+        if let Ok(account_id) = std::env::var("AWS_ACCOUNT_ID") {
+            if !account_id.is_empty() {
+                println!("   └─ Using AWS account ID from AWS_ACCOUNT_ID env var: {}", account_id);
+                return account_id;
+            }
+        }
+
+        // Try AWS CLI (equivalent to boto3 STS get-caller-identity)
+        match Command::new("aws")
+            .args(["sts", "get-caller-identity", "--query", "Account", "--output", "text"])
+            .output()
+            .await
+        {
+            Ok(output) if output.status.success() => {
+                let account_id = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !account_id.is_empty() {
+                    println!("   └─ Retrieved AWS account ID via STS: {}", account_id);
+                    return account_id;
+                }
+            }
+            Ok(output) => {
+                eprintln!(
+                    "⚠️  Warning: Failed to get AWS account ID via STS: {}",
+                    String::from_utf8_lossy(&output.stderr).trim()
+                );
+            }
+            Err(e) => {
+                eprintln!("⚠️  Warning: Failed to execute AWS CLI: {}", e);
+            }
+        }
+
+        String::new()
+    }
+
     pub async fn new(project: String, dynamic_config: Option<&ParsedIniConfig>) -> Result<Self> {
         let region = std::env::var("AWS_REGION")
             .or_else(|_| std::env::var("AWS_DEFAULT_REGION"))
             .unwrap_or_else(|_| "us-east-1".to_string());
 
-        // Get AWS account ID from dynamic config or fetch from AWS
+        // Get AWS account ID from dynamic config or dynamically fetch
         let aws_account_id = if let Some(config) = dynamic_config {
             // Try to get from dynamic config first
             config
                 .get("aws", "accountId")
                 .or_else(|| config.get("manifest", "project_number"))
                 .map(|s| s.to_string())
-                .unwrap_or_else(|| project.clone())
+                .unwrap_or_else(|| {
+                    // Fallback: dynamically fetch
+                    tokio::task::block_in_place(|| {
+                        tokio::runtime::Handle::current().block_on(Self::get_aws_account_id())
+                    })
+                })
         } else {
-            // Fallback: try to get from AWS CLI
-            match Command::new("aws")
-                .args(["sts", "get-caller-identity", "--query", "Account", "--output", "text"])
-                .output()
-                .await
-            {
-                Ok(output) if output.status.success() => {
-                    String::from_utf8_lossy(&output.stdout).trim().to_string()
-                }
-                _ => project.clone(), // Fallback to project if we can't get account ID
-            }
+            // No dynamic config: fetch account ID dynamically
+            Self::get_aws_account_id().await
+        };
+
+        // If we still don't have an account ID, use project name as last resort
+        let aws_account_id = if aws_account_id.is_empty() {
+            eprintln!(
+                "⚠️  Warning: Could not determine AWS account ID, using project name as fallback"
+            );
+            project.clone()
+        } else {
+            aws_account_id
         };
 
         // Download RDS SSL certificate (matches Python behavior)
@@ -303,7 +353,7 @@ impl AWSPlatform {
         // Matches Python behavior in platforms.py:AWSPlatform.__init__
 
         // Get gcpConnector info from dynamic_config (now properly fetched from S3)
-        if let Some(config) = dynamic_config {
+        let gcp_connector_project = if let Some(config) = dynamic_config {
             if let (Some(gcp_project), Some(gcp_project_number)) = (
                 config.get("aws", "gcpConnectorProject"),
                 config.get("aws", "gcpConnectorProjectNumber"),
@@ -342,18 +392,24 @@ impl AWSPlatform {
                         );
                     }
                 }
+                gcp_project.clone()
             } else {
                 eprintln!("⚠️  Warning: gcpConnectorProject not found in dynamic config");
                 eprintln!("   GCP monitoring (Stackdriver) will not be available");
                 eprintln!("   This is expected for local dev environments");
+                // Fallback: prefix with "aws-glean-"
+                format!("aws-glean-{}", project)
             }
         } else {
             eprintln!("⚠️  Warning: No dynamic config loaded for AWS platform");
             eprintln!("   Stackdriver monitoring key cannot be generated");
-        }
+            // Fallback: prefix with "aws-glean-"
+            format!("aws-glean-{}", project)
+        };
 
         Ok(Self {
-            project: aws_account_id,
+            account_id: aws_account_id,
+            gcp_connector_project,
             zone: String::new(), // AWS doesn't use zones the same way
             region,
         })
@@ -377,14 +433,17 @@ impl Platform for AWSPlatform {
     }
 
     fn update_devdock_config(&self, config: &mut IniConfig) {
-        config.set("aws", "region", &self.region);
-        config.set("aws", "storage.configbucket", format!("config-{}", self.project));
+        // Note: region is NOT written to devdock.ini (it's in temp_profile.yaml)
+        // devdock.ini only contains service configuration overrides
+        config.set("aws", "storage.configbucket", format!("config-{}", self.account_id));
         config.set("aws", "apps.useCentralApp", "false");
         config.set("aws", "docbuilderRequest.enabled", "true");
     }
 
     fn update_temp_profile(&self, profile: &mut TempProfile) {
-        profile.project = self.project.clone();
+        // For AWS, project field is set to the GCP connector project (matches Python)
+        profile.project = self.gcp_connector_project.clone();
+        profile.account_id = Some(self.account_id.clone());
         profile.platform = "aws".to_string();
         profile.region = self.region.clone();
         profile.dns_kubectl = "disabled".to_string();
@@ -616,5 +675,31 @@ mod tests {
         assert!(GooglePlatform::should_use_dns_kubectl_with_env("dev-sandbox-334901", None));
         assert!(GooglePlatform::should_use_dns_kubectl_with_env("salessavvy-test", None));
         assert!(GooglePlatform::should_use_dns_kubectl_with_env("scio-test-273415", None));
+    }
+
+    #[test]
+    fn test_aws_region_not_in_devdock_ini() {
+        // Verify that AWS region is NOT written to devdock.ini
+        // It's stored in temp_profile.yaml, not in devdock.ini
+        let aws_platform = AWSPlatform {
+            account_id: "202180081037".to_string(),
+            gcp_connector_project: "aws-glean-salessavvy-test".to_string(),
+            region: "us-east-1".to_string(),
+            zone: String::new(),
+        };
+
+        let mut config = IniConfig::new();
+        aws_platform.update_devdock_config(&mut config);
+
+        let ini_output = config.as_string();
+        assert!(
+            !ini_output.contains("region"),
+            "AWS region should NOT be in devdock.ini (it's in temp_profile.yaml)"
+        );
+        // But other AWS configs should still be there
+        assert!(
+            ini_output.contains("storage.configbucket"),
+            "storage.configbucket should be in devdock.ini"
+        );
     }
 }
