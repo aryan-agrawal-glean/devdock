@@ -274,15 +274,33 @@ pub async fn sql_setup(
     copy_keyval: bool,
     use_mysql_seed: bool,
     use_full_instance: bool,
+    use_gac_container: bool,
 ) -> Result<()> {
     // Handle seed mode (fastest startup)
     if use_mysql_seed {
-        return sql_setup_with_seed(project, platform, region, db_tables, mode, force_copy).await;
+        return sql_setup_with_seed(
+            project,
+            platform,
+            region,
+            db_tables,
+            mode,
+            force_copy,
+            use_gac_container,
+        )
+        .await;
     }
 
     // Handle full instance mode
     if use_full_instance {
-        return sql_setup_with_full_instance(project, platform, region, db_tables, mode).await;
+        return sql_setup_with_full_instance(
+            project,
+            platform,
+            region,
+            db_tables,
+            mode,
+            use_gac_container,
+        )
+        .await;
     }
 
     output::info(&format!("Setting up SQL for project {project} ({platform})"));
@@ -291,9 +309,8 @@ pub async fn sql_setup(
         std::env::var("DEVDOCK_ROOT").context("DEVDOCK_ROOT environment variable not set")?;
     let devdock_root = PathBuf::from(&devdock_root);
 
-    // Determine container name
-    let container =
-        if project == "glean-apps-canary" { "devdock-mysql-gac" } else { "devdock-mysql" };
+    // Container name: devdock-mysql for main setup, devdock-mysql-gac for secondary GAC setup
+    let container = if use_gac_container { "devdock-mysql-gac" } else { "devdock-mysql" };
 
     // Wait for MySQL
     wait_for_mysql(container, Duration::from_secs(120))?;
@@ -587,6 +604,7 @@ async fn sql_setup_with_seed(
     db_tables: &str,
     mode: &str,
     force_copy: bool,
+    use_gac_container: bool,
 ) -> Result<()> {
     output::info(&format!("Setting up SQL with MySQL seed for project {project}"));
 
@@ -643,8 +661,8 @@ async fn sql_setup_with_seed(
         output::info(&format!("Applying incremental overlay: {db_tables}"));
 
         // Wait for MySQL to be ready with the seed data
-        let container =
-            if project == "glean-apps-canary" { "devdock-mysql-gac" } else { "devdock-mysql" };
+        // Container name: devdock-mysql for main setup, devdock-mysql-gac for secondary GAC setup
+        let container = if use_gac_container { "devdock-mysql-gac" } else { "devdock-mysql" };
         wait_for_mysql(container, Duration::from_secs(120))?;
 
         // Reset master and import overlay tables
@@ -709,6 +727,7 @@ async fn sql_setup_with_full_instance(
     region: &str,
     db_tables: &str,
     mode: &str,
+    use_gac_container: bool,
 ) -> Result<()> {
     output::info(&format!("Setting up SQL with full instance dump for project {project}"));
 
@@ -716,9 +735,8 @@ async fn sql_setup_with_full_instance(
         std::env::var("DEVDOCK_ROOT").context("DEVDOCK_ROOT environment variable not set")?;
     let devdock_root = PathBuf::from(&devdock_root);
 
-    // Determine container name
-    let container =
-        if project == "glean-apps-canary" { "devdock-mysql-gac" } else { "devdock-mysql" };
+    // Container name: devdock-mysql for main setup, devdock-mysql-gac for secondary GAC setup
+    let container = if use_gac_container { "devdock-mysql-gac" } else { "devdock-mysql" };
 
     // Wait for MySQL
     wait_for_mysql(container, Duration::from_secs(120))?;
