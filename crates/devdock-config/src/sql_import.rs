@@ -23,6 +23,7 @@ const SQL_BUCKET_PATTERN: &str = "gs://sql-{project}/devdock";
 
 /// SQL container name
 const SQL_CONTAINER: &str = "devdock-mysql";
+/// GAC container name - used when GAC is a secondary project alongside another main project
 const SQL_CONTAINER_GAC: &str = "devdock-mysql-gac";
 
 /// Platform-specific SQL manager trait
@@ -61,9 +62,17 @@ pub struct GoogleSqlManager {
 
 impl GoogleSqlManager {
     pub fn new(project: &str, region: &str, config: ParsedIniConfig) -> Self {
-        let sql_container =
-            if project == "glean-apps-canary" { SQL_CONTAINER_GAC } else { SQL_CONTAINER };
+        Self::with_container(project, region, config, false)
+    }
 
+    pub fn with_container(
+        project: &str,
+        region: &str,
+        config: ParsedIniConfig,
+        use_gac_container: bool,
+    ) -> Self {
+        // Container name: devdock-mysql for main setup, devdock-mysql-gac for secondary GAC setup
+        let sql_container = if use_gac_container { SQL_CONTAINER_GAC } else { SQL_CONTAINER };
         Self {
             project: project.to_string(),
             region: region.to_string(),
@@ -504,9 +513,18 @@ pub struct SqlOperationsManager {
 
 impl SqlOperationsManager {
     pub fn new(project: &str, platform: &str, region: &str, config: ParsedIniConfig) -> Self {
-        let sql_container =
-            if project == "glean-apps-canary" { SQL_CONTAINER_GAC } else { SQL_CONTAINER };
+        Self::with_container(project, platform, region, config, false)
+    }
 
+    pub fn with_container(
+        project: &str,
+        platform: &str,
+        region: &str,
+        config: ParsedIniConfig,
+        use_gac_container: bool,
+    ) -> Self {
+        // Container name: devdock-mysql for main setup, devdock-mysql-gac for secondary GAC setup
+        let sql_container = if use_gac_container { SQL_CONTAINER_GAC } else { SQL_CONTAINER };
         Self {
             project: project.to_string(),
             platform: platform.to_string(),

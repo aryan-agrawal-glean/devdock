@@ -447,6 +447,10 @@ enum InfraSqlCommands {
         /// Use full instance dump instead of table-by-table
         #[arg(long)]
         use_full_instance: bool,
+
+        /// Use GAC container (devdock-mysql-gac) for secondary GAC project setup
+        #[arg(long)]
+        use_gac_container: bool,
     },
 
     /// Clean SQL databases/tables
@@ -681,6 +685,7 @@ async fn main() {
                     copy_keyval,
                     use_mysql_seed,
                     use_full_instance,
+                    use_gac_container,
                 } => {
                     commands::infra::sql_setup(
                         &project,
@@ -693,6 +698,7 @@ async fn main() {
                         copy_keyval,
                         use_mysql_seed,
                         use_full_instance,
+                        use_gac_container,
                     )
                     .await
                 }
