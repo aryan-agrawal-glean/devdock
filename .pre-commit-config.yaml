@@ -3,14 +3,14 @@ repos:
     hooks:
       - id: cargo-fmt
         name: cargo fmt
-        entry: cargo fmt --all --check
+        entry: cargo fmt --all
         language: system
         types: [rust]
         pass_filenames: false
 
       - id: cargo-clippy
         name: cargo clippy
-        entry: cargo clippy --all-targets --all-features -- -D warnings
+        entry: cargo clippy --all-targets --all-features --fix --allow-dirty --allow-staged -- -D warnings
         language: system
         types: [rust]
         pass_filenames: false
@@ -41,4 +41,3 @@ repos:
       - id: check-merge-conflict
       - id: check-added-large-files
         args: ['--maxkb=500']
-
