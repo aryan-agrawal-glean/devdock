@@ -17,6 +17,8 @@ pub struct IniGeneratorContext {
     pub project: String,
     /// Platform name (aws, google, azure)
     pub platform: String,
+    /// AWS account ID (for AWS-specific config)
+    pub account_id: Option<String>,
     /// SQL remote metadata (for remote SQL configuration)
     pub sql_metadata: Option<crate::sql::SqlRemoteMetadata>,
 }
@@ -31,6 +33,7 @@ impl IniGeneratorContext {
             has_quality_pipelines,
             project: profile.project.clone(),
             platform: profile.platform.to_string(),
+            account_id: None,
             sql_metadata: None,
         }
     }
@@ -146,6 +149,9 @@ impl IniGenerator {
         // Docbuilder
         config.set("docbuilder", "sharedLinkExpirationBufferSecs", "0");
         config.set("docbuilder", "streamingScan.full.scanFrequencyMins", "1440");
+
+        // Tools
+        config.set("tools", "enableHostedComposio", "false");
     }
 
     /// Apply platform-specific configuration
@@ -221,21 +227,38 @@ impl IniGenerator {
             self.config.set("sql", "useDbIAMAuth", "false");
             self.config.set("sql", "useCloudSqlConnectorInQe", "false");
 
-            // Standard instances - set local connection overrides
-            let instances = vec!["", "frontendInstance", "backendInstance"];
+            // Instance list depends on project type (matches Python sql_service_dependency.py special cases)
+            // - glean-apps-canary/scio-apps: use internal + frontendInstance
+            // - Standard: use frontendInstance + backendInstance
+            let instances: Vec<&str> = if self.context.project == "glean-apps-canary"
+                || self.context.project == "scio-apps"
+            {
+                vec!["internal", "frontendInstance"]
+            } else {
+                vec!["frontendInstance", "backendInstance"]
+            };
 
             for instance in instances {
-                let instance_prefix =
-                    if instance.is_empty() { String::new() } else { format!("{instance}.") };
+                let instance_prefix = format!("{instance}.");
 
                 self.config.set("sql", &format!("{instance_prefix}db.password"), "");
                 self.config.set("sql", &format!("{instance_prefix}db.user"), "root");
                 self.config.set("sql", &format!("{instance_prefix}db.host"), &sql_host);
             }
 
-            // Set googlecloud.instanceName for frontend and backend
-            self.config.set("sql", "frontendInstance.googlecloud.instanceName", "");
-            self.config.set("sql", "backendInstance.googlecloud.instanceName", "");
+            // Set googlecloud.instanceName for each instance type
+            if self.context.project == "glean-apps-canary" || self.context.project == "scio-apps" {
+                self.config.set("sql", "internal.googlecloud.instanceName", "");
+                self.config.set("sql", "frontendInstance.googlecloud.instanceName", "");
+                self.config.set("sql", "googlecloud.instanceName", "");
+                // Set unprefixed fields for special projects
+                self.config.set("sql", "db.user", "root");
+                self.config.set("sql", "db.password", "");
+                self.config.set("sql", "db.host", &sql_host);
+            } else {
+                self.config.set("sql", "frontendInstance.googlecloud.instanceName", "");
+                self.config.set("sql", "backendInstance.googlecloud.instanceName", "");
+            }
 
             // AWS-specific fields for local SQL (matches Python behavior)
             if self.context.platform == "aws" {
@@ -250,13 +273,6 @@ impl IniGenerator {
                         &sql_host,
                     );
                 }
-            }
-
-            // Special handling for glean-apps-canary and scio-apps
-            if self.context.project == "glean-apps-canary" || self.context.project == "scio-apps" {
-                self.config.set("sql", "db.user", "root");
-                self.config.set("sql", "db.password", "");
-                self.config.set("sql", "db.host", &sql_host);
             }
         } else {
             // Remote SQL configuration
@@ -285,8 +301,14 @@ impl IniGenerator {
             }
 
             // Set host for remote SQL (goes through cloud-sql-proxy or bastion)
-            // Order matters: frontendInstance first, then backendInstance
-            let instances = ["frontendInstance", "backendInstance"];
+            // Instance list depends on project type (matches Python sql_service_dependency.py special cases)
+            let instances: &[&str] = if self.context.project == "glean-apps-canary"
+                || self.context.project == "scio-apps"
+            {
+                &["internal", "frontendInstance"]
+            } else {
+                &["frontendInstance", "backendInstance"]
+            };
 
             for (idx, instance) in instances.iter().enumerate() {
                 let port = curr_port + idx as u16;
@@ -404,7 +426,7 @@ impl IniGenerator {
 
         self.config.set("queryapi", "baseURL", &glean_base_url);
         self.config.set("queryapi", "baseInternalURL", &glean_base_url);
-        self.config.set("queryapi", "preferClusterBaseUrl", "false");
+        // Note: preferClusterBaseUrl is set by deployment_wizard, not QE
 
         // AWS-specific timeouts for local QE (matches Python behavior)
         if node.config.is_local() && self.context.platform == "aws" {
@@ -521,5 +543,202 @@ impl IniGenerator {
 impl Default for IniGenerator {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dependency_graph::ComponentType;
+
+    /// Create a test SQL service node with local deployment
+    fn create_local_sql_node() -> ServiceNode {
+        let mut config = ServiceConfig::default();
+        config.set_deployment_local(true);
+        ServiceNode { name: "sql".to_string(), config, component_type: ComponentType::Infra }
+    }
+
+    /// Create a test SQL service node with remote deployment
+    fn create_remote_sql_node() -> ServiceNode {
+        let mut config = ServiceConfig::default();
+        config.set_deployment_local(false);
+        ServiceNode { name: "sql".to_string(), config, component_type: ComponentType::Infra }
+    }
+
+    /// Create test context for a given project
+    fn create_test_context(project: &str) -> IniGeneratorContext {
+        IniGeneratorContext {
+            project: project.to_string(),
+            platform: "google".to_string(),
+            account_id: None,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_local_sql_config_standard_project() {
+        // Standard projects should use frontendInstance and backendInstance
+        let context = create_test_context("some-standard-project");
+        let mut generator = IniGenerator::with_context(context);
+        let node = create_local_sql_node();
+        generator.apply_dependency(&node);
+
+        let ini_output = generator.generate();
+
+        // Should have frontendInstance and backendInstance
+        assert!(
+            ini_output.contains("frontendInstance.db.host"),
+            "Standard project should have frontendInstance"
+        );
+        assert!(
+            ini_output.contains("backendInstance.db.host"),
+            "Standard project should have backendInstance"
+        );
+        assert!(
+            ini_output.contains("frontendInstance.googlecloud.instanceName"),
+            "Standard project should have frontendInstance.googlecloud.instanceName"
+        );
+        assert!(
+            ini_output.contains("backendInstance.googlecloud.instanceName"),
+            "Standard project should have backendInstance.googlecloud.instanceName"
+        );
+
+        // Should NOT have internal instance
+        assert!(
+            !ini_output.contains("internal.db.host"),
+            "Standard project should NOT have internal instance"
+        );
+    }
+
+    #[test]
+    fn test_local_sql_config_glean_apps_canary() {
+        // glean-apps-canary should use internal and frontendInstance (NOT backendInstance)
+        let context = create_test_context("glean-apps-canary");
+        let mut generator = IniGenerator::with_context(context);
+        let node = create_local_sql_node();
+        generator.apply_dependency(&node);
+
+        let ini_output = generator.generate();
+
+        // Should have internal and frontendInstance
+        assert!(
+            ini_output.contains("internal.db.host"),
+            "glean-apps-canary should have internal instance"
+        );
+        assert!(
+            ini_output.contains("frontendInstance.db.host"),
+            "glean-apps-canary should have frontendInstance"
+        );
+        assert!(
+            ini_output.contains("internal.googlecloud.instanceName"),
+            "glean-apps-canary should have internal.googlecloud.instanceName"
+        );
+        assert!(
+            ini_output.contains("frontendInstance.googlecloud.instanceName"),
+            "glean-apps-canary should have frontendInstance.googlecloud.instanceName"
+        );
+        // Should also have unprefixed googlecloud.instanceName
+        assert!(
+            ini_output.contains("\ngooglecloud.instanceName")
+                || ini_output.starts_with("googlecloud.instanceName"),
+            "glean-apps-canary should have unprefixed googlecloud.instanceName"
+        );
+
+        // Should NOT have backendInstance
+        assert!(
+            !ini_output.contains("backendInstance.db.host"),
+            "glean-apps-canary should NOT have backendInstance"
+        );
+    }
+
+    #[test]
+    fn test_local_sql_config_scio_apps() {
+        // scio-apps should use internal and frontendInstance (same as glean-apps-canary)
+        let context = create_test_context("scio-apps");
+        let mut generator = IniGenerator::with_context(context);
+        let node = create_local_sql_node();
+        generator.apply_dependency(&node);
+
+        let ini_output = generator.generate();
+
+        // Should have internal and frontendInstance
+        assert!(ini_output.contains("internal.db.host"), "scio-apps should have internal instance");
+        assert!(
+            ini_output.contains("frontendInstance.db.host"),
+            "scio-apps should have frontendInstance"
+        );
+
+        // Should NOT have backendInstance
+        assert!(
+            !ini_output.contains("backendInstance.db.host"),
+            "scio-apps should NOT have backendInstance"
+        );
+    }
+
+    #[test]
+    fn test_remote_sql_config_glean_apps_canary() {
+        // Remote SQL for glean-apps-canary should also use internal + frontendInstance
+        let context = create_test_context("glean-apps-canary");
+        let mut generator = IniGenerator::with_context(context);
+        let node = create_remote_sql_node();
+        generator.apply_dependency(&node);
+
+        let ini_output = generator.generate();
+
+        // Should have internal and frontendInstance
+        assert!(
+            ini_output.contains("internal.db.host"),
+            "Remote glean-apps-canary should have internal instance"
+        );
+        assert!(
+            ini_output.contains("frontendInstance.db.host"),
+            "Remote glean-apps-canary should have frontendInstance"
+        );
+
+        // Should NOT have backendInstance
+        assert!(
+            !ini_output.contains("backendInstance.db.host"),
+            "Remote glean-apps-canary should NOT have backendInstance"
+        );
+    }
+
+    #[test]
+    fn test_remote_sql_config_standard_project() {
+        // Remote SQL for standard projects should use frontendInstance + backendInstance
+        let context = create_test_context("some-standard-project");
+        let mut generator = IniGenerator::with_context(context);
+        let node = create_remote_sql_node();
+        generator.apply_dependency(&node);
+
+        let ini_output = generator.generate();
+
+        // Should have frontendInstance and backendInstance
+        assert!(
+            ini_output.contains("frontendInstance.db.host"),
+            "Remote standard project should have frontendInstance"
+        );
+        assert!(
+            ini_output.contains("backendInstance.db.host"),
+            "Remote standard project should have backendInstance"
+        );
+
+        // Should NOT have internal instance
+        assert!(
+            !ini_output.contains("internal.db.host"),
+            "Remote standard project should NOT have internal instance"
+        );
+    }
+
+    #[test]
+    fn test_tools_section_in_defaults() {
+        // Verify that [tools] section is included in generated INI
+        let generator = IniGenerator::new();
+        let ini_output = generator.generate();
+
+        assert!(ini_output.contains("[tools]"), "Generated INI should contain [tools] section");
+        assert!(
+            ini_output.contains("enableHostedComposio = false"),
+            "Generated INI should have enableHostedComposio = false"
+        );
     }
 }

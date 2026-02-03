@@ -34,4 +34,3 @@ echo "Next steps:"
 echo "  1. Install: cargo install --path ."
 echo "  2. cd $MONOREPO_PATH"
 echo "  3. devdock validate default_profile"
-

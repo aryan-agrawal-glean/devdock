@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[allow(clippy::too_many_arguments)]
 pub async fn execute(
     profile_name: &str,
     services: Option<&str>,
@@ -16,11 +17,22 @@ pub async fn execute(
     monitor_timeout: Option<u64>,
     telemetry_enabled: bool,
     dry_run: bool,
+    enable_logs: bool,
 ) -> Result<()> {
     // Track command start time for telemetry
     let command_start_time = chrono::Utc::now();
 
     output::info("Starting DevDock...");
+
+    // Step 0: Enable rich logging if requested (skip in dry-run mode)
+    if enable_logs && !dry_run {
+        output::info("Enabling rich logging...");
+        if let Err(e) = crate::commands::logs::enable_quiet().await {
+            output::warn(&format!("Failed to enable rich logging: {e}"));
+        } else {
+            output::success("Rich logging enabled → http://localhost:3000/explore");
+        }
+    }
 
     // Step 1: Load and validate profile
     output::info(&format!("Loading profile: {profile_name}"));

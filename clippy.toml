@@ -13,4 +13,3 @@ too-many-lines-threshold = 200
 # Allow these in tests
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true
-

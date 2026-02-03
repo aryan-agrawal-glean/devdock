@@ -67,4 +67,3 @@ devdock stop
 - [Profile Reference](profiles.md) - Learn about profile configuration
 - [Commands](commands.md) - Complete command reference
 - [Troubleshooting](troubleshooting.md) - Common issues and solutions
-

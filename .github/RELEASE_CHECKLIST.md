@@ -21,7 +21,7 @@ Use this checklist for every DevDock release.
 
 - [ ] Commit all changes: `git add . && git commit -m "Prepare for vX.Y.Z release"`
 - [ ] Push to main: `git push origin main`
-- [ ] Create and push tag: 
+- [ ] Create and push tag:
   ```bash
   git tag -a vX.Y.Z -m "Release vX.Y.Z"
   git push origin vX.Y.Z
@@ -45,7 +45,7 @@ Use this checklist for every DevDock release.
   ```bash
   # Download binary for your platform
   curl -L https://github.com/askscio/devdock/releases/download/vX.Y.Z/devdock-macos-arm64-vX.Y.Z -o devdock
-  
+
   # Verify checksum
   curl -L https://github.com/askscio/devdock/releases/download/vX.Y.Z/checksums.txt
   shasum -a 256 devdock
@@ -111,4 +111,3 @@ Examples:
 - Release notes are auto-generated from commits, but review and edit for clarity
 - Keep CHANGELOG.md updated with every release
 - Always test binaries before announcing release
-

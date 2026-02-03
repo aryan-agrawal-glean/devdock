@@ -334,6 +334,11 @@ impl ConfigGenerator {
         dynamic_ini: Option<&ParsedIniConfig>,
     ) -> Result<()> {
         use crate::ini_generator::IniGeneratorContext;
+        use crate::platform::TempProfile;
+
+        // Extract account_id from platform (for AWS)
+        let mut temp_profile_for_account_id = TempProfile::default();
+        platform.update_temp_profile(&mut temp_profile_for_account_id);
 
         // Create context with multi_project=true
         let mut context = IniGeneratorContext {
@@ -341,6 +346,7 @@ impl ConfigGenerator {
             has_quality_pipelines: false,
             project: profile.project.clone(),
             platform: profile.platform.to_string(),
+            account_id: temp_profile_for_account_id.account_id,
             sql_metadata: None,
         };
 
@@ -538,9 +544,15 @@ impl ConfigGenerator {
         dynamic_ini: Option<&ParsedIniConfig>,
     ) -> Result<String> {
         use crate::ini_generator::IniGeneratorContext;
+        use crate::platform::TempProfile;
 
         // Create context from profile
         let mut context = IniGeneratorContext::from_profile(profile);
+
+        // Extract account_id from platform (for AWS)
+        let mut temp_profile_for_account_id = TempProfile::default();
+        platform.update_temp_profile(&mut temp_profile_for_account_id);
+        context.account_id = temp_profile_for_account_id.account_id;
 
         // Pre-fetch SQL metadata if SQL is remote
         if let Some(metadata) =

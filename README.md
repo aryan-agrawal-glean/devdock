@@ -106,6 +106,9 @@ curl -fsSL https://raw.githubusercontent.com/askscio/devdock/main/uninstall.sh |
 # Start DevDock with a profile
 devdock start default_profile
 
+# Start with rich logging enabled (Grafana/Loki)
+devdock start default_profile --enable-logs
+
 # Check status
 devdock status
 

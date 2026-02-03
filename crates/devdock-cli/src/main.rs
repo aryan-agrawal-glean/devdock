@@ -78,6 +78,10 @@ enum Commands {
         /// Dry-run mode: execute all startup logic but don't start Tilt (for benchmarking)
         #[arg(long)]
         dry_run: bool,
+
+        /// Enable rich logging (Grafana/Loki stack) before starting
+        #[arg(long)]
+        enable_logs: bool,
     },
 
     /// Stop DevDock instance
@@ -551,6 +555,7 @@ async fn main() {
             monitor_timeout,
             no_telemetry,
             dry_run,
+            enable_logs,
         } => {
             if mode == "remote" {
                 commands::remote::start_remote(commands::remote::RemoteStartConfig {
@@ -573,6 +578,7 @@ async fn main() {
                     monitor_timeout,
                     !no_telemetry, // telemetry enabled by default
                     dry_run,
+                    enable_logs,
                 )
                 .await
             }
