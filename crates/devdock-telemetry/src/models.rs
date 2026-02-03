@@ -17,6 +17,8 @@ pub struct SessionMetrics {
     pub project: String,
     pub profile: String,
     pub branch: Option<String>,
+    pub binary_type: String,
+    pub binary_version: String,
     pub command_start_time: DateTime<Utc>,
     pub tilt_up_time: Option<DateTime<Utc>>,
     pub watch_start_time: Option<DateTime<Utc>>,

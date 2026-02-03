@@ -78,8 +78,15 @@ pub async fn execute(
         let workspace_path = std::env::current_dir()?.display().to_string();
         let branch = get_git_branch()?;
 
+        // Check if DEVDOCK_ID is already set (from remote mode)
+        // If set, use it for correlation; otherwise generate new ID
+        let instance_id = std::env::var("DEVDOCK_ID")
+            .ok()
+            .filter(|id| !id.is_empty())
+            .unwrap_or_else(Instance::generate_id);
+
         let instance = Instance {
-            id: Instance::generate_id(),
+            id: instance_id.clone(),
             workspace_path: workspace_path.clone(),
             workspace_name: None, // Local instances don't need workspace name
             branch,
@@ -98,7 +105,7 @@ pub async fn execute(
             port_base
         ));
 
-        (Some(state_manager), instance.id, port_base)
+        (Some(state_manager), instance_id, port_base)
     } else {
         (None, String::new(), 0)
     };
@@ -133,8 +140,14 @@ pub async fn execute(
     // Step 8: Update status and start Tilt
     state_manager.update_status(&instance_id, InstanceStatus::Running).await?;
 
+    // Write profile name to state file for telemetry
+    write_profile_state(profile_name)?;
+
+    // Set DEVDOCK_ID environment variable for monitor to use
+    std::env::set_var("DEVDOCK_ID", &instance_id);
+
     output::info("Starting Tilt...");
-    let tilt_process = start_tilt(services)?;
+    let tilt_process = start_tilt(services, profile_name)?;
 
     // Track tilt up time for telemetry
     let tilt_up_time = chrono::Utc::now();
@@ -347,7 +360,7 @@ fn cleanup_startup_state_files() -> Result<()> {
 }
 
 /// Start Tilt process
-fn start_tilt(services: Option<&str>) -> Result<Child> {
+fn start_tilt(services: Option<&str>, profile_name: &str) -> Result<Child> {
     // Find monorepo root (where devdock directory is)
     let workspace_root = find_workspace_root()?;
     let devdock_dir = workspace_root.join("devdock");
@@ -364,6 +377,9 @@ fn start_tilt(services: Option<&str>) -> Result<Child> {
 
     // Set DEVDOCK_RUST_BINARY to indicate the Rust implementation is being used
     std::env::set_var("DEVDOCK_RUST_BINARY", "true");
+
+    // Set DEVDOCK_PROFILE for telemetry in monitor command
+    std::env::set_var("DEVDOCK_PROFILE", profile_name);
 
     // Build tilt command
     let mut cmd = Command::new("tilt");
@@ -592,19 +608,40 @@ async fn wait_for_tilt(
                     // Perform cleanup
                     perform_cleanup(&instance_id, &workspace_root).await?;
 
-    // Update status
-    state_manager
+                    // Update status
+                    state_manager
                         .update_status(&instance_id, InstanceStatus::Stopped)
-        .await?;
+                        .await?;
 
-    if status.success() {
-        output::success("DevDock stopped");
-    } else {
-        output::warn(&format!("Tilt exited with status: {status}"));
+                    if status.success() {
+                        output::success("DevDock stopped");
+                    } else {
+                        output::warn(&format!("Tilt exited with status: {status}"));
+
+                        // Emit telemetry for tilt crash
+                        if telemetry_enabled {
+                            emit_tilt_failure_telemetry(
+                                &instance_id,
+                                &profile_name,
+                                "tilt_crashed",
+                                command_start_time,
+                            ).await;
+                        }
                     }
                 }
                 Ok(Err(e)) => {
                     output::warn(&format!("Tilt process error: {e}"));
+
+                    // Emit telemetry for tilt error
+                    if telemetry_enabled {
+                        emit_tilt_failure_telemetry(
+                            &instance_id,
+                            &profile_name,
+                            "tilt_error",
+                            command_start_time,
+                        ).await;
+                    }
+
                     perform_cleanup(&instance_id, &workspace_root).await?;
                     state_manager
                         .update_status(&instance_id, InstanceStatus::Stopped)
@@ -873,6 +910,8 @@ async fn emit_telemetry(
         project: "scio".to_string(),
         profile: profile.to_string(),
         branch: get_git_branch().ok(),
+        binary_type: "rust".to_string(),
+        binary_version: env!("CARGO_PKG_VERSION").to_string(),
         command_start_time,
         tilt_up_time: Some(tilt_up_time),
         watch_start_time: Some(watch_start_time),
@@ -919,6 +958,73 @@ async fn emit_telemetry(
     }
 }
 
+/// Emit telemetry when Tilt fails early (before monitor runs)
+async fn emit_tilt_failure_telemetry(
+    devdock_id: &str,
+    profile: &str,
+    failure_type: &str,
+    command_start_time: chrono::DateTime<chrono::Utc>,
+) {
+    use chrono::Utc;
+    use devdock_telemetry::{
+        BigQueryConfig, BigQueryEmitter, SessionMetrics, TelemetryEmitter, TelemetrySnapshot,
+    };
+
+    let machine_id = get_machine_id();
+    let now = Utc::now();
+    let total_startup_secs = (now - command_start_time).num_seconds() as f64;
+
+    let session = SessionMetrics {
+        devdock_id: devdock_id.to_string(),
+        machine_id: machine_id.clone(),
+        architecture: std::env::consts::OS.to_string(),
+        platform: std::env::consts::OS.to_string(),
+        project: "scio".to_string(),
+        profile: profile.to_string(),
+        branch: get_git_branch().ok(),
+        binary_type: "rust".to_string(),
+        binary_version: env!("CARGO_PKG_VERSION").to_string(),
+        command_start_time,
+        tilt_up_time: None,
+        watch_start_time: None,
+        startup_complete_time: Some(now),
+        tilt_bootstrap_seconds: None,
+        total_startup_seconds: Some(total_startup_secs),
+        startup_status: failure_type.to_string(),
+        total_resources: 0,
+        healthy_resources: 0,
+        failed_resources: 0,
+        timestamp: now,
+    };
+
+    let snapshot = TelemetrySnapshot { session: Some(session), ..Default::default() };
+
+    // Configure BigQuery emitter
+    let config = BigQueryConfig {
+        project_id: "dev-sandbox-334901".to_string(),
+        dataset: "devdock".to_string(),
+        use_adc: true,
+        ..Default::default()
+    };
+
+    // Try to emit to BigQuery
+    match BigQueryEmitter::new(config) {
+        Ok(emitter) => match emitter.emit(&snapshot).await {
+            Ok(result) => {
+                if result.is_success() {
+                    tracing::info!("Tilt failure telemetry emitted: {}", failure_type);
+                }
+            }
+            Err(e) => {
+                tracing::debug!("Failed to emit failure telemetry: {}", e);
+            }
+        },
+        Err(e) => {
+            tracing::debug!("BigQuery not available: {}", e);
+        }
+    }
+}
+
 /// Get a stable machine identifier
 fn get_machine_id() -> String {
     use std::ffi::CStr;
@@ -937,4 +1043,17 @@ fn get_machine_id() -> String {
 
     // Fallback to USER env var
     std::env::var("USER").unwrap_or_else(|_| "unknown".to_string())
+}
+
+/// Write current profile name to state file for telemetry
+fn write_profile_state(profile_name: &str) -> Result<()> {
+    let home = std::env::var("HOME")?;
+    let state_file = PathBuf::from(home).join(".devdock/current_profile.txt");
+
+    if let Some(parent) = state_file.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    std::fs::write(&state_file, profile_name)?;
+    Ok(())
 }

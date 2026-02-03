@@ -233,6 +233,10 @@ enum Commands {
         /// Disable desktop notifications
         #[arg(long)]
         no_notify: bool,
+
+        /// Profile name (for telemetry)
+        #[arg(long)]
+        profile: Option<String>,
     },
 
     /// Update devdock to latest or specific version
@@ -646,8 +650,8 @@ async fn main() {
             _ => commands::report::report_bug().await,
         },
 
-        Commands::Monitor { timeout, interval, no_notify } => {
-            commands::monitor::execute(timeout, interval, no_notify).await
+        Commands::Monitor { timeout, interval, no_notify, profile } => {
+            commands::monitor::execute(timeout, interval, no_notify, profile).await
         }
 
         Commands::Update { version, check, force, list } => {

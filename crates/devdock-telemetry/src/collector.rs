@@ -134,6 +134,8 @@ impl TelemetryCollector {
             project: self.config.project.clone(),
             profile: self.config.profile.clone(),
             branch: Self::get_git_branch(),
+            binary_type: "rust".to_string(),
+            binary_version: env!("CARGO_PKG_VERSION").to_string(),
             command_start_time: self.session_start,
             tilt_up_time: Some(self.session_start),
             watch_start_time: Some(self.session_start),

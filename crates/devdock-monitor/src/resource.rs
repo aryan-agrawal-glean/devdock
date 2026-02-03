@@ -24,6 +24,7 @@ impl ResourceLabel {
                 | ResourceLabel::Infra
                 | ResourceLabel::RemoteService
                 | ResourceLabel::RemoteInfra
+                | ResourceLabel::BazelBuilds // Now included for telemetry
         )
     }
 }
@@ -86,6 +87,9 @@ pub struct TiltResource {
     pub update_status: Option<String>,
     pub compose_health: Option<String>,
     pub is_disabled: bool,
+    pub build_start_time: Option<String>,
+    pub build_finish_time: Option<String>,
+    pub build_duration_secs: Option<f64>,
 }
 
 impl TiltResource {
@@ -131,6 +135,9 @@ impl TiltResource {
         let resource_status =
             Self::determine_status(&runtime_status, &update_status, &compose_health, status);
 
+        // Extract build timing from buildHistory
+        let (build_start, build_finish, build_duration) = Self::extract_build_timing(status);
+
         Some(TiltResource {
             name,
             labels,
@@ -140,7 +147,49 @@ impl TiltResource {
             update_status,
             compose_health,
             is_disabled,
+            build_start_time: build_start,
+            build_finish_time: build_finish,
+            build_duration_secs: build_duration,
         })
+    }
+
+    /// Extract build timing from buildHistory (most recent build)
+    fn extract_build_timing(
+        status: &serde_json::Value,
+    ) -> (Option<String>, Option<String>, Option<f64>) {
+        let build_history = match status.get("buildHistory").and_then(|h| h.as_array()) {
+            Some(h) => h,
+            None => return (None, None, None),
+        };
+
+        // Get the most recent build (first in array)
+        let latest_build = match build_history.first() {
+            Some(b) => b,
+            None => return (None, None, None),
+        };
+
+        let start_time = latest_build.get("startTime").and_then(|t| t.as_str()).map(String::from);
+
+        let finish_time = latest_build.get("finishTime").and_then(|t| t.as_str()).map(String::from);
+
+        // Calculate duration if both times exist
+        let duration = if let (Some(start), Some(finish)) = (&start_time, &finish_time) {
+            // Parse ISO8601 timestamps and calculate difference
+            use chrono::{DateTime, Utc};
+            match (DateTime::parse_from_rfc3339(start), DateTime::parse_from_rfc3339(finish)) {
+                (Ok(start_dt), Ok(finish_dt)) => {
+                    let start_utc = start_dt.with_timezone(&Utc);
+                    let finish_utc = finish_dt.with_timezone(&Utc);
+                    let duration = finish_utc.signed_duration_since(start_utc);
+                    Some(duration.num_milliseconds() as f64 / 1000.0)
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
+
+        (start_time, finish_time, duration)
     }
 
     fn determine_resource_type(labels: &[ResourceLabel]) -> ResourceType {
