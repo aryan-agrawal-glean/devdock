@@ -395,43 +395,169 @@ impl AwsSqlManager {
     }
 
     /// Get SQL endpoint from config for a database
+    /// First tries local config, then falls back to AWS RDS API discovery
     fn get_sql_endpoint_for_db(&self, db_name: &str) -> Result<String> {
+        // First try to get from config (which should come from S3 dynamic.ini for AWS)
+        let instance_key = format!("{db_name}.db.instance");
         let instance_type = self
             .config
-            .get("sql", &format!("{db_name}.db.instance"))
+            .get("sql", &instance_key)
             .cloned()
             .unwrap_or_else(|| "frontendInstance".to_string());
 
-        self.config
-            .get("sql", &format!("{instance_type}.aws.instanceEndpoint"))
-            .cloned()
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "Could not find AWS RDS endpoint for instance type '{}' (database: {})\n\
-                     Check that {}.aws.instanceEndpoint is set in your config",
-                    instance_type,
-                    db_name,
-                    instance_type
-                )
-            })
+        println!("     🔍 Looking up RDS endpoint for db '{db_name}'");
+        println!("        - instance type key: sql.{instance_key} = {instance_type}");
+
+        let endpoint_key = format!("{instance_type}.aws.instanceEndpoint");
+        if let Some(endpoint) = self.config.get("sql", &endpoint_key) {
+            if !endpoint.is_empty() {
+                println!("        - endpoint key: sql.{endpoint_key}");
+                println!("     📄 Found RDS endpoint in config: {endpoint}");
+                return Ok(endpoint.clone());
+            }
+        }
+
+        // Config doesn't have endpoint, discover from AWS RDS API as fallback
+        println!("     ⚠️  RDS endpoint not in config (key: sql.{endpoint_key})");
+        println!("     🔍 Falling back to AWS RDS API discovery...");
+        self.discover_rds_endpoint()
+    }
+
+    /// Discover RDS endpoint by querying AWS RDS API
+    /// Finds the first RDS instance in the region (typically there's only one per project)
+    fn discover_rds_endpoint(&self) -> Result<String> {
+        let output = Command::new("aws")
+            .args([
+                "rds",
+                "describe-db-instances",
+                "--region",
+                &self.region,
+                "--query",
+                "DBInstances[0].Endpoint.Address",
+                "--output",
+                "text",
+            ])
+            .output()
+            .context("Failed to query AWS RDS instances")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!(
+                "Failed to discover RDS endpoint from AWS API: {stderr}\n\
+                 Make sure you have AWS credentials configured and RDS access permissions."
+            );
+        }
+
+        let endpoint = String::from_utf8(output.stdout)?.trim().to_string();
+
+        if endpoint.is_empty() || endpoint == "None" {
+            anyhow::bail!(
+                "No RDS instances found in region '{}' for project '{}'.\n\
+                 Verify the region is correct and RDS instance exists.",
+                self.region,
+                self.project
+            );
+        }
+
+        println!("     ✅ Discovered RDS endpoint: {endpoint}");
+        Ok(endpoint)
     }
 
     /// Resolve RDS hostname to IP address (matching Python implementation)
+    /// Falls back to AWS API query if DNS resolution fails
     fn resolve_rds_host(&self, rds_hostname: &str) -> String {
+        if rds_hostname.is_empty() {
+            println!("     ⚠️  Empty hostname, cannot resolve");
+            return rds_hostname.to_string();
+        }
+
         // Try DNS resolution first (works if local machine has VPN access)
         match std::net::ToSocketAddrs::to_socket_addrs(&format!("{}:3306", rds_hostname)) {
             Ok(mut addrs) => {
                 if let Some(addr) = addrs.next() {
                     let ip = addr.ip().to_string();
-                    println!("     Resolved {rds_hostname} to {ip}");
+                    println!("     ✅ Resolved {rds_hostname} to {ip}");
                     return ip;
                 }
             }
             Err(_) => {
-                println!("     DNS resolution failed, using hostname directly");
+                println!("     DNS resolution failed, querying AWS API for RDS IP...");
             }
         }
+
+        // Fall back to querying AWS API for RDS IP address (matching Python behavior)
+        if let Ok(ip) = self.query_rds_ip_from_aws(rds_hostname) {
+            return ip;
+        }
+
+        // Last resort: use hostname directly (may fail on bastion)
+        println!("     ⚠️  Using hostname directly (may fail): {rds_hostname}");
         rds_hostname.to_string()
+    }
+
+    /// Query RDS IP address from AWS API (matching Python's fallback behavior)
+    fn query_rds_ip_from_aws(&self, rds_hostname: &str) -> Result<String> {
+        // Find RDS instance by matching hostname endpoint
+        let query = format!(
+            "DBInstances[?Endpoint.Address==`{}`].[DBInstanceIdentifier,DBSubnetGroup.VpcId,AvailabilityZone]",
+            rds_hostname
+        );
+
+        let rds_output = Command::new("aws")
+            .args([
+                "rds",
+                "describe-db-instances",
+                "--region",
+                &self.region,
+                "--query",
+                &query,
+                "--output",
+                "text",
+            ])
+            .output()
+            .context("Failed to query RDS instance info")?;
+
+        if !rds_output.status.success() {
+            anyhow::bail!("AWS RDS query failed");
+        }
+
+        let rds_info_str = String::from_utf8(rds_output.stdout)?;
+        let rds_info: Vec<&str> = rds_info_str.split_whitespace().collect();
+
+        if rds_info.len() < 3 {
+            anyhow::bail!("RDS instance not found for hostname: {rds_hostname}");
+        }
+
+        let vpc_id = rds_info[1];
+        let az = rds_info[2];
+
+        // Query RDS network interfaces in the same AZ
+        let eni_output = Command::new("aws")
+            .args([
+                "ec2",
+                "describe-network-interfaces",
+                "--region",
+                &self.region,
+                "--filters",
+                &format!("Name=vpc-id,Values={vpc_id}"),
+                "Name=description,Values=RDSNetworkInterface",
+                &format!("Name=availability-zone,Values={az}"),
+                "--query",
+                "NetworkInterfaces[0].PrivateIpAddress",
+                "--output",
+                "text",
+            ])
+            .output()
+            .context("Failed to query RDS network interface")?;
+
+        let ip = String::from_utf8(eni_output.stdout)?.trim().to_string();
+
+        if ip.is_empty() || ip == "None" {
+            anyhow::bail!("Could not find RDS IP from network interfaces");
+        }
+
+        println!("     ✅ Found RDS IP via AWS API: {ip}");
+        Ok(ip)
     }
 }
 
@@ -975,13 +1101,18 @@ impl SqlOperationsManager {
 
         // Use a closure to ensure cleanup happens
         let result = (|| -> Result<()> {
-            // Clean local data using WHERE clause first
-            println!("     🧹 Cleaning local data matching WHERE clause...");
-            self.clean_devdock_sql_using_where_clause(db, tables, where_clause)?;
+            // Only clean local data if there's a WHERE clause
+            // For full exports (no WHERE clause), the cleanup is handled at project-change level
+            if !where_clause.is_empty() {
+                println!("     🧹 Cleaning local data matching WHERE clause...");
+                self.clean_devdock_sql_using_where_clause(db, tables, where_clause)?;
+            }
 
-            // Run mysqldump with WHERE clause
+            // Run mysqldump
+            // For full exports (no WHERE clause), use "1" to select all rows (matches Python behavior)
+            let effective_where = if where_clause.is_empty() { "1" } else { where_clause };
             let output_path = target_dir.join(format!("{db}.sql"));
-            manager.import_data(db, tables, where_clause, &output_path, port)?;
+            manager.import_data(db, tables, effective_where, &output_path, port)?;
 
             Ok(())
         })();
