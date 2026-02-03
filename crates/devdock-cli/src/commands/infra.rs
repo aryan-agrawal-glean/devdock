@@ -12,12 +12,61 @@
 use crate::output;
 use anyhow::{Context, Result};
 use devdock_config::gcs_storage::DynamicIniLoader;
+use devdock_config::ini_parser::ParsedIniConfig;
 use devdock_config::opensearch_import::OpenSearchCopier;
+use devdock_config::s3_storage::S3DynamicIniLoader;
 use devdock_config::sql_import::SqlOperationsManager;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
+
+/// Load merged INI config (default.ini + dynamic.ini) from the appropriate cloud storage
+/// based on platform (GCS for Google, S3 for AWS)
+async fn load_platform_config(
+    project: &str,
+    platform: &str,
+    region: &str,
+    devdock_root: PathBuf,
+) -> Result<ParsedIniConfig> {
+    match platform {
+        "aws" => {
+            // For AWS, we need the AWS account ID (not project name) for S3 bucket
+            // The bucket is s3://config-{account_id}/dynamic.ini
+            let account_id = get_aws_account_id().await?;
+            println!("     📦 Loading config from S3 (account: {account_id}, region: {region})");
+            let ini_loader =
+                S3DynamicIniLoader::new(&account_id, devdock_root, Some(region.to_string()))?;
+            ini_loader.load_merged_config().await
+        }
+        _ => {
+            // Default to GCS for Google, Azure, and other platforms
+            let ini_loader = DynamicIniLoader::new(project, devdock_root)?;
+            ini_loader.load_merged_config().await
+        }
+    }
+}
+
+/// Get AWS account ID using STS
+async fn get_aws_account_id() -> Result<String> {
+    let output = tokio::process::Command::new("aws")
+        .args(["sts", "get-caller-identity", "--query", "Account", "--output", "text"])
+        .output()
+        .await
+        .context("Failed to run aws sts get-caller-identity")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("Failed to get AWS account ID: {stderr}");
+    }
+
+    let account_id = String::from_utf8(output.stdout)?.trim().to_string();
+    if account_id.is_empty() {
+        anyhow::bail!("AWS account ID is empty - check AWS credentials");
+    }
+
+    Ok(account_id)
+}
 
 /// State tracking for SQL hydration
 struct SqlState {
@@ -334,10 +383,9 @@ pub async fn sql_setup(
         tables_to_copy.push_str("keyval:KeyVal");
     }
 
-    // Load INI config (default.ini merged with dynamic.ini from GCS)
-    // The dynamic.ini contains project-specific values like SQL instance names
-    let ini_loader = DynamicIniLoader::new(project, devdock_root.clone())?;
-    let config = ini_loader.load_merged_config().await?;
+    // Load INI config (default.ini merged with dynamic.ini from cloud storage)
+    // Uses GCS for Google, S3 for AWS - the dynamic.ini contains project-specific values like SQL instance names
+    let config = load_platform_config(project, platform, region, devdock_root.clone()).await?;
     let manager = SqlOperationsManager::new(project, platform, region, config);
 
     // Handle project change
@@ -622,9 +670,8 @@ async fn sql_setup_with_seed(
             std::env::var("DEVDOCK_ROOT").context("DEVDOCK_ROOT environment variable not set")?;
         let devdock_root = PathBuf::from(&devdock_root);
 
-        // Load config to create SqlOperationsManager
-        let ini_loader = DynamicIniLoader::new(project, devdock_root)?;
-        let config = ini_loader.load_merged_config().await?;
+        // Load config using platform-appropriate storage (GCS for Google, S3 for AWS)
+        let config = load_platform_config(project, platform, region, devdock_root).await?;
         let manager = SqlOperationsManager::new(project, platform, region, config);
 
         // Clear old cache
@@ -672,8 +719,7 @@ async fn sql_setup_with_seed(
         let devdock_root =
             std::env::var("DEVDOCK_ROOT").context("DEVDOCK_ROOT environment variable not set")?;
         let devdock_root = PathBuf::from(&devdock_root);
-        let ini_loader = DynamicIniLoader::new(project, devdock_root)?;
-        let config = ini_loader.load_merged_config().await?;
+        let config = load_platform_config(project, platform, region, devdock_root).await?;
         let manager = SqlOperationsManager::new(project, platform, region, config);
 
         let export_dir = state.scripts_dir();
@@ -744,9 +790,8 @@ async fn sql_setup_with_full_instance(
     // State tracking
     let state = SqlState::new()?;
 
-    // Load config
-    let ini_loader = DynamicIniLoader::new(project, devdock_root.clone())?;
-    let config = ini_loader.load_merged_config().await?;
+    // Load config using platform-appropriate storage (GCS for Google, S3 for AWS)
+    let config = load_platform_config(project, platform, region, devdock_root.clone()).await?;
     let manager = SqlOperationsManager::new(project, platform, region, config);
 
     // Reset MySQL master
@@ -861,9 +906,8 @@ pub async fn sql_clean(project: &str, platform: &str, region: &str, db_tables: &
         std::env::var("DEVDOCK_ROOT").context("DEVDOCK_ROOT environment variable not set")?;
     let devdock_root = PathBuf::from(devdock_root);
 
-    // Load merged config (default.ini + dynamic.ini from GCS)
-    let ini_loader = DynamicIniLoader::new(project, devdock_root)?;
-    let config = ini_loader.load_merged_config().await?;
+    // Load merged config using platform-appropriate storage (GCS for Google, S3 for AWS)
+    let config = load_platform_config(project, platform, region, devdock_root).await?;
 
     let manager = SqlOperationsManager::new(project, platform, region, config);
     manager.clean_sql(db_tables)?;
