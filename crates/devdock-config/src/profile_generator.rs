@@ -732,6 +732,7 @@ impl TempProfileGenerator {
     }
 
     /// Add a service to the TOP-LEVEL services dict (used for multi-project services)
+    /// Overwrites existing entry to ensure multi-project config takes precedence
     pub fn add_service(&mut self, name: &str, entry: ServiceProfileEntry) {
         self.profile.services.insert(name.to_string(), entry);
     }

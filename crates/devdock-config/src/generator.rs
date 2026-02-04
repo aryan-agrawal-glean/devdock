@@ -340,6 +340,11 @@ impl ConfigGenerator {
         let mut temp_profile_for_account_id = TempProfile::default();
         platform.update_temp_profile(&mut temp_profile_for_account_id);
 
+        // Extract opensearch namespace from multi-project profile if present
+        let opensearch_namespace = profile.infra.get("opensearch").and_then(|opensearch| {
+            opensearch.config.get("namespace").and_then(|ns| ns.as_str().map(String::from))
+        });
+
         // Create context with multi_project=true
         let mut context = IniGeneratorContext {
             multi_project: true,
@@ -348,6 +353,7 @@ impl ConfigGenerator {
             platform: profile.platform.to_string(),
             account_id: temp_profile_for_account_id.account_id,
             sql_metadata: None,
+            opensearch_namespace,
         };
 
         // Pre-fetch SQL metadata if SQL is remote
@@ -672,8 +678,11 @@ impl ConfigGenerator {
         let multi_graph = DependencyGraph::build(&multi_profile, &self.workspace_root).await?;
 
         // Add each service to TOP-LEVEL services dict
+        // Only add services explicitly defined in multi_config, not auto-expanded dependencies
         for node in multi_graph.nodes() {
-            if node.component_type == crate::dependency_graph::ComponentType::Service {
+            if node.component_type == crate::dependency_graph::ComponentType::Service
+                && multi_config.services.contains_key(&node.name)
+            {
                 let profile_service = multi_profile.services.get(&node.name);
 
                 let service_type =

@@ -71,10 +71,21 @@ impl DependencyGraph {
     async fn expand_dependencies(profile: &Profile, workspace_root: &Path) -> Result<Profile> {
         let mut expanded = profile.clone();
 
+        // Move multi-project services/infra to top-level for processing
+        // (This matches Python behavior where multi-project services are added to top-level)
+        if let Some(ref multi) = profile.multi_project {
+            for (name, config) in &multi.services {
+                expanded.services.entry(name.clone()).or_insert_with(|| config.clone());
+            }
+            for (name, config) in &multi.infra {
+                expanded.infra.entry(name.clone()).or_insert_with(|| config.clone());
+            }
+        }
+
         // Collect all components to process
         let mut to_process: Vec<String> = Vec::new();
-        to_process.extend(profile.services.keys().cloned());
-        to_process.extend(profile.infra.keys().cloned());
+        to_process.extend(expanded.services.keys().cloned());
+        to_process.extend(expanded.infra.keys().cloned());
 
         let mut processed: HashSet<String> = HashSet::new();
 

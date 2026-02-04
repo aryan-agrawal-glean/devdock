@@ -148,11 +148,47 @@ pub struct MultiProjectConfig {
 impl Profile {
     /// Get all component names from this profile.
     pub fn all_components(&self) -> Vec<ComponentName> {
+        use std::collections::HashSet;
+
+        let mut seen = HashSet::new();
         let mut components = Vec::new();
-        components.extend(self.infra.keys().cloned());
-        components.extend(self.services.keys().cloned());
-        components.extend(self.pipelines.keys().cloned());
-        components.extend(self.test_suite.keys().cloned());
+
+        // Add top-level components
+        for name in self.infra.keys() {
+            if seen.insert(name.clone()) {
+                components.push(name.clone());
+            }
+        }
+        for name in self.services.keys() {
+            if seen.insert(name.clone()) {
+                components.push(name.clone());
+            }
+        }
+        for name in self.pipelines.keys() {
+            if seen.insert(name.clone()) {
+                components.push(name.clone());
+            }
+        }
+        for name in self.test_suite.keys() {
+            if seen.insert(name.clone()) {
+                components.push(name.clone());
+            }
+        }
+
+        // Include components from multi-project config if present (deduplicated)
+        if let Some(ref multi) = self.multi_project {
+            for name in multi.infra.keys() {
+                if seen.insert(name.clone()) {
+                    components.push(name.clone());
+                }
+            }
+            for name in multi.services.keys() {
+                if seen.insert(name.clone()) {
+                    components.push(name.clone());
+                }
+            }
+        }
+
         components
     }
 
@@ -162,6 +198,10 @@ impl Profile {
             || self.services.contains_key(name)
             || self.pipelines.contains_key(name)
             || self.test_suite.contains_key(name)
+            || self
+                .multi_project
+                .as_ref()
+                .is_some_and(|m| m.infra.contains_key(name) || m.services.contains_key(name))
     }
 }
 
@@ -300,5 +340,45 @@ services:
         assert_eq!(pre_setup.service, Some("crawler".to_string()));
         assert_eq!(pre_setup.depends_on_services.as_ref().unwrap().len(), 1);
         assert_eq!(pre_setup.timeout, Some("10m".to_string()));
+    }
+
+    #[test]
+    fn test_parse_profile_with_multi_project() {
+        let yaml = r"
+project: dev-sandbox-334901
+infra:
+  sql:
+    type: local
+services:
+  qe:
+    type: local
+glean-apps-canary:
+  infra:
+    sql:
+      type: local
+  services:
+    internal_admin:
+      type: remote
+";
+        let profile: Profile = serde_yaml::from_str(yaml).unwrap();
+
+        // Verify top-level components
+        assert!(profile.has_component("sql"));
+        assert!(profile.has_component("qe"));
+
+        // Verify multi-project components are included
+        assert!(profile.has_component("internal_admin"));
+
+        // Verify all_components includes both top-level and multi-project
+        let all_comps = profile.all_components();
+        assert!(all_comps.contains(&"qe".to_string()));
+        assert!(all_comps.contains(&"internal_admin".to_string()));
+        assert!(all_comps.contains(&"sql".to_string()));
+
+        // Verify multi_project structure
+        let multi = profile.multi_project.as_ref().unwrap();
+        assert_eq!(multi.services.len(), 1);
+        assert_eq!(multi.infra.len(), 1);
+        assert!(multi.services.contains_key("internal_admin"));
     }
 }

@@ -21,12 +21,21 @@ pub struct IniGeneratorContext {
     pub account_id: Option<String>,
     /// SQL remote metadata (for remote SQL configuration)
     pub sql_metadata: Option<crate::sql::SqlRemoteMetadata>,
+    /// OpenSearch namespace from profile (defaults to elasticsearch-2-namespace if not set)
+    pub opensearch_namespace: Option<String>,
 }
 
 impl IniGeneratorContext {
     pub fn from_profile(profile: &Profile) -> Self {
         let has_quality_pipelines = profile.pipelines.contains_key("quality_pipelines");
-        let multi_project = profile.multi_project.is_some();
+        // Don't set multi_project flag just because profile has multi_project section
+        // This flag should only be true when generating scio_apps.ini itself
+        let multi_project = false;
+
+        // Extract opensearch namespace from profile if present
+        let opensearch_namespace = profile.infra.get("opensearch").and_then(|opensearch| {
+            opensearch.config.get("namespace").and_then(|ns| ns.as_str().map(String::from))
+        });
 
         Self {
             multi_project,
@@ -35,6 +44,7 @@ impl IniGeneratorContext {
             platform: profile.platform.to_string(),
             account_id: None,
             sql_metadata: None,
+            opensearch_namespace,
         }
     }
 
@@ -364,8 +374,10 @@ impl IniGenerator {
         self.config.set("elastic_plugin", "hotswapJarPluginTag", "");
         self.config.set("elastic_plugin", "hotswapJarPluginConfig", "");
 
-        // Namespace-based config (standard namespace convention)
-        let namespace = "elasticsearch-1-namespace";
+        // Namespace-based config - use namespace from context or default to elasticsearch-2-namespace
+        let namespace =
+            self.context.opensearch_namespace.as_deref().unwrap_or("elasticsearch-2-namespace");
+
         self.config.set(
             namespace,
             "indexing.server.url",
@@ -374,9 +386,12 @@ impl IniGenerator {
         self.config.set(namespace, "indexing.index.name", "index-1");
         self.config.set(namespace, "entitybuilder.index.name", "entity-index-1");
 
-        // Cluster mapping with standard namespace
-        let cluster_mapping = r#"{"primary": [{"namespace": "elasticsearch-1-namespace", "cluster_type": "StandardCluster"}], "staging": [], "old": []}"#;
-        self.config.set("opensearch", "clusterMapping", cluster_mapping);
+        // Cluster mapping with namespace from context
+        let cluster_mapping = format!(
+            r#"{{"primary": [{{"namespace": "{}", "cluster_type": "StandardCluster"}}], "staging": [], "old": []}}"#,
+            namespace
+        );
+        self.config.set("opensearch", "clusterMapping", &cluster_mapping);
     }
 
     fn apply_memcached_config(&mut self, _node: &ServiceNode) {

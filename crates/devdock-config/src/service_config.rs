@@ -15,7 +15,7 @@ pub struct ServiceConfig {
     #[serde(default)]
     pub dependencies: Vec<String>,
 
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_env_map")]
     pub env: HashMap<String, String>,
 
     pub debug_port: Option<String>,
@@ -97,6 +97,36 @@ impl ServiceConfig {
     }
 }
 
+/// Custom deserializer for env maps that handles both strings and other JSON types
+fn deserialize_env_map<'de, D>(deserializer: D) -> Result<HashMap<String, String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Error;
+    use serde_json::Value;
+
+    let value: HashMap<String, Value> = HashMap::deserialize(deserializer)?;
+    let mut result = HashMap::new();
+
+    for (key, val) in value {
+        let string_val = match val {
+            Value::String(s) => s,
+            Value::Bool(b) => b.to_string(),
+            Value::Number(n) => n.to_string(),
+            Value::Null => String::new(),
+            _ => {
+                return Err(D::Error::custom(format!(
+                    "Env value for key '{}' must be a string, boolean, or number",
+                    key
+                )))
+            }
+        };
+        result.insert(key, string_val);
+    }
+
+    Ok(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -119,5 +149,25 @@ mod tests {
         assert_eq!(config.service_type, ServiceType::Go);
         assert_eq!(config.dependencies.len(), 2);
         assert_eq!(config.env.get("PORT"), Some(&"7960".to_string()));
+    }
+
+    #[test]
+    fn test_parse_config_with_boolean_env() {
+        let json = r#"{
+            "base_image": "test:latest",
+            "type": "java",
+            "env": {
+                "STRING_VAL": "hello",
+                "BOOL_VAL": true,
+                "NUMBER_VAL": 42,
+                "PORT": "8080"
+            }
+        }"#;
+
+        let config: ServiceConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.env.get("STRING_VAL"), Some(&"hello".to_string()));
+        assert_eq!(config.env.get("BOOL_VAL"), Some(&"true".to_string()));
+        assert_eq!(config.env.get("NUMBER_VAL"), Some(&"42".to_string()));
+        assert_eq!(config.env.get("PORT"), Some(&"8080".to_string()));
     }
 }
