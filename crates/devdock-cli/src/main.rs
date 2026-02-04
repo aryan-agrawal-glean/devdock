@@ -4,7 +4,7 @@ mod commands;
 mod logging;
 mod output;
 
-use clap::{Parser, Subcommand};
+use clap::{ArgAction, Parser, Subcommand};
 use colored::Colorize;
 use std::process;
 
@@ -437,7 +437,7 @@ enum InfraSqlCommands {
         full_cleanup: bool,
 
         /// Copy keyval table (default: true)
-        #[arg(long, default_value = "true")]
+        #[arg(long, default_value_t = true, action = ArgAction::Set)]
         copy_keyval: bool,
 
         /// Use pre-seeded MySQL data directory (fastest startup)
