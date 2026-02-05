@@ -1401,8 +1401,12 @@ impl SqlOperationsManager {
         info!("Importing full instance dump from {:?}", dump_path);
         println!("     ⏳ Importing {} (this may take a while)...", dump_path.display());
 
-        // Read and strip GTID statements
-        let content = std::fs::read_to_string(dump_path)?;
+        // Read file as bytes to handle binary data (e.g., BLOB fields, encoded attachments)
+        // SQL dumps from mysqldump may contain non-UTF8 bytes in data fields
+        let bytes = std::fs::read(dump_path)?;
+        let content = String::from_utf8_lossy(&bytes);
+
+        // Strip GTID statements
         let re = regex::Regex::new(r"SET @@GLOBAL\.GTID_[A-Z_]+=[^;]*;").unwrap();
         let cleaned = re.replace_all(&content, "");
 
