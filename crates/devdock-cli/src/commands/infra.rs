@@ -189,7 +189,11 @@ impl SqlState {
     }
 }
 
-/// Wait for MySQL container to be healthy
+/// Wait for MySQL container to be healthy and accepting connections.
+///
+/// Docker's health status can briefly report "healthy" before MySQL's socket
+/// is actually ready. After the health check passes, we verify connectivity
+/// by running a trivial query via `docker exec`.
 fn wait_for_mysql(container: &str, timeout: Duration) -> Result<()> {
     output::info(&format!("Waiting for {container} to be healthy..."));
 
@@ -201,14 +205,37 @@ fn wait_for_mysql(container: &str, timeout: Duration) -> Result<()> {
 
         let status = String::from_utf8_lossy(&output.stdout);
         if status.trim() == "healthy" {
-            output::success(&format!("{container} is healthy"));
-            return Ok(());
+            break;
         }
 
         std::thread::sleep(Duration::from_secs(2));
     }
 
-    anyhow::bail!("Timeout waiting for {container} to be healthy")
+    if start.elapsed() >= timeout {
+        anyhow::bail!("Timeout waiting for {container} to be healthy");
+    }
+
+    // Docker health check passed, but MySQL may not be accepting connections yet.
+    // Verify with an actual connectivity probe before proceeding.
+    output::info(&format!("Verifying {container} accepts connections..."));
+    while start.elapsed() < timeout {
+        let probe = Command::new("docker")
+            .args(["exec", container, "mysql", "-u", "root", "-e", "SELECT 1"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+
+        if let Ok(s) = probe {
+            if s.success() {
+                output::success(&format!("{container} is healthy"));
+                return Ok(());
+            }
+        }
+
+        std::thread::sleep(Duration::from_secs(2));
+    }
+
+    anyhow::bail!("Timeout: {container} reported healthy but MySQL is not accepting connections")
 }
 
 /// Execute SQL command in container
