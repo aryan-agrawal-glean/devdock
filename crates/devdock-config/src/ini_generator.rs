@@ -116,6 +116,9 @@ impl IniGenerator {
         // Storage
         config.set("storage", "caching.disabled", "false");
 
+        // Caching Service
+        config.set("cachingservice", "serviceHost", "caching_service.devdock.local:50073");
+
         // Memcached
         config.set("memcached", "discoveryEndpoints", "memcached.devdock.local:11211");
 
