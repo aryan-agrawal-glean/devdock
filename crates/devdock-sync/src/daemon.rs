@@ -72,18 +72,9 @@ impl SyncDaemon {
         // Start watching for changes - watch specific monitored directories, not entire repo
         eprintln!("[SYNC] Setting up file watcher for monitored directories...");
 
-        // Only watch directories that exist
-        let monitored_dirs = vec![
-            "go",
-            "python_scio",
-            "typescript",
-            "java",
-            "com/askscio/proto",
-            "config",
-            "javatests",
-            "openapi",
-            "devdock",
-        ];
+        // Use the canonical MONITORED_DIRS from git.rs (strip trailing slashes for path joining)
+        let monitored_dirs: Vec<&str> =
+            git::MONITORED_DIRS.iter().map(|d| d.trim_end_matches('/')).collect();
 
         let mut watched_count = 0;
         for dir in &monitored_dirs {

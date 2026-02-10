@@ -7,7 +7,8 @@ use std::path::{Path, PathBuf};
 use tracing::debug;
 
 /// Directories to monitor for sync (matches Python MONITORED_DIRS).
-const MONITORED_DIRS: &[&str] = &[
+pub const MONITORED_DIRS: &[&str] = &[
+    "data/",
     "go/",
     "python_scio/",
     "typescript/",
