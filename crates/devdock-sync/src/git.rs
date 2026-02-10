@@ -21,6 +21,7 @@ const MONITORED_DIRS: &[&str] = &[
 
 /// File patterns to sync (matches Python SYNC_PATTERNS).
 const SYNC_EXTENSIONS: &[&str] = &[
+    ".bazel",
     ".go",
     ".py",
     ".ts",
