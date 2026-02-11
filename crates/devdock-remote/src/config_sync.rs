@@ -301,10 +301,12 @@ pub fn sync_gcloud_credentials(workspace: &str, verbose: bool) -> Result<()> {
         rsync -av ~/.secrets-sync/gcloud/ /tmp/.config/gcloud/ 2>&1
 
         # Set proper permissions
-        chmod 700 ~/.config/gcloud ~/.config/gcloud/configurations 2>/dev/null || true
-        chmod 700 /tmp/.config/gcloud /tmp/.config/gcloud/configurations 2>/dev/null || true
-        chmod 600 ~/.config/gcloud/application_default_credentials.json 2>/dev/null || true
-        chmod 600 /tmp/.config/gcloud/application_default_credentials.json 2>/dev/null || true
+        # ~/.config/gcloud is volume-mounted into Docker containers (e.g. cloud-sql-proxy)
+        # which run as a different UID, so it needs to be world-readable
+        chmod 755 ~/.config/gcloud ~/.config/gcloud/configurations 2>/dev/null || true
+        chmod 644 ~/.config/gcloud/application_default_credentials.json 2>/dev/null || true
+        chmod 755 /tmp/.config/gcloud /tmp/.config/gcloud/configurations 2>/dev/null || true
+        chmod 644 /tmp/.config/gcloud/application_default_credentials.json 2>/dev/null || true
 
         # Verify ADC works after copy
         echo "=== Testing ADC on remote ==="
