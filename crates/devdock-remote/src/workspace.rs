@@ -1,7 +1,7 @@
 //! Workspace lifecycle management.
 
 use crate::{coder, config_sync, port_forward::PortForwardManager, ssh, RemoteError, Result};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::thread::sleep;
 use std::time::Duration;
 use tracing::info;
@@ -112,7 +112,15 @@ where
     if verbose {
         println!("  Syncing configuration files...");
     }
-    config_sync::sync_all_config(workspace, profile_path, None, log_file, verbose)?;
+
+    let custom_ini_path = find_custom_ini_path();
+    config_sync::sync_all_config(
+        workspace,
+        profile_path,
+        custom_ini_path.as_deref(),
+        log_file,
+        verbose,
+    )?;
     if verbose {
         println!("  ✓ Configuration synced");
     }
@@ -609,4 +617,14 @@ pub fn wait_for_tilt_ui(port: u16, timeout_secs: u64) -> Result<()> {
 
         sleep(Duration::from_secs(5));
     }
+}
+
+/// Resolve config/custom.ini from workspace root, if it exists.
+/// This file is typically .gitignore'd but still needs to be synced to remote.
+fn find_custom_ini_path() -> Option<PathBuf> {
+    let devdock_root = std::env::var("DEVDOCK_ROOT")
+        .or_else(|_| std::env::var("PWD"))
+        .unwrap_or_else(|_| ".".to_string());
+    let path = PathBuf::from(devdock_root).join("config/custom.ini");
+    path.exists().then_some(path)
 }
