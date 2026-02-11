@@ -238,16 +238,45 @@ fn wait_for_mysql(container: &str, timeout: Duration) -> Result<()> {
     anyhow::bail!("Timeout: {container} reported healthy but MySQL is not accepting connections")
 }
 
-/// Execute SQL command in container
+/// Execute SQL command in container with retry logic for transient connection failures
 fn docker_mysql_exec(container: &str, sql: &str) -> Result<()> {
-    let status = Command::new("docker")
-        .args(["exec", container, "mysql", "-u", "root", "-e", sql])
-        .status()?;
+    let max_retries = 5;
+    let mut last_error = None;
 
-    if !status.success() {
-        anyhow::bail!("MySQL command failed");
+    for attempt in 0..max_retries {
+        let output = Command::new("docker")
+            .args(["exec", container, "mysql", "-u", "root", "-e", sql])
+            .output()?;
+
+        if output.status.success() {
+            return Ok(());
+        }
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        // Check for socket/connection errors that are worth retrying
+        // ERROR 2002: Can't connect to local MySQL server through socket
+        // ERROR 2003: Can't connect to MySQL server
+        if stderr.contains("ERROR 2002")
+            || stderr.contains("ERROR 2003")
+            || stderr.contains("Can't connect")
+        {
+            last_error = Some(format!("MySQL connection failed: {stderr}"));
+            if attempt < max_retries - 1 {
+                let delay = 2u64.pow(attempt as u32); // 1s, 2s, 4s, 8s
+                output::warn(&format!(
+                    "MySQL not ready, retrying in {delay}s ({}/{max_retries})...",
+                    attempt + 1
+                ));
+                std::thread::sleep(Duration::from_secs(delay));
+                continue;
+            }
+        } else {
+            // Non-retryable error
+            anyhow::bail!("MySQL command failed: {stderr}");
+        }
     }
-    Ok(())
+
+    anyhow::bail!(last_error.unwrap_or_else(|| "MySQL command failed after retries".to_string()))
 }
 
 /// Execute SQL file in container (with GTID stripping)
