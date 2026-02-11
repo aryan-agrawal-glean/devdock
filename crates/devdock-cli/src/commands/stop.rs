@@ -7,7 +7,7 @@ use devdock_sync::daemon as sync_daemon;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
-pub async fn execute(target: Option<&str>, force: bool) -> Result<()> {
+pub async fn execute(target: Option<&str>, force: bool, delete: bool) -> Result<()> {
     output::info("Stopping DevDock...");
 
     let state_manager = StateManager::new().await?;
@@ -36,7 +36,7 @@ pub async fn execute(target: Option<&str>, force: bool) -> Result<()> {
 
     // Perform cleanup based on instance mode
     if instance.mode == "remote" {
-        perform_remote_cleanup(&state_manager, &instance_id, force).await?;
+        perform_remote_cleanup(&state_manager, &instance_id, force, delete).await?;
     } else {
         if force {
             output::info("Force stopping (skipping graceful shutdown)...");
@@ -321,6 +321,7 @@ async fn perform_remote_cleanup(
     state_manager: &StateManager,
     instance_id: &str,
     force: bool,
+    delete: bool,
 ) -> Result<()> {
     output::info("Cleaning up remote DevDock resources...");
 
@@ -420,10 +421,27 @@ async fn perform_remote_cleanup(
         output::warn(&format!("Failed to clean port mappings: {e}"));
     }
 
-    // 3. Prompt for workspace cleanup (skip prompt if force flag)
-    println!("DEBUG: workspace_name = {workspace_name:?}, force = {force}");
+    // 3. Prompt for workspace cleanup (skip prompt if force or delete flag)
+    println!("DEBUG: workspace_name = {workspace_name:?}, force = {force}, delete = {delete}");
     if let Some(ref workspace_name) = workspace_name {
-        if force {
+        if delete {
+            // With --delete, non-interactively delete the workspace
+            output::info(&format!("Deleting workspace: {workspace_name}"));
+
+            match Command::new("coder").arg("delete").arg(workspace_name).arg("--yes").output() {
+                Ok(output) => {
+                    if output.status.success() {
+                        output::success(&format!("Workspace '{workspace_name}' deleted"));
+                    } else {
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        output::warn(&format!("Failed to delete workspace: {stderr}"));
+                    }
+                }
+                Err(e) => {
+                    output::warn(&format!("Failed to delete workspace: {e}"));
+                }
+            }
+        } else if force {
             // With --force, just leave workspace running
             output::info(&format!(
                 "Workspace '{workspace_name}' left running (use --force to skip prompts)"

@@ -92,6 +92,10 @@ enum Commands {
         /// Force stop without cleanup
         #[arg(short, long)]
         force: bool,
+
+        /// Delete the Coder workspace (non-interactive)
+        #[arg(long)]
+        delete: bool,
     },
 
     /// Show DevDock status
@@ -588,7 +592,9 @@ async fn main() {
             }
         }
 
-        Commands::Stop { target, force } => commands::stop::execute(target.as_deref(), force).await,
+        Commands::Stop { target, force, delete } => {
+            commands::stop::execute(target.as_deref(), force, delete).await
+        }
 
         Commands::Status { detailed } => commands::status::execute(detailed).await,
 
