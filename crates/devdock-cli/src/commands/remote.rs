@@ -24,6 +24,7 @@ pub struct RemoteStartConfig {
     pub auto_forward: bool,
     pub services: Option<String>,
     pub verbose: bool,
+    pub log_level: String,
 }
 
 /// Start remote DevDock workflow.
@@ -39,6 +40,7 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
         auto_forward,
         services,
         verbose,
+        log_level,
     } = config;
 
     // Get current git info
@@ -428,43 +430,48 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
         };
 
         let repo_path = PathBuf::from(&worktree);
-        let sync_result =
-            match sync_daemon::start_daemon(&instance_id, &workspace_name, &repo_path, false) {
-                Ok(_) => {
-                    state
-                        .save_sync_session(&instance_id, &workspace_name, None, false, "running")
-                        .await?;
+        let sync_result = match sync_daemon::start_daemon(
+            &instance_id,
+            &workspace_name,
+            &repo_path,
+            false,
+            &log_level,
+        ) {
+            Ok(_) => {
+                state
+                    .save_sync_session(&instance_id, &workspace_name, None, false, "running")
+                    .await?;
 
-                    let step_sync_duration = step_sync_start.elapsed().as_secs();
+                let step_sync_duration = step_sync_start.elapsed().as_secs();
 
-                    if let Some(s) = spinner_sync {
-                        if verbose {
-                            s.finish_with_message("File sync started ✓".green().to_string());
-                        } else {
-                            s.finish_with_message(format!(
-                                "Sync {}",
-                                format!("✓ {step_sync_duration}s").green()
-                            ));
-                        }
-                    }
-                    Ok(())
-                }
-                Err(e) => {
-                    warn!("Failed to start file sync: {}", e);
-                    if let Some(s) = spinner_sync {
-                        if verbose {
-                            s.finish_with_message("File sync failed ⚠️".yellow().to_string());
-                        } else {
-                            s.finish_with_message(format!("Sync {}", "⚠️ failed".yellow()));
-                        }
-                    }
-
+                if let Some(s) = spinner_sync {
                     if verbose {
-                        output::warn("Start manually: devdock sync start");
+                        s.finish_with_message("File sync started ✓".green().to_string());
+                    } else {
+                        s.finish_with_message(format!(
+                            "Sync {}",
+                            format!("✓ {step_sync_duration}s").green()
+                        ));
                     }
-                    Err(e)
                 }
-            };
+                Ok(())
+            }
+            Err(e) => {
+                warn!("Failed to start file sync: {}", e);
+                if let Some(s) = spinner_sync {
+                    if verbose {
+                        s.finish_with_message("File sync failed ⚠️".yellow().to_string());
+                    } else {
+                        s.finish_with_message(format!("Sync {}", "⚠️ failed".yellow()));
+                    }
+                }
+
+                if verbose {
+                    output::warn("Start manually: devdock sync start");
+                }
+                Err(e)
+            }
+        };
 
         // Continue even if sync fails
         let _ = sync_result;

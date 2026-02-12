@@ -516,6 +516,12 @@ async fn main() {
         let workspace_name = &args[3];
         let repo_path = std::path::PathBuf::from(&args[4]);
         let full_mode = args.get(5).is_some_and(|s| s == "true");
+        let log_level = args.get(6).map_or("info", |s| s.as_str());
+
+        // Stderr is already redirected to the log file by the parent process,
+        // so initializing tracing with the default stderr writer routes all
+        // tracing output (debug!, info!, warn!, error!) into the log file.
+        tracing_subscriber::fmt().with_env_filter(log_level).with_target(false).init();
 
         if let Err(e) = devdock_sync::daemon::run_daemon_process(
             devdock_id,
@@ -575,6 +581,8 @@ async fn main() {
                     auto_forward,
                     services,
                     verbose,
+                    log_level: devdock_sync::daemon::verbosity_to_log_level(cli.verbose)
+                        .to_string(),
                 })
                 .await
             } else {
@@ -643,7 +651,10 @@ async fn main() {
         },
 
         Commands::Sync { command } => match command {
-            SyncCommands::Start { full } => commands::sync::start(full).await,
+            SyncCommands::Start { full } => {
+                let log_level = devdock_sync::daemon::verbosity_to_log_level(cli.verbose);
+                commands::sync::start(full, log_level).await
+            }
             SyncCommands::Stop => commands::sync::stop().await,
             SyncCommands::Status => commands::sync::status().await,
             SyncCommands::History { tail } => commands::sync::history(tail).await,

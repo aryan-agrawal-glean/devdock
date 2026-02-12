@@ -65,12 +65,12 @@ impl SyncDaemon {
             "Performing initial sync (mode: {})",
             if self.full_mode { "full" } else { "git-tracked" }
         );
-        eprintln!("[SYNC] About to call initial_sync()");
+        debug!("About to call initial_sync()");
         self.initial_sync()?;
-        eprintln!("[SYNC] initial_sync() completed successfully");
+        debug!("initial_sync() completed successfully");
 
         // Start watching for changes - watch specific monitored directories, not entire repo
-        eprintln!("[SYNC] Setting up file watcher for monitored directories...");
+        debug!("Setting up file watcher for monitored directories...");
 
         // Use the canonical MONITORED_DIRS from git.rs (strip trailing slashes for path joining)
         let monitored_dirs: Vec<&str> =
@@ -80,37 +80,36 @@ impl SyncDaemon {
         for dir in &monitored_dirs {
             let dir_path = self.repo_path.join(dir);
             if dir_path.exists() {
-                eprintln!("[SYNC] Watching directory: {dir}");
+                debug!("Watching directory: {dir}");
                 self.file_watcher.watch(&dir_path)?;
                 watched_count += 1;
             } else {
-                eprintln!("[SYNC] Skipping non-existent directory: {dir}");
+                debug!("Skipping non-existent directory: {dir}");
             }
         }
 
-        eprintln!("[SYNC] File watcher setup complete, watching {watched_count} directories");
+        info!("File watcher setup complete, watching {watched_count} directories");
 
         // Main event loop
         info!("File sync daemon running, watching for changes...");
-        eprintln!("[SYNC] Entering main event loop...");
+        debug!("Entering main event loop...");
 
         let mut iteration = 0;
         loop {
             iteration += 1;
             if iteration % 100 == 0 {
-                eprintln!("[SYNC] Event loop iteration {iteration}, daemon is alive");
+                debug!("Event loop iteration {iteration}, daemon is alive");
             }
 
             // Check health
             if !self.health_monitor.is_healthy() {
-                error!("Sync daemon unhealthy, exiting");
-                eprintln!("[SYNC] ❌ Health check failed!");
+                error!("Health check failed!");
                 if let Some(lag) = self.health_monitor.sync_lag() {
-                    eprintln!("[SYNC] Time since last sync: {lag:?}");
+                    error!("Time since last sync: {lag:?}");
                 } else {
-                    eprintln!("[SYNC] No successful syncs yet");
+                    error!("No successful syncs yet");
                 }
-                eprintln!("[SYNC] Daemon exiting due to health check failure");
+                error!("Daemon exiting due to health check failure");
                 break;
             }
 
@@ -118,26 +117,26 @@ impl SyncDaemon {
             match self.file_watcher.get_changed_files(Duration::from_secs(10)) {
                 Ok(files) => {
                     if !files.is_empty() {
-                        eprintln!("[SYNC] Detected {} file changes", files.len());
+                        debug!("Detected {} file changes", files.len());
                         for (i, file) in files.iter().enumerate().take(10) {
-                            eprintln!("[SYNC]   Change {}: {:?}", i + 1, file);
+                            debug!("  Change {}: {:?}", i + 1, file);
                         }
                         if files.len() > 10 {
-                            eprintln!("[SYNC]   ... and {} more", files.len() - 10);
+                            debug!("  ... and {} more", files.len() - 10);
                         }
 
                         // Filter files based on mode
                         let files_to_sync = self.filter_files(&files)?;
 
-                        eprintln!("[SYNC] After filtering: {} files to sync", files_to_sync.len());
+                        debug!("After filtering: {} files to sync", files_to_sync.len());
 
                         if files_to_sync.is_empty() {
-                            eprintln!("[SYNC] All detected files were filtered out (not in monitored dirs or wrong extension)");
+                            debug!("All detected files were filtered out (not in monitored dirs or wrong extension)");
                         } else {
                             // Update pending files in stats (for status visibility)
                             self.stats_tracker.set_pending_files(files_to_sync.clone());
                             for file in files_to_sync.iter().take(5) {
-                                eprintln!("[SYNC]   Syncing: {file:?}");
+                                debug!("  Syncing: {file:?}");
                             }
 
                             // Mark files as currently syncing
@@ -168,9 +167,8 @@ impl SyncDaemon {
                                         error: None,
                                     });
 
-                                    info!("Synced {} files in {:?}", files_to_sync.len(), duration);
-                                    eprintln!(
-                                        "[SYNC] ✅ Successfully synced {} files in {}ms",
+                                    info!(
+                                        "Successfully synced {} files in {}ms",
                                         files_to_sync.len(),
                                         duration.as_millis()
                                     );
@@ -194,8 +192,7 @@ impl SyncDaemon {
                                         error: Some(e.to_string()),
                                     });
 
-                                    error!("Sync failed: {}", e);
-                                    eprintln!("[SYNC] ❌ Sync failed: {e}");
+                                    error!("Sync failed: {e}");
                                 }
                             }
                         }
@@ -204,8 +201,7 @@ impl SyncDaemon {
                 Err(e) => {
                     // Watcher errors are usually just timeouts (no changes), not real failures
                     // Only log as debug, don't count as health failure
-                    debug!("Watcher timeout or error: {}", e);
-                    eprintln!("[SYNC] Watcher timeout (no changes): {e}");
+                    debug!("Watcher timeout (no changes): {e}");
                     // Don't record as failure - this is normal when there are no file changes
                 }
             }
@@ -218,26 +214,23 @@ impl SyncDaemon {
     /// Perform initial sync of modified files only (fast startup).
     /// This matches Python's strategy: sync only git-modified files, not all tracked files.
     fn initial_sync(&mut self) -> Result<()> {
-        eprintln!("[SYNC] Starting initial_sync, full_mode={}", self.full_mode);
+        debug!("Starting initial_sync, full_mode={}", self.full_mode);
 
         if self.full_mode {
             info!("Starting initial sync in full mode");
-            eprintln!("[SYNC] Calling rsync_client.sync_all()");
+            debug!("Calling rsync_client.sync_all()");
             self.rsync_client.sync_all()?;
         } else {
             // FAST STARTUP: Only sync git-modified files (changed since origin/master)
             // This dramatically reduces startup time from minutes to seconds
             info!("Syncing git-modified files only (fast startup)");
-            eprintln!("[SYNC] Using FAST startup: syncing only git-modified files...");
 
             let files = git::list_git_modified_files(&self.repo_path)?;
 
             if files.is_empty() {
-                info!("No modified files to sync - you're up to date!");
-                eprintln!("[SYNC] No modified files found - workspace is up to date");
+                info!("No modified files to sync - workspace is up to date");
             } else {
                 info!("Found {} modified files to sync", files.len());
-                eprintln!("[SYNC] Found {} modified files to sync", files.len());
 
                 // Sync modified files in small batches
                 const BATCH_SIZE: usize = 10;
@@ -250,45 +243,32 @@ impl SyncDaemon {
                         total_batches,
                         chunk.len()
                     );
-                    eprintln!(
-                        "[SYNC] Syncing batch {}/{} ({} files)",
-                        batch_num + 1,
-                        total_batches,
-                        chunk.len()
-                    );
 
                     match self.rsync_client.sync_files(chunk, false) {
                         Ok(()) => {
-                            eprintln!(
-                                "[SYNC] Batch {}/{} completed successfully",
+                            debug!(
+                                "Batch {}/{} completed successfully",
                                 batch_num + 1,
                                 total_batches
                             );
                         }
                         Err(e) => {
-                            eprintln!(
-                                "[SYNC] ERROR in batch {}/{}: {}",
-                                batch_num + 1,
-                                total_batches,
-                                e
-                            );
+                            error!("Error in batch {}/{}: {}", batch_num + 1, total_batches, e);
                             return Err(e);
                         }
                     }
-                    eprintln!("[SYNC] After batch {}/{} sync", batch_num + 1, total_batches);
                 }
                 info!("Modified files sync completed successfully");
-                eprintln!("[SYNC] All batches completed!");
             }
 
-            eprintln!("[SYNC] About to record success in health monitor");
+            debug!("About to record success in health monitor");
             // NOTE: Full baseline sync will happen later via file watcher
             // This approach prioritizes fast startup over completeness
         }
 
-        eprintln!("[SYNC] Recording success...");
+        debug!("Recording success...");
         self.health_monitor.record_success();
-        eprintln!("[SYNC] Health monitor updated, returning Ok");
+        debug!("Health monitor updated, returning Ok");
         Ok(())
     }
 
@@ -316,23 +296,21 @@ impl SyncDaemon {
                 file.clone()
             };
 
-            eprintln!("[SYNC-FILTER] Checking file: {relative_path:?}");
+            debug!("Checking file: {relative_path:?}");
 
             // Check if file matches sync patterns (monitored dirs + extensions)
             if !git::should_sync_file_by_pattern(&relative_path) {
-                eprintln!(
-                    "[SYNC-FILTER]   ❌ Filtered out: not in monitored dirs or wrong extension"
-                );
+                debug!("❌ Filtered out: not in monitored dirs or wrong extension");
                 continue;
             }
 
             // In git-tracked mode, also check if file is tracked
             if !self.full_mode && !git::should_sync_file(&self.repo_path, file, false)? {
-                eprintln!("[SYNC-FILTER]   ❌ Filtered out: not git-tracked");
+                debug!("❌ Filtered out: not git-tracked");
                 continue;
             }
 
-            eprintln!("[SYNC-FILTER]   ✅ Will sync: {relative_path:?}");
+            debug!("✅ Will sync: {relative_path:?}");
             filtered.push(relative_path);
         }
 
@@ -387,13 +365,25 @@ impl Drop for SyncDaemon {
     }
 }
 
+/// Map a CLI verbosity count to a tracing filter string.
+pub fn verbosity_to_log_level(verbose: u8) -> &'static str {
+    match verbose {
+        // for sync daemon, minimum log level is INFO
+        0 | 1 => "info",
+        2 => "debug",
+        _ => "trace",
+    }
+}
+
 /// Start sync daemon in foreground (for debugging).
 pub fn start_daemon_foreground(
     devdock_id: &str,
     workspace_name: &str,
     repo_path: &Path,
     full_mode: bool,
+    log_level: &str,
 ) -> Result<()> {
+    info!("Log level: {}", log_level);
     info!("Starting sync daemon in FOREGROUND");
     info!("DevDock ID: {}", devdock_id);
     info!("Workspace: {}", workspace_name);
@@ -416,6 +406,7 @@ pub fn start_daemon(
     workspace_name: &str,
     repo_path: &Path,
     full_mode: bool,
+    log_level: &str,
 ) -> Result<u32> {
     use std::fs::OpenOptions;
     use std::process::Command;
@@ -447,7 +438,8 @@ pub fn start_daemon(
         .arg(devdock_id)
         .arg(workspace_name)
         .arg(repo_path)
-        .arg(if full_mode { "true" } else { "false" });
+        .arg(if full_mode { "true" } else { "false" })
+        .arg(log_level);
 
     // Redirect stdin/stdout/stderr to log file
     cmd.stdin(std::process::Stdio::null())
@@ -464,7 +456,7 @@ pub fn start_daemon(
         .map_err(|e| SyncError::DaemonError(format!("Failed to spawn daemon process: {e}")))?;
 
     let pid = child.id();
-    // Debug output now goes to log file via stderr redirect, not to console
+    // Tracing output goes to log file via stderr redirect, not to console
 
     // Don't wait for child - let it run independently
     // The child will write its own PID file
@@ -485,12 +477,11 @@ pub fn run_daemon_process(
     let workspace_name = workspace_name.to_string();
     let repo_path = repo_path.to_path_buf();
 
-    // Print startup info (will be captured in log file via stderr redirect from parent)
-    eprintln!("\n=== Sync daemon process started ===");
-    eprintln!("DevDock ID: {devdock_id}");
-    eprintln!("Workspace: {workspace_name}");
-    eprintln!("Repo: {}", repo_path.display());
-    eprintln!("Time: {:?}\n", std::time::SystemTime::now());
+    info!("=== Sync daemon process started ===");
+    info!("DevDock ID: {devdock_id}");
+    info!("Workspace: {workspace_name}");
+    info!("Repo: {}", repo_path.display());
+    info!("Time: {:?}", std::time::SystemTime::now());
 
     let mut daemon = match SyncDaemon::new(
         devdock_id.clone(),
@@ -499,21 +490,21 @@ pub fn run_daemon_process(
         full_mode,
     ) {
         Ok(d) => {
-            eprintln!("Sync daemon created successfully");
+            info!("Sync daemon created successfully");
             d
         }
         Err(e) => {
-            eprintln!("ERROR: Failed to create sync daemon: {e}");
+            error!("Failed to create sync daemon: {e}");
             return Err(e);
         }
     };
 
-    eprintln!("Starting daemon main loop...");
+    info!("Starting daemon main loop...");
     if let Err(e) = daemon.start() {
-        eprintln!("ERROR: Sync daemon error: {e}");
+        error!("Sync daemon error: {e}");
         Err(e)
     } else {
-        eprintln!("Sync daemon stopped normally");
+        info!("Sync daemon stopped normally");
         Ok(())
     }
 }

@@ -4,7 +4,7 @@ use crate::{Result, SyncError};
 use git2::Repository;
 use ignore::WalkBuilder;
 use std::path::{Path, PathBuf};
-use tracing::debug;
+use tracing::{debug, info, warn};
 
 /// Directories to monitor for sync (matches Python MONITORED_DIRS).
 pub const MONITORED_DIRS: &[&str] = &[
@@ -84,8 +84,7 @@ pub fn should_sync_file_by_pattern(path: &Path) -> bool {
 
 /// List all git-tracked files in monitored directories that match sync patterns.
 pub fn list_git_tracked_files(repo_path: &Path) -> Result<Vec<PathBuf>> {
-    debug!("Listing git-tracked files in {:?}", repo_path);
-    eprintln!("[SYNC-GIT] Listing git-tracked files in monitored directories...");
+    info!("Listing git-tracked files in monitored directories");
 
     let repo = Repository::open(repo_path)
         .map_err(|_| SyncError::GitRepoNotFound(repo_path.display().to_string()))?;
@@ -102,8 +101,7 @@ pub fn list_git_tracked_files(repo_path: &Path) -> Result<Vec<PathBuf>> {
         }
     }
 
-    debug!("Found {} git-tracked files in monitored directories", files.len());
-    eprintln!("[SYNC-GIT] Found {} git-tracked files to sync (after filtering)", files.len());
+    info!("Found {} git-tracked files to sync (after filtering)", files.len());
     Ok(files)
 }
 
@@ -131,7 +129,7 @@ pub fn list_all_files(repo_path: &Path) -> Result<Vec<PathBuf>> {
 /// List git-modified files (changed since origin/master or origin/main).
 /// This is used for fast initial sync - only sync files you're actually working on.
 pub fn list_git_modified_files(repo_path: &Path) -> Result<Vec<PathBuf>> {
-    eprintln!("[SYNC-GIT] Finding git-modified files since origin/master or origin/main...");
+    info!("Finding git-modified files since origin/master...");
 
     use std::process::Command;
 
@@ -144,17 +142,17 @@ pub fn list_git_modified_files(repo_path: &Path) -> Result<Vec<PathBuf>> {
     let base = if let Ok(output) = output {
         if output.status.success() {
             let merge_base = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            eprintln!(
-                "[SYNC-GIT] Using merge base with origin/master: {}",
+            info!(
+                "Using merge base with origin/master: {}",
                 &merge_base[..8.min(merge_base.len())]
             );
             merge_base
         } else {
-            eprintln!("[SYNC-GIT] Could not find merge base with origin/master, using HEAD (uncommitted changes only)");
+            warn!("Could not find merge base with origin/master, using HEAD (uncommitted changes only)");
             "HEAD".to_string()
         }
     } else {
-        eprintln!("[SYNC-GIT] Git merge-base failed, using HEAD (uncommitted changes only)");
+        warn!("Git merge-base failed, using HEAD (uncommitted changes only)");
         "HEAD".to_string()
     };
 
@@ -166,7 +164,7 @@ pub fn list_git_modified_files(repo_path: &Path) -> Result<Vec<PathBuf>> {
         .map_err(|e| SyncError::DaemonError(format!("Failed to run git diff: {e}")))?;
 
     if !output.status.success() {
-        eprintln!("[SYNC-GIT] git diff failed, falling back to empty list");
+        warn!("git diff failed, falling back to empty list");
         return Ok(Vec::new());
     }
 
@@ -183,7 +181,7 @@ pub fn list_git_modified_files(repo_path: &Path) -> Result<Vec<PathBuf>> {
         }
     }
 
-    eprintln!("[SYNC-GIT] Found {} modified files to sync", files.len());
+    info!("Found {} modified files to sync", files.len());
     Ok(files)
 }
 

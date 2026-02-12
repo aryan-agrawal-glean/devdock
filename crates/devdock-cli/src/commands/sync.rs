@@ -17,7 +17,7 @@ struct QueueData {
 }
 
 /// Start file sync.
-pub async fn start(full: bool) -> Result<()> {
+pub async fn start(full: bool, log_level: &str) -> Result<()> {
     let state = StateManager::new().await?;
 
     // Get current instance
@@ -28,7 +28,8 @@ pub async fn start(full: bool) -> Result<()> {
     println!("  Mode: {}", if full { "all files" } else { "git-tracked only" });
 
     let repo_path = PathBuf::from(&worktree);
-    let _pid = sync_daemon::start_daemon(&devdock_id, &workspace_name, &repo_path, full)?;
+    let _pid =
+        sync_daemon::start_daemon(&devdock_id, &workspace_name, &repo_path, full, log_level)?;
 
     // Update database
     state.save_sync_session(&devdock_id, &workspace_name, None, full, "running").await?;
