@@ -51,6 +51,8 @@ pub fn create_workspace(config: &CoderWorkspaceConfig) -> Result<String> {
         .arg("branch_name=master") // Always use master for remote (file sync handles actual branch)
         .arg("--parameter")
         .arg("force_fresh_data=false")
+        .arg("--preset")
+        .arg("master")
         .arg("--yes"); // Non-interactive
 
     debug!("Running: {:?}", cmd);
