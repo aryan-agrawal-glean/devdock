@@ -41,7 +41,7 @@ async fn load_platform_config(
         }
         _ => {
             // Default to GCS for Google, Azure, and other platforms
-            let ini_loader = DynamicIniLoader::new(project, devdock_root)?;
+            let ini_loader = DynamicIniLoader::new(project, devdock_root).await?;
             ini_loader.load_merged_config().await
         }
     }

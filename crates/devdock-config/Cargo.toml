@@ -28,6 +28,10 @@ reqwest = { workspace = true }
 openssl = { workspace = true, features = ["vendored"] }
 chrono = { workspace = true }
 
+# GCS native client (replaces gcloud CLI subprocess calls)
+google-cloud-storage = "1.8.0"
+google-cloud-gax = "1.7.0"
+
 # Compression libraries for seed/full-instance modes
 zstd = "0.13"      # Zstandard decompression for .tar.zst
 flate2 = "1.0"     # Gzip decompression for .sql.gz

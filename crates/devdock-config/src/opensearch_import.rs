@@ -32,7 +32,7 @@ impl OpenSearchCopier {
             std::env::var("DEVDOCK_ROOT").context("DEVDOCK_ROOT environment variable not set")?;
         let devdock_root = PathBuf::from(devdock_root);
 
-        let ini_loader = DynamicIniLoader::new(project, devdock_root)?;
+        let ini_loader = DynamicIniLoader::new(project, devdock_root).await?;
         let config = ini_loader.load_merged_config().await?;
 
         let server_url = config

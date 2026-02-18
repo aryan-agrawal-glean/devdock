@@ -832,7 +832,7 @@ impl SqlOperationsManager {
 
     /// Fast export from GCS bucket (pre-exported dumps)
     pub async fn fast_export(&self, db: &str, target_dir: &Path) -> Result<()> {
-        let storage = GcsStorage::with_default_cache(&self.project)?;
+        let storage = GcsStorage::with_default_cache(&self.project).await?;
         let gcs_path =
             format!("{}/{}.sql", SQL_BUCKET_PATTERN.replace("{project}", &self.project), db);
         let target_path = target_dir.join(format!("{db}.sql"));
@@ -1209,7 +1209,7 @@ impl SqlOperationsManager {
 
         // Download from GCS
         let target_path = target_dir.join(format!("{db}.sql"));
-        let storage = GcsStorage::with_default_cache(&self.project)?;
+        let storage = GcsStorage::with_default_cache(&self.project).await?;
         storage.fetch_to_path(&bucket_uri, &target_path).await?;
 
         info!("Downloaded {} to {:?}", db, target_path);
@@ -1310,7 +1310,7 @@ impl SqlOperationsManager {
         println!("     📥 GCS path: {gcs_path}");
         println!("     📁 Target: {}", target_dir.display());
 
-        let storage = GcsStorage::with_default_cache(&self.project)?;
+        let storage = GcsStorage::with_default_cache(&self.project).await?;
         storage.fetch_and_extract_tar_zst(&gcs_path, target_dir).await.with_context(|| {
             format!(
                 "Failed to download MySQL seed. Check:\n\
@@ -1375,7 +1375,7 @@ impl SqlOperationsManager {
         println!("     📥 GCS path: {gcs_path}");
         println!("     📁 Target: {}", target_path.display());
 
-        let storage = GcsStorage::with_default_cache(&self.project)?;
+        let storage = GcsStorage::with_default_cache(&self.project).await?;
         storage.fetch_and_decompress_gzip(&gcs_path, &target_path).await.with_context(|| {
             format!(
                 "Failed to download full instance dump. Check:\n\

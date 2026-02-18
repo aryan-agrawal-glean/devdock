@@ -470,7 +470,7 @@ impl ConfigGenerator {
             }
             "google" | "gcp" => {
                 // For Google Cloud, use GCS
-                match DynamicIniLoader::new(&profile.project, self.workspace_root.clone()) {
+                match DynamicIniLoader::new(&profile.project, self.workspace_root.clone()).await {
                     Ok(loader) => match loader.fetch_dynamic_ini().await {
                         Ok(config) => {
                             if config.is_some() {
@@ -491,7 +491,7 @@ impl ConfigGenerator {
             }
             _ => {
                 // For other platforms (azure, unknown), try GCS as fallback
-                match DynamicIniLoader::new(&profile.project, self.workspace_root.clone()) {
+                match DynamicIniLoader::new(&profile.project, self.workspace_root.clone()).await {
                     Ok(loader) => match loader.fetch_dynamic_ini().await {
                         Ok(config) => config,
                         Err(e) => {
