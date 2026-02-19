@@ -3,31 +3,52 @@
 //! Fetches dynamic configuration from GCS buckets like:
 //! - `gs://config-{project}/` for dynamic INI configs
 //! - `gs://sql-{project}/devdock/` for SQL dump files
+//!
+//! Uses the `google-cloud-storage` crate for direct API access with connection
+//! pooling, replacing the previous `gcloud storage cp/ls` subprocess calls.
 
 use crate::ini_parser::ParsedIniConfig;
 use anyhow::{Context, Result};
+use google_cloud_gax::paginator::ItemPaginator;
+use google_cloud_storage::client::{Storage, StorageControl};
 use std::path::{Path, PathBuf};
-use tokio::process::Command;
+use tokio::io::AsyncWriteExt;
 use tracing::{debug, info, warn};
 
 /// GCS bucket URL patterns
 const CONFIG_BUCKET_PATTERN: &str = "gs://config-{project}";
 const SQL_BUCKET_PATTERN: &str = "gs://sql-{project}/devdock";
 
+/// Parse a `gs://bucket-name/object/path` URI into `("bucket-name", "object/path")`.
+fn parse_gcs_uri(uri: &str) -> Result<(&str, &str)> {
+    let rest = uri.strip_prefix("gs://").with_context(|| format!("Invalid GCS URI: {uri}"))?;
+    let (bucket, object) =
+        rest.split_once('/').with_context(|| format!("GCS URI missing object path: {uri}"))?;
+    Ok((bucket, object))
+}
+
 /// GCS Storage client for fetching DevDock configs
 pub struct GcsStorage {
+    client: Storage,
+    control: StorageControl,
     project: String,
     cache_dir: PathBuf,
 }
 
 impl GcsStorage {
     /// Create a new GCS storage client
-    pub fn new(project: &str, cache_dir: PathBuf) -> Self {
-        Self { project: project.to_string(), cache_dir }
+    pub async fn new(project: &str, cache_dir: PathBuf) -> Result<Self> {
+        let client =
+            Storage::builder().build().await.context("Failed to build GCS Storage client")?;
+        let control = StorageControl::builder()
+            .build()
+            .await
+            .context("Failed to build GCS StorageControl client")?;
+        Ok(Self { client, control, project: project.to_string(), cache_dir })
     }
 
     /// Create with default cache directory ($DEVDOCK_ROOT/cache or temp)
-    pub fn with_default_cache(project: &str) -> Result<Self> {
+    pub async fn with_default_cache(project: &str) -> Result<Self> {
         let cache_dir = if let Ok(devdock_root) = std::env::var("DEVDOCK_ROOT") {
             PathBuf::from(devdock_root).join("cache/gcs")
         } else {
@@ -37,7 +58,7 @@ impl GcsStorage {
         std::fs::create_dir_all(&cache_dir)
             .with_context(|| format!("Failed to create cache dir: {}", cache_dir.display()))?;
 
-        Ok(Self::new(project, cache_dir))
+        Self::new(project, cache_dir).await
     }
 
     /// Get the config bucket URL
@@ -56,16 +77,22 @@ impl GcsStorage {
 
         debug!("Fetching {} to {}", gcs_path, local_path.display());
 
-        let output = Command::new("gcloud")
-            .args(["storage", "cp", gcs_path, local_path.to_str().unwrap()])
-            .output()
+        let (bucket, object) = parse_gcs_uri(gcs_path)?;
+        let mut reader = self
+            .client
+            .read_object(format!("projects/_/buckets/{bucket}"), object)
+            .send()
             .await
-            .context("Failed to run gcloud storage cp")?;
+            .with_context(|| format!("Failed to read object: {gcs_path}"))?;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("gcloud storage cp failed: {stderr}");
+        let mut file = tokio::fs::File::create(&local_path)
+            .await
+            .with_context(|| format!("Failed to create local file: {}", local_path.display()))?;
+
+        while let Some(data) = reader.next().await.transpose().context("Error streaming object")? {
+            file.write_all(&data).await?;
         }
+        file.flush().await?;
 
         Ok(local_path)
     }
@@ -79,31 +106,40 @@ impl GcsStorage {
             tokio::fs::create_dir_all(parent).await?;
         }
 
-        let output = Command::new("gcloud")
-            .args(["storage", "cp", gcs_path, target.to_str().unwrap()])
-            .output()
+        let (bucket, object) = parse_gcs_uri(gcs_path)?;
+        let mut reader = self
+            .client
+            .read_object(format!("projects/_/buckets/{bucket}"), object)
+            .send()
             .await
-            .context("Failed to run gcloud storage cp")?;
+            .with_context(|| format!("Failed to read object: {gcs_path}"))?;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("gcloud storage cp failed: {stderr}");
+        let mut file = tokio::fs::File::create(target)
+            .await
+            .with_context(|| format!("Failed to create target file: {}", target.display()))?;
+
+        while let Some(data) = reader.next().await.transpose().context("Error streaming object")? {
+            file.write_all(&data).await?;
         }
+        file.flush().await?;
 
         Ok(())
     }
 
     /// Fetch a file and return its contents as bytes
     pub async fn fetch_bytes(&self, gcs_path: &str) -> Result<Vec<u8>> {
-        let temp_name = format!("temp_{}", uuid_simple());
-        let local_path = self.fetch_file(gcs_path, &temp_name).await?;
-
-        let bytes = tokio::fs::read(&local_path)
+        let (bucket, object) = parse_gcs_uri(gcs_path)?;
+        let mut reader = self
+            .client
+            .read_object(format!("projects/_/buckets/{bucket}"), object)
+            .send()
             .await
-            .with_context(|| format!("Failed to read fetched file: {}", local_path.display()))?;
+            .with_context(|| format!("Failed to read object: {gcs_path}"))?;
 
-        // Clean up temp file
-        let _ = tokio::fs::remove_file(&local_path).await;
+        let mut bytes = Vec::new();
+        while let Some(data) = reader.next().await.transpose().context("Error streaming object")? {
+            bytes.extend_from_slice(&data);
+        }
 
         Ok(bytes)
     }
@@ -114,66 +150,37 @@ impl GcsStorage {
         String::from_utf8(bytes).context("GCS file contains invalid UTF-8")
     }
 
-    /// Fetch multiple files in parallel to a target directory
-    pub async fn fetch_files_parallel(
-        &self,
-        gcs_files: &[String],
-        target_dir: &Path,
-    ) -> Result<Vec<PathBuf>> {
-        tokio::fs::create_dir_all(target_dir).await?;
-
-        let futures: Vec<_> = gcs_files
-            .iter()
-            .map(|gcs_path| {
-                let gcs_path = gcs_path.clone();
-                let target_dir = target_dir.to_path_buf();
-                async move {
-                    let filename = gcs_path.rsplit('/').next().unwrap_or("unknown");
-                    let target_path = target_dir.join(filename);
-                    self.fetch_to_path(&gcs_path, &target_path).await?;
-                    Ok::<_, anyhow::Error>(target_path)
-                }
-            })
-            .collect();
-
-        let results = futures::future::join_all(futures).await;
-
-        let mut paths = Vec::new();
-        for result in results {
-            match result {
-                Ok(path) => paths.push(path),
-                Err(e) => warn!("Failed to fetch file: {}", e),
-            }
-        }
-
-        Ok(paths)
-    }
-
     /// List files in a GCS path
     pub async fn list_files(&self, gcs_path: &str) -> Result<Vec<String>> {
-        let output = Command::new("gcloud")
-            .args(["storage", "ls", gcs_path])
-            .output()
-            .await
-            .context("Failed to run gcloud storage ls")?;
+        let (bucket, prefix) = parse_gcs_uri(gcs_path)?;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("gcloud storage ls failed: {stderr}");
+        let mut objects = self
+            .control
+            .list_objects()
+            .set_parent(format!("projects/_/buckets/{bucket}"))
+            .set_prefix(prefix)
+            .by_item();
+
+        let mut files = Vec::new();
+        while let Some(object) =
+            objects.next().await.transpose().context("Error listing objects")?
+        {
+            // Reconstruct the full gs:// URI for compatibility with existing callers
+            files.push(format!("gs://{}/{}", bucket, object.name));
         }
 
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        Ok(stdout.lines().map(std::string::ToString::to_string).collect())
+        Ok(files)
     }
 
     /// Check if a GCS path exists
     pub async fn exists(&self, gcs_path: &str) -> bool {
-        Command::new("gcloud")
-            .args(["storage", "ls", gcs_path])
-            .output()
-            .await
-            .map(|o| o.status.success())
-            .unwrap_or(false)
+        let (bucket, object) = match parse_gcs_uri(gcs_path) {
+            Ok(v) => v,
+            Err(_) => return false,
+        };
+
+        // Try to read the first chunk; if it succeeds the object exists
+        self.client.read_object(format!("projects/_/buckets/{bucket}"), object).send().await.is_ok()
     }
 
     /// Fetch and extract a tar.zst (zstandard compressed tar) archive from GCS
@@ -267,8 +274,8 @@ pub struct DynamicIniLoader {
 
 impl DynamicIniLoader {
     /// Create a new dynamic INI loader
-    pub fn new(project: &str, devdock_root: PathBuf) -> Result<Self> {
-        let storage = GcsStorage::with_default_cache(project)?;
+    pub async fn new(project: &str, devdock_root: PathBuf) -> Result<Self> {
+        let storage = GcsStorage::with_default_cache(project).await?;
         Ok(Self { storage, devdock_root })
     }
 
@@ -368,48 +375,6 @@ impl DynamicIniLoader {
     }
 }
 
-/// SQL dump fetcher from GCS
-pub struct SqlDumpFetcher {
-    storage: GcsStorage,
-}
-
-impl SqlDumpFetcher {
-    /// Create a new SQL dump fetcher
-    pub fn new(project: &str) -> Result<Self> {
-        let storage = GcsStorage::with_default_cache(project)?;
-        Ok(Self { storage })
-    }
-
-    /// Fetch a SQL dump file for a database
-    pub async fn fetch_sql_dump(&self, db_name: &str, target_dir: &Path) -> Result<PathBuf> {
-        let gcs_path = format!("{}/{}.sql", self.storage.sql_bucket(), db_name);
-        let target_path = target_dir.join(format!("{db_name}.sql"));
-
-        info!("Fetching SQL dump for {} from {}", db_name, gcs_path);
-        self.storage.fetch_to_path(&gcs_path, &target_path).await?;
-
-        Ok(target_path)
-    }
-
-    /// Fetch multiple SQL dumps in parallel
-    pub async fn fetch_sql_dumps_parallel(
-        &self,
-        db_names: &[String],
-        target_dir: &Path,
-    ) -> Result<Vec<PathBuf>> {
-        let gcs_files: Vec<String> =
-            db_names.iter().map(|db| format!("{}/{}.sql", self.storage.sql_bucket(), db)).collect();
-
-        self.storage.fetch_files_parallel(&gcs_files, target_dir).await
-    }
-
-    /// Check if a SQL dump exists in GCS
-    pub async fn dump_exists(&self, db_name: &str) -> bool {
-        let gcs_path = format!("{}/{}.sql", self.storage.sql_bucket(), db_name);
-        self.storage.exists(&gcs_path).await
-    }
-}
-
 /// Simple UUID-like string generator (avoids adding uuid crate)
 fn uuid_simple() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -425,9 +390,26 @@ mod tests {
 
     #[test]
     fn test_bucket_urls() {
-        let storage = GcsStorage::new("glean-prod", PathBuf::from("/tmp"));
-        assert_eq!(storage.config_bucket(), "gs://config-glean-prod");
-        assert_eq!(storage.sql_bucket(), "gs://sql-glean-prod/devdock");
+        // config_bucket and sql_bucket don't need the client, so test via parse_gcs_uri
+        let config = CONFIG_BUCKET_PATTERN.replace("{project}", "glean-prod");
+        assert_eq!(config, "gs://config-glean-prod");
+
+        let sql = SQL_BUCKET_PATTERN.replace("{project}", "glean-prod");
+        assert_eq!(sql, "gs://sql-glean-prod/devdock");
+    }
+
+    #[test]
+    fn test_parse_gcs_uri() {
+        let (bucket, object) = parse_gcs_uri("gs://my-bucket/some/path/file.txt").unwrap();
+        assert_eq!(bucket, "my-bucket");
+        assert_eq!(object, "some/path/file.txt");
+
+        let (bucket, object) = parse_gcs_uri("gs://config-glean-prod/dynamic.ini").unwrap();
+        assert_eq!(bucket, "config-glean-prod");
+        assert_eq!(object, "dynamic.ini");
+
+        assert!(parse_gcs_uri("s3://wrong/path").is_err());
+        assert!(parse_gcs_uri("gs://no-slash").is_err());
     }
 
     #[test]

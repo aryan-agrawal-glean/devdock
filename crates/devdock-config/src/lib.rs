@@ -28,7 +28,7 @@ pub use bazel::BazelQueryEngine;
 pub use dependency::DependencyResolver;
 pub use dependency_graph::{DependencyGraph, ServiceNode};
 pub use env_expansion::expand_env_vars;
-pub use gcs_storage::{DynamicIniLoader, GcsStorage, SqlDumpFetcher};
+pub use gcs_storage::{DynamicIniLoader, GcsStorage};
 pub use generator::{ConfigGenerator, WatchStrategy};
 pub use ini_generator::IniGenerator;
 pub use ini_parser::{parse_db_specs, parse_db_tables_query, ParsedIniConfig};

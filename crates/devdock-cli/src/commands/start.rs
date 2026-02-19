@@ -287,7 +287,10 @@ async fn generate_configs_rust(
 
     // Skip platform initialization and file writes in dry-run mode (for benchmarking)
     if dry_run {
-        generator = generator.with_skip_platform_init(true).with_skip_file_writes(true);
+        generator = generator
+            .with_skip_platform_init(true)
+            .with_skip_file_writes(true)
+            .with_dynamic_config(false);
     }
 
     generator.generate(profile, services, profile_path).await?;
