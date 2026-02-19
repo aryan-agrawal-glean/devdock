@@ -476,6 +476,7 @@ impl IniGenerator {
         self.config.set("local", "taskHandler.port", "7961");
         self.config.set("chat", "fileUpload.clamAVScan.enabled", "false");
         self.config.set("net", "defaultInternetGatewayHttpProxy", "");
+        self.config.set("crawl", "useCachedSecretStore", "false");
     }
 
     fn apply_scholastic_config(&mut self, node: &ServiceNode) {
