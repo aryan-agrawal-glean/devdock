@@ -110,6 +110,11 @@ pub async fn execute(
         (None, String::new(), 0)
     };
 
+    // Set DEVDOCK_ID early so config generation can inject it into service env vars
+    if !instance_id.is_empty() {
+        std::env::set_var("DEVDOCK_ID", &instance_id);
+    }
+
     // Step 6: Generate configuration files (Rust - parallel)
     let workspace_root = find_workspace_root()?;
     let profile_path_str = profile_path.to_string_lossy();
@@ -142,9 +147,6 @@ pub async fn execute(
 
     // Write profile name to state file for telemetry
     write_profile_state(profile_name)?;
-
-    // Set DEVDOCK_ID environment variable for monitor to use
-    std::env::set_var("DEVDOCK_ID", &instance_id);
 
     output::info("Starting Tilt...");
     let tilt_process = start_tilt(services, profile_name)?;
@@ -273,17 +275,8 @@ async fn generate_configs_rust(
 ) -> Result<()> {
     use devdock_config::{ConfigGenerator, WatchStrategy};
 
-    // Use different strategy based on mode
-    let watch_strategy = if dry_run {
-        // Skip background threads entirely in dry-run mode to prevent hanging
-        WatchStrategy::Static
-    } else {
-        // Use Hybrid strategy: instant static patterns + background cquery refinement
-        WatchStrategy::Hybrid
-    };
-
-    let mut generator =
-        ConfigGenerator::new(workspace_root.to_path_buf()).with_watch_strategy(watch_strategy);
+    let mut generator = ConfigGenerator::new(workspace_root.to_path_buf())
+        .with_watch_strategy(WatchStrategy::Static);
 
     // Skip platform initialization and file writes in dry-run mode (for benchmarking)
     if dry_run {

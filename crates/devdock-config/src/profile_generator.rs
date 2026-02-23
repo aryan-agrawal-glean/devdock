@@ -406,14 +406,19 @@ impl TempProfileGenerator {
                         }
                     };
 
-                    // Only include env from the PROFILE, not from devdock_config.json
-                    let env = profile_service.and_then(|s| {
-                        if s.env.is_empty() {
-                            None
-                        } else {
-                            Some(s.env.clone())
-                        }
-                    });
+                    // Start with env from the PROFILE, then inject runtime vars
+                    let env = {
+                        let mut env = profile_service
+                            .and_then(|s| if s.env.is_empty() { None } else { Some(s.env.clone()) })
+                            .unwrap_or_default();
+                        env.insert("USE_DEVDOCK_INI".to_string(), "true".to_string());
+                        env.insert("IS_DEVDOCK".to_string(), "true".to_string());
+                        env.insert(
+                            "DEVDOCK_ID".to_string(),
+                            std::env::var("DEVDOCK_ID").unwrap_or_default(),
+                        );
+                        Some(env)
+                    };
 
                     let hot_reload = profile_service.and_then(|s| {
                         s.hot_reload.as_ref().map(|hr| match hr {

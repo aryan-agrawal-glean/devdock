@@ -132,9 +132,11 @@ fn clean_generated_files(devdock_root: &str, devdock_dir: &Path) -> Result<()> {
         devdock_dir.join("sql/full_cleanup.txt"),
         devdock_dir.join("resource_monitor.yaml"),
         devdock_dir.join("resource_monitor.log"),
+        devdock_dir.join("startup-monitor.pid"),
         devdock_dir.join("sql/scripts"),
         devdock_dir.join("sql/util"),
         PathBuf::from(devdock_root).join("devdock/devdock.ini"),
+        PathBuf::from(devdock_root).join("devdock/scio_apps.ini"),
         PathBuf::from(devdock_root).join("devdock/runtime_generated"),
         PathBuf::from(devdock_root).join("config/devdock.ini"),
         PathBuf::from(devdock_root).join("config/run_local.ini"),
@@ -150,14 +152,30 @@ fn clean_generated_files(devdock_root: &str, devdock_dir: &Path) -> Result<()> {
         }
     }
 
-    // Clean up service directories
-    let services_dir = PathBuf::from(devdock_root).join("devdock/config/services");
-    if services_dir.exists() {
-        for entry in std::fs::read_dir(&services_dir)? {
-            let entry = entry?;
+    // Clean up generated files in service, pipeline, and test_suite directories
+    let config_dirs = [
+        PathBuf::from(devdock_root).join("devdock/config/services"),
+        PathBuf::from(devdock_root).join("devdock/config/pipelines"),
+        PathBuf::from(devdock_root).join("devdock/config/test_suite"),
+    ];
+
+    for config_dir in &config_dirs {
+        if !config_dir.exists() {
+            continue;
+        }
+
+        let is_test_suite = config_dir.ends_with("test_suite");
+
+        for entry in std::fs::read_dir(config_dir)?.flatten() {
             let path = entry.path();
-            if path.is_dir() {
-                // Remove generated files in service dirs
+            if !path.is_dir() {
+                continue;
+            }
+
+            if is_test_suite {
+                // test_suite dirs are entirely temporary — remove the whole dir
+                let _ = std::fs::remove_dir_all(&path);
+            } else {
                 let _ = std::fs::remove_file(path.join("Dockerfile"));
                 let _ = std::fs::remove_file(path.join("docker-compose.yaml"));
                 let _ = std::fs::remove_file(path.join("requirements.txt"));
@@ -166,7 +184,59 @@ fn clean_generated_files(devdock_root: &str, devdock_dir: &Path) -> Result<()> {
         }
     }
 
+    // Clean per-service state under ~/.devdock/{service}/ (preserve logs)
+    clean_service_state_dirs(devdock_dir);
+
     Ok(())
+}
+
+/// Remove per-service state files under ~/.devdock/{service}/, preserving *.log files.
+/// Matches the Python cleanup: `find ~/.devdock/{service} -type f ! -name "*.log" -delete`
+fn clean_service_state_dirs(devdock_dir: &Path) {
+    let skip_dirs = ["images", "auth", "sql", "grafana", "bazel", "generated", "sync", "cache"];
+
+    let entries = match std::fs::read_dir(devdock_dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+
+        let dir_name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(n) => n.to_string(),
+            None => continue,
+        };
+
+        if skip_dirs.contains(&dir_name.as_str()) {
+            continue;
+        }
+
+        // Delete non-log files
+        for file in walkdir::WalkDir::new(&path).into_iter().filter_map(std::result::Result::ok) {
+            let fp = file.path();
+            if fp.is_file() && fp.extension().and_then(|e| e.to_str()) != Some("log") {
+                let _ = std::fs::remove_file(fp);
+            }
+            if file.path_is_symlink() {
+                let _ = std::fs::remove_file(fp);
+            }
+        }
+
+        // Remove now-empty directories bottom-up
+        for file in walkdir::WalkDir::new(&path)
+            .contents_first(true)
+            .into_iter()
+            .filter_map(std::result::Result::ok)
+        {
+            if file.path().is_dir() {
+                let _ = std::fs::remove_dir(file.path());
+            }
+        }
+    }
 }
 
 fn clean_grafana_stack(devdock_dir: &Path, docker: bool) -> Result<()> {

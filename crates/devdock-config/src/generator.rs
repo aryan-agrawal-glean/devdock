@@ -375,12 +375,10 @@ impl ConfigGenerator {
         generator.apply_platform(platform);
 
         // Apply all services and dependencies
+        // NOTE: env vars (IS_DEVDOCK, DEVDOCK_ID, etc.) are NOT injected here because
+        // the INI generator ignores env — they flow through profile_generator → temp_profile.yaml
         for node in graph.nodes() {
-            // Inject USE_DEVDOCK_INI env var for all services
-            let mut node_config = node.config.clone();
-            node_config.env.insert("USE_DEVDOCK_INI".to_string(), "true".to_string());
-
-            generator.apply_service(&node.name, &node_config);
+            generator.apply_service(&node.name, &node.config);
             generator.apply_dependency(node);
         }
 
@@ -688,12 +686,16 @@ impl ConfigGenerator {
                 let service_type =
                     if node.config.is_local() { "local".to_string() } else { "remote".to_string() };
 
-                // Get env from profile and add USE_DEVDOCK_INI
                 let mut env = profile_service
                     .and_then(|s| if s.env.is_empty() { None } else { Some(s.env.clone()) })
                     .unwrap_or_default();
 
                 env.insert("USE_DEVDOCK_INI".to_string(), "true".to_string());
+                env.insert("IS_DEVDOCK".to_string(), "true".to_string());
+                env.insert(
+                    "DEVDOCK_ID".to_string(),
+                    std::env::var("DEVDOCK_ID").unwrap_or_default(),
+                );
 
                 let hot_reload = profile_service.and_then(|s| {
                     s.hot_reload.as_ref().map(|hr| match hr {
