@@ -175,13 +175,46 @@ pub fn list_git_modified_files(repo_path: &Path) -> Result<Vec<PathBuf>> {
         let path = PathBuf::from(line.trim());
         let full_path = repo_path.join(&path);
 
-        // Only include existing files that match sync patterns
         if full_path.exists() && full_path.is_file() && should_sync_file_by_pattern(&path) {
             files.push(path);
         }
     }
 
-    info!("Found {} modified files to sync", files.len());
+    // Also collect untracked (but not gitignored) files so newly created files
+    // are included in the initial sync even before `git add`.
+    let untracked_output = Command::new("git")
+        .args(["ls-files", "--others", "--exclude-standard"])
+        .current_dir(repo_path)
+        .output();
+
+    if let Ok(ut_output) = untracked_output {
+        if ut_output.status.success() {
+            let ut_stdout = String::from_utf8_lossy(&ut_output.stdout);
+            let mut untracked_count = 0usize;
+
+            for line in ut_stdout.lines() {
+                let path = PathBuf::from(line.trim());
+                let full_path = repo_path.join(&path);
+
+                if full_path.exists()
+                    && full_path.is_file()
+                    && should_sync_file_by_pattern(&path)
+                    && !files.contains(&path)
+                {
+                    files.push(path);
+                    untracked_count += 1;
+                }
+            }
+
+            if untracked_count > 0 {
+                info!("Found {} additional untracked files to sync", untracked_count);
+            }
+        } else {
+            warn!("git ls-files --others failed, skipping untracked files");
+        }
+    }
+
+    info!("Found {} total files to sync (modified + untracked)", files.len());
     Ok(files)
 }
 
@@ -210,10 +243,29 @@ pub fn should_sync_file(repo_path: &Path, file_path: &Path, full_mode: bool) -> 
         return Ok(true);
     }
 
-    // Normal git tracking check
+    // Allow files that are git-tracked OR untracked-but-not-gitignored.
+    // This ensures newly created files sync before they are `git add`-ed.
     let repo = Repository::open(repo_path)
         .map_err(|_| SyncError::GitRepoNotFound(repo_path.display().to_string()))?;
 
     let index = repo.index()?;
-    Ok(index.get_path(relative_path, 0).is_some())
+    if index.get_path(relative_path, 0).is_some() {
+        return Ok(true);
+    }
+
+    // Not in the index — sync it anyway unless git says to ignore it
+    match repo.status_should_ignore(relative_path) {
+        Ok(ignored) => {
+            if ignored {
+                debug!("File {} is gitignored, skipping", path_str);
+            } else {
+                debug!("File {} is untracked but not gitignored, will sync", path_str);
+            }
+            Ok(!ignored)
+        }
+        Err(e) => {
+            debug!("Could not check ignore status for {}: {}, falling back to skip", path_str, e);
+            Ok(false)
+        }
+    }
 }
