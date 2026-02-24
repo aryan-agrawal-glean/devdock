@@ -287,7 +287,9 @@ where
         }
     }
 
-    anyhow::bail!(last_error.unwrap_or_else(|| format!("{label} failed after {max_retries} retries")))
+    anyhow::bail!(
+        last_error.unwrap_or_else(|| format!("{label} failed after {max_retries} retries"))
+    )
 }
 
 /// Execute SQL command in container with retry logic for transient connection failures
