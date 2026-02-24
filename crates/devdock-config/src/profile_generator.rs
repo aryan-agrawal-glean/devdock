@@ -411,7 +411,6 @@ impl TempProfileGenerator {
                         let mut env = profile_service
                             .and_then(|s| if s.env.is_empty() { None } else { Some(s.env.clone()) })
                             .unwrap_or_default();
-                        env.insert("USE_DEVDOCK_INI".to_string(), "true".to_string());
                         env.insert("IS_DEVDOCK".to_string(), "true".to_string());
                         env.insert(
                             "DEVDOCK_ID".to_string(),
