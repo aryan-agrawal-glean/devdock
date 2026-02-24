@@ -238,73 +238,93 @@ fn wait_for_mysql(container: &str, timeout: Duration) -> Result<()> {
     anyhow::bail!("Timeout: {container} reported healthy but MySQL is not accepting connections")
 }
 
-/// Execute SQL command in container with retry logic for transient connection failures
-fn docker_mysql_exec(container: &str, sql: &str) -> Result<()> {
-    let max_retries = 5;
+/// Check if a MySQL error message indicates a transient connection failure worth retrying.
+///
+/// Retryable errors:
+/// - ERROR 2002: Can't connect to local MySQL server through socket
+/// - ERROR 2003: Can't connect to MySQL server
+/// - ERROR 2013: Lost connection to MySQL server during query
+fn is_retryable_mysql_error(stderr: &str) -> bool {
+    stderr.contains("ERROR 2002")
+        || stderr.contains("ERROR 2003")
+        || stderr.contains("ERROR 2013")
+        || stderr.contains("Can't connect")
+        || stderr.contains("Lost connection")
+}
+
+/// Run a MySQL operation with retry logic for transient connection failures.
+///
+/// Retries up to `max_retries` times with exponential backoff (1s, 2s, 4s, ...).
+/// Non-retryable errors (e.g. SQL syntax errors) fail immediately.
+fn with_mysql_retry<F>(label: &str, max_retries: u32, mut run: F) -> Result<()>
+where
+    F: FnMut() -> Result<std::process::Output>,
+{
     let mut last_error = None;
 
     for attempt in 0..max_retries {
-        let output = Command::new("docker")
-            .args(["exec", container, "mysql", "-u", "root", "-e", sql])
-            .output()?;
+        let output = run()?;
 
         if output.status.success() {
             return Ok(());
         }
 
         let stderr = String::from_utf8_lossy(&output.stderr);
-        // Check for socket/connection errors that are worth retrying
-        // ERROR 2002: Can't connect to local MySQL server through socket
-        // ERROR 2003: Can't connect to MySQL server
-        if stderr.contains("ERROR 2002")
-            || stderr.contains("ERROR 2003")
-            || stderr.contains("Can't connect")
-        {
+        if is_retryable_mysql_error(&stderr) {
             last_error = Some(format!("MySQL connection failed: {stderr}"));
             if attempt < max_retries - 1 {
-                let delay = 2u64.pow(attempt as u32); // 1s, 2s, 4s, 8s
+                let delay = 2u64.pow(attempt); // 1s, 2s, 4s, 8s
                 output::warn(&format!(
-                    "MySQL not ready, retrying in {delay}s ({}/{max_retries})...",
+                    "{label}: MySQL connection error, retrying in {delay}s ({}/{max_retries})...",
                     attempt + 1
                 ));
                 std::thread::sleep(Duration::from_secs(delay));
                 continue;
             }
         } else {
-            // Non-retryable error
-            anyhow::bail!("MySQL command failed: {stderr}");
+            // Non-retryable error — fail immediately
+            anyhow::bail!("{label} failed: {stderr}");
         }
     }
 
-    anyhow::bail!(last_error.unwrap_or_else(|| "MySQL command failed after retries".to_string()))
+    anyhow::bail!(last_error.unwrap_or_else(|| format!("{label} failed after {max_retries} retries")))
 }
 
-/// Execute SQL file in container (with GTID stripping)
-fn docker_mysql_import(container: &str, sql_file: &PathBuf) -> Result<()> {
-    // Read file and strip GTID statements
-    let content = std::fs::read_to_string(sql_file)?;
+/// Execute SQL command in container with retry logic for transient connection failures
+fn docker_mysql_exec(container: &str, sql: &str) -> Result<()> {
+    with_mysql_retry(sql, 5, || {
+        Command::new("docker")
+            .args(["exec", container, "mysql", "-u", "root", "-e", sql])
+            .output()
+            .map_err(Into::into)
+    })
+}
 
-    // Strip GTID statements using regex
+/// Execute SQL file in container (with GTID stripping and retry logic)
+fn docker_mysql_import(container: &str, sql_file: &PathBuf) -> Result<()> {
+    // Read file and strip GTID statements once (no need to re-read on retry)
+    let content = std::fs::read_to_string(sql_file)?;
     let re = regex::Regex::new(r"SET @@GLOBAL\.GTID_[A-Z_]+=[^;]*;").unwrap();
     let cleaned = re.replace_all(&content, "");
 
-    // Pipe to mysql
-    let mut child = Command::new("docker")
-        .args(["exec", "-i", container, "mysql", "-u", "root"])
-        .stdin(std::process::Stdio::piped())
-        .spawn()?;
+    let label = format!("Import {:?}", sql_file.file_name().unwrap_or_default());
+    with_mysql_retry(&label, 3, || {
+        let mut child = Command::new("docker")
+            .args(["exec", "-i", container, "mysql", "-u", "root"])
+            .stdin(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()?;
 
-    if let Some(ref mut stdin) = child.stdin {
-        use std::io::Write;
-        stdin.write_all(cleaned.as_bytes())?;
-    }
+        if let Some(ref mut stdin) = child.stdin {
+            use std::io::Write;
+            stdin.write_all(cleaned.as_bytes())?;
+        }
+        // Drop stdin so mysql sees EOF and finishes processing
+        drop(child.stdin.take());
 
-    let status = child.wait()?;
-    if !status.success() {
-        anyhow::bail!("Failed to import SQL file: {sql_file:?}");
-    }
-
-    Ok(())
+        let output = child.wait_with_output()?;
+        Ok(output)
+    })
 }
 
 /// Set proper permissions on the MySQL seed directory
