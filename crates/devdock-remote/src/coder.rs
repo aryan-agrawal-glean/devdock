@@ -28,12 +28,22 @@ pub fn check_coder_installed() -> Result<()> {
     Ok(())
 }
 
+fn region_to_preset(region: &str) -> &str {
+    match region {
+        "us-east4-a" => "us-east",
+        "us-west1-a" => "us-west",
+        "us-central1-a" => "us-central",
+        _ => "us-east",
+    }
+}
+
 /// Create a new Coder workspace.
 pub fn create_workspace(config: &CoderWorkspaceConfig) -> Result<String> {
     check_coder_installed()?;
 
     info!("Creating Coder workspace: {}", config.workspace_name);
 
+    let preset = region_to_preset(&config.region);
     let mut cmd = Command::new("coder");
     cmd.arg("create")
         .arg(&config.workspace_name)
@@ -52,7 +62,7 @@ pub fn create_workspace(config: &CoderWorkspaceConfig) -> Result<String> {
         .arg("--parameter")
         .arg("force_fresh_data=false")
         .arg("--preset")
-        .arg("master")
+        .arg(preset)
         .arg("--yes"); // Non-interactive
 
     debug!("Running: {:?}", cmd);
