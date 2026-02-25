@@ -451,6 +451,7 @@ const DEV_VERSION_SUFFIX: &str = env!("DEV_VERSION_SUFFIX");
 /// Check for updates on startup (called from main)
 pub async fn check_on_startup() -> Result<()> {
     // Dev builds (local cargo build) should never auto-update
+    #[allow(clippy::const_is_empty)]
     if !DEV_VERSION_SUFFIX.is_empty() {
         let full_version = format!("{}{}", get_current_version(), DEV_VERSION_SUFFIX);
         output::info(&format!("Running dev build ({}) — skipping auto-update check", full_version));

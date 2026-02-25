@@ -4,7 +4,7 @@ use crate::{logging::OperationLogger, output};
 use anyhow::{anyhow, Result};
 use colored::Colorize;
 use devdock_config::ProfileLoader;
-use devdock_remote::{coder, workspace, CoderWorkspaceConfig};
+use devdock_remote::{check_gcloud_auth, coder, workspace, CoderWorkspaceConfig, RemoteError};
 use devdock_state::{
     instance::{Instance, InstanceStatus, SessionOrigin},
     ports::PortAllocator,
@@ -31,6 +31,34 @@ pub struct RemoteStartConfig {
 /// Start remote DevDock workflow.
 pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
     info!("Starting remote DevDock workflow");
+
+    // Preflight check: verify gcloud auth is valid before any remote operations
+    // This fails fast with a clear error message, avoiding wasted time on workspace
+    // provisioning that would fail later due to expired credentials.
+    if let Err(e) = check_gcloud_auth() {
+        match e {
+            RemoteError::GcloudNotInstalled => {
+                output::error("gcloud CLI not found");
+                println!();
+                println!("Remote DevDock requires the gcloud CLI to sync credentials.");
+                println!("Install gcloud: {}", "https://cloud.google.com/sdk/docs/install".cyan());
+                return Err(anyhow!("{}", e));
+            }
+            RemoteError::GcloudAuthFailed => {
+                output::error("gcloud auth is missing or expired");
+                println!();
+                println!("Remote DevDock requires valid gcloud authentication.");
+                println!("Run the following command and retry:");
+                println!();
+                println!("  {}", "gcloud auth login --update-adc".cyan().bold());
+                println!();
+                return Err(anyhow!("{}", e));
+            }
+            _ => {
+                return Err(anyhow!("{}", e));
+            }
+        }
+    }
 
     let RemoteStartConfig {
         profile,
