@@ -3,9 +3,10 @@
 use crate::{logging::OperationLogger, output};
 use anyhow::{anyhow, Result};
 use colored::Colorize;
+use devdock_config::ProfileLoader;
 use devdock_remote::{coder, workspace, CoderWorkspaceConfig};
 use devdock_state::{
-    instance::{Instance, InstanceStatus},
+    instance::{Instance, InstanceStatus, SessionOrigin},
     ports::PortAllocator,
     StateManager,
 };
@@ -51,12 +52,14 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
     let workspace_name = workspace_name.or_else(|| vm.clone()).unwrap_or_else(|| branch.clone());
     let workspace_name = sanitize_workspace_name(&workspace_name);
 
-    // Find profile path
+    // Find profile path and load profile for GCP project
     let profile_path = find_profile(&profile)?;
+    let loader = ProfileLoader::new();
+    let loaded_profile = loader.load_from_path(&profile_path)?;
 
     // Register instance in database
     let state = StateManager::new().await?;
-    let instance_id = uuid::Uuid::new_v4().to_string();
+    let instance_id = Instance::generate_id(SessionOrigin::Dev);
 
     // Calculate port offset
     let offset = if let Some(base) = port_base {
@@ -106,7 +109,7 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
         println!("  {}: {}", "Workspace".cyan(), workspace_name.green());
         println!("  {}: devdock-glean", "Template".cyan());
         println!("  {}: {}", "Region".cyan(), region);
-        println!("  {}: {}", "DevDock ID".cyan(), &instance_id[..8]);
+        println!("  {}: {}", "DevDock ID".cyan(), Instance::display_id(&instance_id));
         println!("  {}: {}", "Port Base".cyan(), offset);
         println!();
         println!("{}", "⏱️  Expected time: ~2-3 minutes total".yellow());
@@ -126,7 +129,7 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
             "{} | {} | {}",
             format!("Profile: {profile}").dimmed(),
             format!("Branch: {branch}").dimmed(),
-            format!("ID: {}", &instance_id[..8]).dimmed()
+            format!("ID: {}", Instance::display_id(&instance_id)).dimmed()
         );
         println!();
         println!("⏱️  Expected: ~2-3 min");
@@ -492,11 +495,18 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
         // Print success message (clean and actionable)
         println!();
 
+        let gcp_logs_url = format!(
+            "https://console.cloud.google.com/logs/query;query=labels.devdock_id%3D%22{}%22;summaryFields=labels%252Flogger_source:false:32:beginning?project={}",
+            instance_id,
+            loaded_profile.project
+        );
+
         if verbose {
             output::header("🚀 Remote DevDock is Ready!");
             println!("{}", format!("Total time: {total_time}").green().bold());
             println!();
             println!("Access your remote DevDock:");
+            println!("  {}", "──────────────────────────────────────────────────────────".cyan());
             println!("  {}: {}", "Workspace".cyan(), workspace_name);
             println!("  {}: coder ssh {}", "SSH".cyan(), workspace_name);
             println!(
@@ -504,6 +514,9 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
                 "Tilt UI".cyan(),
                 format!("http://localhost:{}", offset + 10350).cyan()
             );
+            println!("  {}: {}", "Session".cyan(), instance_id.dimmed());
+            println!("  {}: {}", "Logs".cyan(), gcp_logs_url.underline());
+            println!("  {}", "──────────────────────────────────────────────────────────".cyan());
             println!();
 
             if auto_forward {
@@ -528,12 +541,16 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
             println!("{}", format!("│  ✅ Ready in {total_time}                     │").green());
             println!("{}", "╰────────────────────────────────────────╯".green());
             println!();
+            println!("  {}", "──────────────────────────────────────────────────────────".cyan());
             println!(
-                "{} {}",
+                "  {} {}",
                 "🌐 Tilt UI:".cyan(),
                 format!("http://localhost:{}", offset + 10350).cyan().underline()
             );
-            println!("{} coder ssh {}", "📁 SSH:    ".dimmed(), workspace_name.dimmed());
+            println!("  {} coder ssh {}", "📁 SSH:    ".dimmed(), workspace_name.dimmed());
+            println!("  {} {}", "🔑 Session:".cyan(), instance_id.dimmed());
+            println!("  {} {}", "📋 Logs:   ".cyan(), gcp_logs_url.underline());
+            println!("  {}", "──────────────────────────────────────────────────────────".cyan());
             println!();
 
             // Show actionable next steps based on context
@@ -602,11 +619,14 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
 
             logger.log_section("Setup Failed")?;
             logger.log(&format!("Error: {e}"))?;
-            logger.log(&format!("Instance {} marked as Stopped", &instance_id[..8]))?;
+            logger.log(&format!(
+                "Instance {} marked as Stopped",
+                Instance::display_id(&instance_id)
+            ))?;
 
             output::error(&format!("DevDock setup failed: {e}"));
             println!();
-            println!("To clean up: devdock stop -i {}", &instance_id[..8]);
+            println!("To clean up: devdock stop -i {}", Instance::display_id(&instance_id));
             Err(e)
         }
     }
@@ -730,9 +750,13 @@ async fn cleanup_stale_sync_files(state_manager: &StateManager) -> Result<()> {
 }
 
 /// Extract devdock ID from sync filename.
+/// Handles both legacy hex-timestamp IDs and new prefixed UUIDs (dev-{uuid}, bot-{uuid}).
 fn extract_devdock_id_from_filename(filename: &str) -> Option<String> {
-    // Remove extensions and suffixes
     let base = filename
+        .trim_end_matches(".stats.json")
+        .trim_end_matches(".history.jsonl")
+        .trim_end_matches(".errors.jsonl")
+        .trim_end_matches(".queue.json")
         .trim_end_matches(".pid")
         .trim_end_matches(".excludes")
         .trim_end_matches(".hb")
@@ -740,10 +764,81 @@ fn extract_devdock_id_from_filename(filename: &str) -> Option<String> {
         .trim_end_matches(".log")
         .trim_end_matches("_portforward");
 
-    // UUID format: 8-4-4-4-12 (36 chars with 4 dashes)
-    if base.len() == 36 && base.matches('-').count() == 4 {
-        Some(base.to_string())
-    } else {
-        None
+    if base.is_empty() || base == filename {
+        return None;
+    }
+
+    Some(base.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extract_id_from_prefixed_uuid_pid() {
+        let id = extract_devdock_id_from_filename("dev-550e8400-e29b-41d4-a716-446655440000.pid");
+        assert_eq!(id.as_deref(), Some("dev-550e8400-e29b-41d4-a716-446655440000"));
+    }
+
+    #[test]
+    fn extract_id_from_bot_prefixed_uuid_pid() {
+        let id = extract_devdock_id_from_filename("bot-550e8400-e29b-41d4-a716-446655440000.pid");
+        assert_eq!(id.as_deref(), Some("bot-550e8400-e29b-41d4-a716-446655440000"));
+    }
+
+    #[test]
+    fn extract_id_from_legacy_hex_pid() {
+        let id = extract_devdock_id_from_filename("1945a3b2c1f.pid");
+        assert_eq!(id.as_deref(), Some("1945a3b2c1f"));
+    }
+
+    #[test]
+    fn extract_id_from_legacy_uuid_pid() {
+        let id = extract_devdock_id_from_filename("550e8400-e29b-41d4-a716-446655440000.pid");
+        assert_eq!(id.as_deref(), Some("550e8400-e29b-41d4-a716-446655440000"));
+    }
+
+    #[test]
+    fn extract_id_from_various_extensions() {
+        let base = "dev-550e8400-e29b-41d4-a716-446655440000";
+        for ext in [".pid", ".excludes", ".hb", ".stats", ".log"] {
+            let filename = format!("{base}{ext}");
+            assert_eq!(
+                extract_devdock_id_from_filename(&filename).as_deref(),
+                Some(base),
+                "failed for extension {ext}"
+            );
+        }
+    }
+
+    #[test]
+    fn extract_id_from_portforward_pid() {
+        let id = extract_devdock_id_from_filename(
+            "dev-550e8400-e29b-41d4-a716-446655440000_portforward.pid",
+        );
+        assert_eq!(id.as_deref(), Some("dev-550e8400-e29b-41d4-a716-446655440000"));
+    }
+
+    #[test]
+    fn extract_id_from_stats_json() {
+        let id =
+            extract_devdock_id_from_filename("dev-550e8400-e29b-41d4-a716-446655440000.stats.json");
+        assert_eq!(id.as_deref(), Some("dev-550e8400-e29b-41d4-a716-446655440000"));
+    }
+
+    #[test]
+    fn extract_id_from_history_jsonl() {
+        let id = extract_devdock_id_from_filename(
+            "dev-550e8400-e29b-41d4-a716-446655440000.history.jsonl",
+        );
+        assert_eq!(id.as_deref(), Some("dev-550e8400-e29b-41d4-a716-446655440000"));
+    }
+
+    #[test]
+    fn extract_id_returns_none_for_unrecognized() {
+        assert_eq!(extract_devdock_id_from_filename("readme.txt"), None);
+        assert_eq!(extract_devdock_id_from_filename(".gitkeep"), None);
+        assert_eq!(extract_devdock_id_from_filename(""), None);
     }
 }

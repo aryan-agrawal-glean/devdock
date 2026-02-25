@@ -4,7 +4,7 @@ use crate::output;
 use anyhow::Result;
 use devdock_config::docker;
 use devdock_remote::ssh;
-use devdock_state::{InstanceStatus, StateManager};
+use devdock_state::{Instance, InstanceStatus, StateManager};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -357,12 +357,16 @@ where
         if should_clean {
             output::info(&format!(
                 "  Removing instance {} ({})",
-                &instance.id[..8],
+                Instance::display_id(&instance.id),
                 instance.status.as_str()
             ));
 
             if let Err(e) = state_manager.delete_instance(&instance.id).await {
-                output::warn(&format!("  Failed to delete instance {}: {}", &instance.id[..8], e));
+                output::warn(&format!(
+                    "  Failed to delete instance {}: {}",
+                    Instance::display_id(&instance.id),
+                    e
+                ));
             } else {
                 cleaned_count += 1;
             }

@@ -78,6 +78,9 @@ pub struct TelemetryCollector {
 
 impl TelemetryCollector {
     pub fn new(config: TelemetryCollectorConfig) -> Self {
+        if config.devdock_id.is_empty() {
+            tracing::warn!("TelemetryCollector created with empty devdock_id — metrics will lack session correlation");
+        }
         TelemetryCollector {
             config,
             tilt_client: TiltClient::new(),

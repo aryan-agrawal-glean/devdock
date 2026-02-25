@@ -37,7 +37,12 @@ pub async fn execute(detailed: bool) -> Result<()> {
                 running.len()
             );
             for inst in running {
-                println!("  • {} ({}) - {}", &inst.id[..8], inst.branch, inst.workspace_path);
+                println!(
+                    "  • {} ({}) - {}",
+                    Instance::display_id(&inst.id),
+                    inst.branch,
+                    inst.workspace_path
+                );
             }
         }
     }
@@ -61,7 +66,7 @@ async fn print_instance_status(
     println!("\n{}", "DevDock Status".bold());
     println!("{}", "═".repeat(50));
     println!("  Status:     {status_str}");
-    println!("  Instance:   {}", &instance.id[..8]);
+    println!("  Instance:   {}", Instance::display_id(&instance.id));
     println!("  Profile:    {}", instance.profile);
     println!("  Branch:     {}", instance.branch);
     println!("  Port Base:  {}", instance.port_base);

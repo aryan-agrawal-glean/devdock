@@ -2,8 +2,9 @@
 
 use crate::output;
 use anyhow::{Context, Result};
+use colored::Colorize;
 use devdock_config::{DependencyResolver, ProfileLoader, ProfileValidator};
-use devdock_state::{Instance, InstanceStatus, PortAllocator, StateManager};
+use devdock_state::{Instance, InstanceStatus, PortAllocator, SessionOrigin, StateManager};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -12,7 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub async fn execute(
     profile_name: &str,
     services: Option<&str>,
-    _ci_mode: bool,
+    ci_mode: bool,
     run_monitor: bool,
     monitor_timeout: Option<u64>,
     telemetry_enabled: bool,
@@ -69,8 +70,11 @@ pub async fn execute(
         setup_docker_networks()?;
     }
 
+    // Determine session origin from ci_mode flag
+    let origin = if ci_mode { SessionOrigin::Bot } else { SessionOrigin::Dev };
+
     // Step 5: Register instance and allocate ports (skip in dry-run mode)
-    let (state_manager, instance_id, port_base) = if !dry_run {
+    let (state_manager, instance_id, _port_base) = if !dry_run {
         let state_manager = StateManager::new().await?;
         let port_allocator = PortAllocator::new(state_manager.clone()).await;
         let port_base = port_allocator.allocate().await?;
@@ -83,12 +87,12 @@ pub async fn execute(
         let instance_id = std::env::var("DEVDOCK_ID")
             .ok()
             .filter(|id| !id.is_empty())
-            .unwrap_or_else(Instance::generate_id);
+            .unwrap_or_else(|| Instance::generate_id(origin));
 
         let instance = Instance {
             id: instance_id.clone(),
             workspace_path: workspace_path.clone(),
-            workspace_name: None, // Local instances don't need workspace name
+            workspace_name: None,
             branch,
             profile: profile_name.to_string(),
             mode: "local".to_string(),
@@ -101,13 +105,14 @@ pub async fn execute(
         state_manager.register_instance(&instance).await?;
         output::success(&format!(
             "Registered instance: {} (port base: {})",
-            &instance.id[..8],
+            Instance::display_id(&instance.id),
             port_base
         ));
 
         (Some(state_manager), instance_id, port_base)
     } else {
-        (None, String::new(), 0)
+        // Generate a real ID even in dry-run for display safety, but skip DB registration
+        (None, Instance::generate_id(origin), 0)
     };
 
     // Set DEVDOCK_ID early so config generation can inject it into service env vars
@@ -154,14 +159,23 @@ pub async fn execute(
     // Track tilt up time for telemetry
     let tilt_up_time = chrono::Utc::now();
 
+    let gcp_logs_url = format!(
+        "https://console.cloud.google.com/logs/query;query=labels.devdock_id%3D%22{instance_id}%22;summaryFields=labels%252Flogger_source:false:32:beginning?project={}",
+        profile.project
+    );
+
     output::success("DevDock started!");
-    println!("\n  Tilt UI: http://localhost:10350");
-    println!("  Services: https://local.glean.com:{port_base}");
+    println!();
+    println!("  {}", "──────────────────────────────────────────────────────────".cyan());
+    println!("  {} http://localhost:10350", "Tilt UI:".cyan().bold());
+    println!("  {} {}", "Session:".cyan().bold(), instance_id.dimmed());
+    println!("  {} {}", "Logs:   ".cyan().bold(), gcp_logs_url.underline());
+    println!("  {}", "──────────────────────────────────────────────────────────".cyan());
 
     if run_monitor {
         println!("\nResource monitor enabled (timeout: {}s)...\n", monitor_timeout.unwrap_or(1200));
     } else {
-        println!("\nPress Ctrl+C to stop DevDock");
+        println!("\n  {}", "Press Ctrl+C to stop DevDock".dimmed());
     }
 
     // Wait for Tilt process (optionally with monitoring)
@@ -479,9 +493,9 @@ async fn wait_for_tilt(
                             duration_secs
                         ));
 
-                        // Emit telemetry on success
                         if telemetry_enabled {
                             emit_telemetry(
+                                &instance_id,
                                 "success",
                                 resources.len(),
                                 0,
@@ -500,6 +514,7 @@ async fn wait_for_tilt(
 
                         if telemetry_enabled {
                             emit_telemetry(
+                                &instance_id,
                                 "timeout",
                                 healthy.len(),
                                 failed.len(),
@@ -518,6 +533,7 @@ async fn wait_for_tilt(
 
                         if telemetry_enabled {
                             emit_telemetry(
+                                &instance_id,
                                 "failed",
                                 0,
                                 failed.len(),
@@ -533,6 +549,7 @@ async fn wait_for_tilt(
 
                         if telemetry_enabled {
                             emit_telemetry(
+                                &instance_id,
                                 "tilt_stopped",
                                 0,
                                 0,
@@ -876,7 +893,9 @@ fn cleanup_temp_files(workspace_root: &Path) -> Result<()> {
 }
 
 /// Emit telemetry data to BigQuery
+#[allow(clippy::too_many_arguments)]
 async fn emit_telemetry(
+    devdock_id: &str,
     status: &str,
     healthy_count: usize,
     failed_count: usize,
@@ -891,7 +910,6 @@ async fn emit_telemetry(
     };
 
     let machine_id = get_machine_id();
-    let devdock_id = uuid::Uuid::new_v4().to_string();
     let now = Utc::now();
 
     // Calculate timing metrics
@@ -899,9 +917,9 @@ async fn emit_telemetry(
     let total_startup_secs = (now - command_start_time).num_seconds() as f64;
 
     let session = SessionMetrics {
-        devdock_id: devdock_id.clone(),
+        devdock_id: devdock_id.to_string(),
         machine_id: machine_id.clone(),
-        architecture: std::env::consts::OS.to_string(), // darwin, linux, windows
+        architecture: std::env::consts::OS.to_string(),
         platform: std::env::consts::OS.to_string(),
         project: "scio".to_string(),
         profile: profile.to_string(),
@@ -923,7 +941,6 @@ async fn emit_telemetry(
 
     let snapshot = TelemetrySnapshot { session: Some(session), ..Default::default() };
 
-    // Configure BigQuery emitter
     let config = BigQueryConfig {
         project_id: "dev-sandbox-334901".to_string(),
         dataset: "devdock".to_string(),
@@ -931,7 +948,6 @@ async fn emit_telemetry(
         ..Default::default()
     };
 
-    // Try to emit to BigQuery
     match BigQueryEmitter::new(config) {
         Ok(emitter) => match emitter.emit(&snapshot).await {
             Ok(result) => {

@@ -2,7 +2,7 @@
 
 use crate::output;
 use anyhow::{Context, Result};
-use devdock_state::{InstanceStatus, StateManager};
+use devdock_state::{Instance, InstanceStatus, StateManager};
 use devdock_sync::daemon as sync_daemon;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -29,7 +29,11 @@ pub async fn execute(target: Option<&str>, force: bool, delete: bool) -> Result<
     // Get instance details
     let instance = state_manager.get_instance(&instance_id).await?.context("Instance not found")?;
 
-    output::info(&format!("Stopping instance: {} ({})", &instance_id[..8], instance.branch));
+    output::info(&format!(
+        "Stopping instance: {} ({})",
+        Instance::display_id(&instance_id),
+        instance.branch
+    ));
 
     // Update status to stopping
     state_manager.update_status(&instance_id, InstanceStatus::Stopping).await?;

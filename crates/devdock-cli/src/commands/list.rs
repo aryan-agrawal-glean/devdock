@@ -2,7 +2,7 @@
 
 use anyhow::Result;
 use colored::Colorize;
-use devdock_state::{InstanceStatus, StateManager};
+use devdock_state::{Instance, InstanceStatus, StateManager};
 
 pub async fn execute(running_only: bool) -> Result<()> {
     let state_manager = StateManager::new().await?;
@@ -90,7 +90,7 @@ pub async fn execute(running_only: bool) -> Result<()> {
 
         println!(
             "{:<10} {:<12} {:<8} {:<15} {:<8} {:<10} {:<40}",
-            &instance.id[..8],
+            Instance::display_id(&instance.id),
             status_str,
             mode,
             instance.profile,

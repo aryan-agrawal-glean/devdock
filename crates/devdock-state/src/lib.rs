@@ -5,5 +5,5 @@ pub mod instance;
 pub mod ports;
 
 pub use db::StateManager;
-pub use instance::{Instance, InstanceStatus};
+pub use instance::{Instance, InstanceStatus, SessionOrigin};
 pub use ports::PortAllocator;

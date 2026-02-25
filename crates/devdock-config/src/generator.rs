@@ -692,10 +692,11 @@ impl ConfigGenerator {
 
                 env.insert("USE_DEVDOCK_INI".to_string(), "true".to_string());
                 env.insert("IS_DEVDOCK".to_string(), "true".to_string());
-                env.insert(
-                    "DEVDOCK_ID".to_string(),
-                    std::env::var("DEVDOCK_ID").unwrap_or_default(),
-                );
+                let devdock_id = std::env::var("DEVDOCK_ID").unwrap_or_default();
+                if devdock_id.is_empty() {
+                    tracing::warn!("DEVDOCK_ID env var is empty during config generation — services will have no session correlation");
+                }
+                env.insert("DEVDOCK_ID".to_string(), devdock_id);
 
                 let hot_reload = profile_service.and_then(|s| {
                     s.hot_reload.as_ref().map(|hr| match hr {

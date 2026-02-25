@@ -35,10 +35,10 @@ pub async fn execute(
 
     let monitor = StartupMonitor::new(config);
 
-    // Get devdock_id (must be set by start.rs, fallback to new UUID for standalone runs)
+    // Get devdock_id (must be set by start.rs, fallback to new ID for standalone runs)
     let devdock_id = std::env::var("DEVDOCK_ID").unwrap_or_else(|_| {
-        tracing::warn!("DEVDOCK_ID not set, generating new UUID (correlation may break)");
-        uuid::Uuid::new_v4().to_string()
+        tracing::warn!("DEVDOCK_ID not set, generating new ID (correlation may break)");
+        devdock_state::Instance::generate_id(devdock_state::SessionOrigin::Dev)
     });
 
     // Get profile name for telemetry (use CLI arg if provided, otherwise detect)
