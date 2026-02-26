@@ -60,9 +60,9 @@ jobs:
           # Get the SHA of main branch
           MAIN_SHA=$(gh api /repos/${{ github.repository }}/git/ref/heads/main --jq '.object.sha')
 
-          # Create a blob with the new content
-          BLOB_SHA=$(echo "$UPDATED_CONTENT" | gh api /repos/${{ github.repository }}/git/blobs \
-            --input - \
+          # Create a blob with the new content (using proper JSON)
+          BLOB_SHA=$(gh api /repos/${{ github.repository }}/git/blobs \
+            --field content="$UPDATED_CONTENT" \
             --field encoding=utf-8 \
             --jq '.sha')
 
