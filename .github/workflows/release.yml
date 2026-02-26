@@ -25,9 +25,17 @@ jobs:
     outputs:
       pr_number: ${{ steps.create-pr.outputs.pr_number }}
     steps:
+      - name: Generate GitHub App Token
+        id: generate-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          token: ${{ steps.generate-token.outputs.token }}
 
       - name: Configure Git
         run: |
@@ -54,7 +62,7 @@ jobs:
         id: create-pr
         uses: peter-evans/create-pull-request@v7
         with:
-          token: ${{ github.token }}
+          token: ${{ steps.generate-token.outputs.token }}
           commit-message: "chore: bump version to ${{ github.event.inputs.version }}"
           branch: release/v${{ github.event.inputs.version }}
           delete-branch: true
