@@ -108,12 +108,12 @@ impl GooglePlatform {
         // Get project number
         let project_number = Self::get_project_number(&project).await?;
 
-        // Get zone from dynamic config first, fallback to us-central1-c (not us-central1-a!)
+        // Get zone from dynamic config first, fallback to us-central1-a
         // Python reads from config.get('google', 'primaryZone')
         let zone = dynamic_config
             .and_then(|c| c.get("google", "primaryZone"))
             .cloned()
-            .unwrap_or_else(|| "us-central1-c".to_string());
+            .unwrap_or_else(|| "us-central1-a".to_string());
 
         // Derive region from zone (remove last 2 chars: us-central1-c -> us-central1)
         let region = if zone.len() > 2 {
