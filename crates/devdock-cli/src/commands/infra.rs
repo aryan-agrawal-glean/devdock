@@ -310,7 +310,7 @@ fn docker_mysql_import(container: &str, sql_file: &PathBuf) -> Result<()> {
     let cleaned = re.replace_all(&content, "");
 
     let label = format!("Import {:?}", sql_file.file_name().unwrap_or_default());
-    with_mysql_retry(&label, 3, || {
+    with_mysql_retry(&label, 10, || {
         let mut child = Command::new("docker")
             .args(["exec", "-i", container, "mysql", "-u", "root"])
             .stdin(std::process::Stdio::piped())
