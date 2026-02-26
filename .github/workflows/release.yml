@@ -32,6 +32,10 @@ jobs:
           app-id: ${{ secrets.APP_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
 
+      - uses: actions/checkout@v6
+        with:
+          token: ${{ steps.generate-token.outputs.token }}
+
       - name: Create PR with version bump using GitHub API
         id: create-pr
         env:
@@ -97,17 +101,14 @@ jobs:
             }
           }" | gh api /repos/${{ github.repository }}/git/commits --input - --jq '.sha')
 
-          # Delete branch if it exists
-          gh api /repos/${{ github.repository }}/git/refs/heads/$BRANCH -X DELETE 2>/dev/null || true
+          # Delete branch if it exists (ignore 404 if it doesn't exist)
+          gh api /repos/${{ github.repository }}/git/refs/heads/$BRANCH -X DELETE 2>&1 | grep -v "404" || true
 
-          # Create/update branch reference
-          gh api /repos/${{ github.repository }}/git/refs \
-            --field ref="refs/heads/$BRANCH" \
-            --field sha="$COMMIT_SHA" || \
-          gh api /repos/${{ github.repository }}/git/refs/heads/$BRANCH \
-            --field sha="$COMMIT_SHA" \
-            --field force=true \
-            -X PATCH
+          # Create branch reference
+          echo "{
+            \"ref\": \"refs/heads/$BRANCH\",
+            \"sha\": \"$COMMIT_SHA\"
+          }" | gh api /repos/${{ github.repository }}/git/refs --input -
 
           # Create pull request
           PR_URL=$(gh pr create \
