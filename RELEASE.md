@@ -18,7 +18,7 @@ gh pr merge <PR_NUMBER> --squash
 ## What Happens
 
 1. Workflow creates PR with version bump in `Cargo.toml`
-2. You review and merge the PR
+2. You review and merge the PR (CI checks will run)
 3. Tag `v0.3.9` is created automatically
 4. Release builds and publishes automatically (~10-15 min)
 

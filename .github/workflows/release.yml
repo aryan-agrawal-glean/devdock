@@ -34,11 +34,6 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Create release branch
-        run: |
-          VERSION="${{ github.event.inputs.version }}"
-          BRANCH="release/v$VERSION"
-          git checkout -b "$BRANCH"
 
       - name: Update Cargo.toml version
         run: |
@@ -55,43 +50,35 @@ jobs:
           ' Cargo.toml > Cargo.toml.tmp
           mv Cargo.toml.tmp Cargo.toml
 
-      - name: Commit version bump
-        run: |
-          VERSION="${{ github.event.inputs.version }}"
-          git add Cargo.toml
-          git commit -m "chore: bump version to $VERSION"
-
-      - name: Push release branch
-        run: |
-          VERSION="${{ github.event.inputs.version }}"
-          BRANCH="release/v$VERSION"
-          git push origin "$BRANCH"
-
       - name: Create Pull Request
         id: create-pr
-        env:
-          GH_TOKEN: ${{ github.token }}
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ github.token }}
+          commit-message: "chore: bump version to ${{ github.event.inputs.version }}"
+          branch: release/v${{ github.event.inputs.version }}
+          delete-branch: true
+          title: "chore: bump version to ${{ github.event.inputs.version }}"
+          body: |
+            🤖 Automated version bump to **v${{ github.event.inputs.version }}**
+
+            ## Changes
+            - Update workspace version in `Cargo.toml` to ${{ github.event.inputs.version }}
+
+            ## Next Steps
+            1. Review and merge this PR
+            2. After merge, the release will be created automatically with tag `v${{ github.event.inputs.version }}`
+
+            ---
+            _This PR was created automatically by the [Release workflow](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})_
+          labels: release
+          assignees: ${{ github.actor }}
+
+      - name: Output PR info
+        if: steps.create-pr.outputs.pull-request-number
         run: |
-          VERSION="${{ github.event.inputs.version }}"
-          PR_URL=$(gh pr create \
-            --title "chore: bump version to $VERSION" \
-            --body "🤖 Automated version bump to **v$VERSION**
-
-          ## Changes
-          - Update workspace version in \`Cargo.toml\` to $VERSION
-
-          ## Next Steps
-          1. Review and merge this PR
-          2. After merge, the release will be created automatically with tag \`v$VERSION\`
-
-          ---
-          _This PR was created automatically by the [Release workflow](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})_" \
-            --label "release" \
-            --base main)
-
-          PR_NUMBER=$(echo "$PR_URL" | grep -o '[0-9]*$')
-          echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
-          echo "Created PR: $PR_URL"
+          echo "Created PR #${{ steps.create-pr.outputs.pull-request-number }}"
+          echo "URL: ${{ steps.create-pr.outputs.pull-request-url }}"
 
   build:
     name: Build ${{ matrix.target }}
