@@ -218,6 +218,52 @@ pub fn list_git_modified_files(repo_path: &Path) -> Result<Vec<PathBuf>> {
     Ok(files)
 }
 
+/// List all git-tracked files plus untracked files.
+/// Used when syncing entire branch (not just diff from master).
+pub fn list_git_tracked_and_untracked_files(repo_path: &Path) -> Result<Vec<PathBuf>> {
+    info!("Listing all git-tracked and untracked files");
+
+    // Start with all tracked files
+    let mut files = list_git_tracked_files(repo_path)?;
+
+    // Add untracked files (same pattern as list_git_modified_files)
+    use std::process::Command;
+    let untracked_output = Command::new("git")
+        .args(["ls-files", "--others", "--exclude-standard"])
+        .current_dir(repo_path)
+        .output();
+
+    if let Ok(ut_output) = untracked_output {
+        if ut_output.status.success() {
+            let ut_stdout = String::from_utf8_lossy(&ut_output.stdout);
+            let mut untracked_count = 0usize;
+
+            for line in ut_stdout.lines() {
+                let path = PathBuf::from(line.trim());
+                let full_path = repo_path.join(&path);
+
+                if full_path.exists()
+                    && full_path.is_file()
+                    && should_sync_file_by_pattern(&path)
+                    && !files.contains(&path)
+                {
+                    files.push(path);
+                    untracked_count += 1;
+                }
+            }
+
+            if untracked_count > 0 {
+                info!("Found {} additional untracked files to sync", untracked_count);
+            }
+        } else {
+            warn!("git ls-files --others failed, skipping untracked files");
+        }
+    }
+
+    info!("Found {} total files to sync (tracked + untracked)", files.len());
+    Ok(files)
+}
+
 /// Check if a path should be synced based on git tracking.
 pub fn should_sync_file(repo_path: &Path, file_path: &Path, full_mode: bool) -> Result<bool> {
     if full_mode {

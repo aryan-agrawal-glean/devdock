@@ -19,6 +19,7 @@ use tracing::{info, warn};
 pub struct RemoteStartConfig {
     pub profile: String,
     pub workspace_name: Option<String>,
+    pub branch: Option<String>,
     pub region: String,
     pub port_base: Option<u16>,
     pub vm: Option<String>,
@@ -63,6 +64,7 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
     let RemoteStartConfig {
         profile,
         workspace_name,
+        branch,
         region,
         port_base,
         vm,
@@ -74,10 +76,34 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
 
     // Get current git info
     let worktree = get_current_worktree()?;
-    let branch = get_current_branch()?;
+    let current_branch = get_current_branch()?;
+
+    // Determine branch for workspace
+    // If --branch specified: use it and validate
+    // If not specified: use "master" (keep current behavior)
+    let (branch_for_workspace, use_branch_mode) = if let Some(target_branch) = &branch {
+        // Validate the specified branch
+        validate_branch_exists(target_branch)?;
+
+        // Warn if different from current branch
+        if target_branch != &current_branch {
+            output::warn(&format!(
+                "Local branch is '{}' but remote will use '{}'",
+                current_branch, target_branch
+            ));
+            println!("  Consider checking out locally: git checkout {}", target_branch);
+            println!();
+        }
+
+        (target_branch.clone(), true)
+    } else {
+        // No --branch specified: use master (current behavior)
+        ("master".to_string(), false)
+    };
 
     // Determine workspace name and sanitize it (replace slashes and special chars)
-    let workspace_name = workspace_name.or_else(|| vm.clone()).unwrap_or_else(|| branch.clone());
+    let workspace_name =
+        workspace_name.or_else(|| vm.clone()).unwrap_or_else(|| current_branch.clone());
     let workspace_name = sanitize_workspace_name(&workspace_name);
 
     // Find profile path and load profile for GCP project
@@ -101,7 +127,7 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
         id: instance_id.clone(),
         workspace_path: worktree.clone(),
         workspace_name: Some(workspace_name.clone()),
-        branch: branch.clone(),
+        branch: branch_for_workspace.clone(),
         profile: profile.clone(),
         mode: "remote".to_string(),
         status: InstanceStatus::Starting,
@@ -119,7 +145,8 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
     let logger = OperationLogger::new(&instance_id)?;
     logger.log_section("Configuration")?;
     logger.log(&format!("Profile: {profile}"))?;
-    logger.log(&format!("Branch: {branch}"))?;
+    logger.log(&format!("Local Branch: {}", current_branch))?;
+    logger.log(&format!("Target Branch: {}", branch_for_workspace))?;
     logger.log(&format!("Workspace: {workspace_name}"))?;
     logger.log(&format!("Region: {region}"))?;
     logger.log(&format!("Port Base: {offset}"))?;
@@ -133,7 +160,8 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
     if verbose {
         output::header("Starting Remote DevDock");
         println!("  {}: {}", "Profile".cyan(), profile);
-        println!("  {}: {}", "Branch".cyan(), branch);
+        println!("  {}: {}", "Local Branch".cyan(), current_branch);
+        println!("  {}: {}", "Target Branch".cyan(), branch_for_workspace);
         println!("  {}: {}", "Workspace".cyan(), workspace_name.green());
         println!("  {}: devdock-glean", "Template".cyan());
         println!("  {}: {}", "Region".cyan(), region);
@@ -156,7 +184,7 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
         println!(
             "{} | {} | {}",
             format!("Profile: {profile}").dimmed(),
-            format!("Branch: {branch}").dimmed(),
+            format!("Branch: {}", branch_for_workspace).dimmed(),
             format!("ID: {}", Instance::display_id(&instance_id)).dimmed()
         );
         println!();
@@ -277,6 +305,7 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
                             region: region.clone(),
                             port_base: Some(offset),
                             profile: profile.clone(),
+                            branch: branch_for_workspace.clone(),
                         };
 
                         let ws_name = workspace::provision_workspace(&config).await?;
@@ -317,6 +346,7 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
                     region: region.clone(),
                     port_base: Some(offset),
                     profile: profile.clone(),
+                    branch: branch_for_workspace.clone(),
                 };
 
                 let ws_name = workspace::provision_workspace(&config).await?;
@@ -465,7 +495,8 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
             &instance_id,
             &workspace_name,
             &repo_path,
-            false,
+            false,           // full_mode = false (don't sync everything)
+            use_branch_mode, // branch_mode = true when --branch specified
             &log_level,
         ) {
             Ok(_) => {
@@ -684,6 +715,45 @@ fn get_current_branch() -> Result<String> {
     }
 
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// Validate that a branch exists on remote, auto-pushing if only exists locally.
+fn validate_branch_exists(branch: &str) -> Result<()> {
+    use std::process::Command;
+
+    // Check remote first
+    let remote_check = Command::new("git")
+        .args(["ls-remote", "origin", &format!("refs/heads/{}", branch)])
+        .output()?;
+
+    if remote_check.status.success() && !String::from_utf8_lossy(&remote_check.stdout).is_empty() {
+        info!("Branch '{}' exists on remote", branch);
+        return Ok(());
+    }
+
+    // Check if exists locally
+    let local_check = Command::new("git").args(["rev-parse", "--verify", branch]).output()?;
+
+    if !local_check.status.success() {
+        return Err(anyhow!(
+            "Branch '{}' not found locally or on remote. Create it first or check for typos.",
+            branch
+        ));
+    }
+
+    // Branch exists locally but not remotely - auto-push
+    output::info(&format!("Branch '{}' exists locally but not on remote", branch));
+    output::info("Pushing branch to remote...");
+
+    let push_output = Command::new("git").args(["push", "-u", "origin", branch]).output()?;
+
+    if !push_output.status.success() {
+        let stderr = String::from_utf8_lossy(&push_output.stderr);
+        return Err(anyhow!("Failed to push branch '{}' to remote: {}", branch, stderr));
+    }
+
+    output::success(&format!("Branch '{}' pushed to remote successfully", branch));
+    Ok(())
 }
 
 /// Sanitize workspace name for use with Coder.

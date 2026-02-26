@@ -18,6 +18,8 @@ pub struct CoderWorkspaceConfig {
     pub port_base: Option<u16>,
     /// DevDock profile name
     pub profile: String,
+    /// Git branch to checkout in remote workspace
+    pub branch: String,
 }
 
 /// Check if coder CLI is installed and available.
@@ -58,7 +60,7 @@ pub fn create_workspace(config: &CoderWorkspaceConfig) -> Result<String> {
         .arg("--parameter")
         .arg("github_username=") // Empty default
         .arg("--parameter")
-        .arg("branch_name=master") // Always use master for remote (file sync handles actual branch)
+        .arg(format!("branch_name={}", config.branch)) // Use specified branch
         .arg("--parameter")
         .arg("force_fresh_data=false")
         .arg("--preset")

@@ -47,6 +47,10 @@ enum Commands {
         #[arg(long)]
         workspace_name: Option<String>,
 
+        /// Target branch for remote workspace (default: current behavior)
+        #[arg(long)]
+        branch: Option<String>,
+
         /// GCP region for Coder workspace
         #[arg(long, default_value = "us-east4-a")]
         region: String,
@@ -516,7 +520,8 @@ async fn main() {
         let workspace_name = &args[3];
         let repo_path = std::path::PathBuf::from(&args[4]);
         let full_mode = args.get(5).is_some_and(|s| s == "true");
-        let log_level = args.get(6).map_or("info", |s| s.as_str());
+        let branch_mode = args.get(6).is_some_and(|s| s == "true");
+        let log_level = args.get(7).map_or("info", |s| s.as_str());
 
         // Stderr is already redirected to the log file by the parent process,
         // so initializing tracing with the default stderr writer routes all
@@ -528,6 +533,7 @@ async fn main() {
             workspace_name,
             &repo_path,
             full_mode,
+            branch_mode,
         ) {
             eprintln!("Daemon process error: {e}");
             process::exit(1);
@@ -561,6 +567,7 @@ async fn main() {
             mode,
             vm,
             workspace_name,
+            branch,
             region,
             port_base,
             auto_forward,
@@ -575,6 +582,7 @@ async fn main() {
                 commands::remote::start_remote(commands::remote::RemoteStartConfig {
                     profile,
                     workspace_name,
+                    branch,
                     region,
                     port_base,
                     vm,

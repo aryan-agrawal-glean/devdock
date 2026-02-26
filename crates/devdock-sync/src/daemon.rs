@@ -23,6 +23,7 @@ pub struct SyncDaemon {
     stats_tracker: SyncStatsTracker,
     repo_path: PathBuf,
     full_mode: bool,
+    branch_mode: bool,
 }
 
 impl SyncDaemon {
@@ -32,6 +33,7 @@ impl SyncDaemon {
         workspace_name: String,
         repo_path: PathBuf,
         full_mode: bool,
+        branch_mode: bool,
     ) -> Result<Self> {
         let remote_path = PathBuf::from("/home/workspace/scio");
 
@@ -50,6 +52,7 @@ impl SyncDaemon {
             stats_tracker,
             repo_path,
             full_mode,
+            branch_mode,
         })
     }
 
@@ -63,7 +66,13 @@ impl SyncDaemon {
         // Perform initial sync
         info!(
             "Performing initial sync (mode: {})",
-            if self.full_mode { "full" } else { "git-tracked" }
+            if self.full_mode {
+                "full"
+            } else if self.branch_mode {
+                "branch"
+            } else {
+                "git-tracked"
+            }
         );
         debug!("About to call initial_sync()");
         self.initial_sync()?;
@@ -221,11 +230,17 @@ impl SyncDaemon {
             debug!("Calling rsync_client.sync_all()");
             self.rsync_client.sync_all()?;
         } else {
-            // FAST STARTUP: Only sync git-modified files (changed since origin/master)
-            // This dramatically reduces startup time from minutes to seconds
-            info!("Syncing git-modified files only (fast startup)");
-
-            let files = git::list_git_modified_files(&self.repo_path)?;
+            let files = if self.branch_mode {
+                // BRANCH MODE: Sync all git-tracked files + untracked
+                // Used when --branch flag is specified to ensure complete branch sync
+                info!("Syncing all git-tracked and untracked files (branch mode)");
+                git::list_git_tracked_and_untracked_files(&self.repo_path)?
+            } else {
+                // FAST STARTUP: Only sync git-modified files (changed since origin/master)
+                // This dramatically reduces startup time from minutes to seconds
+                info!("Syncing git-modified files only (fast startup)");
+                git::list_git_modified_files(&self.repo_path)?
+            };
 
             if files.is_empty() {
                 info!("No modified files to sync - workspace is up to date");
@@ -381,6 +396,7 @@ pub fn start_daemon_foreground(
     workspace_name: &str,
     repo_path: &Path,
     full_mode: bool,
+    branch_mode: bool,
     log_level: &str,
 ) -> Result<()> {
     info!("Log level: {}", log_level);
@@ -389,12 +405,14 @@ pub fn start_daemon_foreground(
     info!("Workspace: {}", workspace_name);
     info!("Repo path: {}", repo_path.display());
     info!("Full mode: {}", full_mode);
+    info!("Branch mode: {}", branch_mode);
 
     let mut daemon = SyncDaemon::new(
         devdock_id.to_string(),
         workspace_name.to_string(),
         repo_path.to_path_buf(),
         full_mode,
+        branch_mode,
     )?;
 
     daemon.start()
@@ -406,6 +424,7 @@ pub fn start_daemon(
     workspace_name: &str,
     repo_path: &Path,
     full_mode: bool,
+    branch_mode: bool,
     log_level: &str,
 ) -> Result<u32> {
     use std::fs::OpenOptions;
@@ -439,6 +458,7 @@ pub fn start_daemon(
         .arg(workspace_name)
         .arg(repo_path)
         .arg(if full_mode { "true" } else { "false" })
+        .arg(if branch_mode { "true" } else { "false" })
         .arg(log_level);
 
     // Redirect stdin/stdout/stderr to log file
@@ -471,6 +491,7 @@ pub fn run_daemon_process(
     workspace_name: &str,
     repo_path: &Path,
     full_mode: bool,
+    branch_mode: bool,
 ) -> Result<()> {
     // This function runs in the daemonized child process
     let devdock_id = devdock_id.to_string();
@@ -488,6 +509,7 @@ pub fn run_daemon_process(
         workspace_name.clone(),
         repo_path.clone(),
         full_mode,
+        branch_mode,
     ) {
         Ok(d) => {
             info!("Sync daemon created successfully");

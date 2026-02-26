@@ -28,8 +28,14 @@ pub async fn start(full: bool, log_level: &str) -> Result<()> {
     println!("  Mode: {}", if full { "all files" } else { "git-tracked only" });
 
     let repo_path = PathBuf::from(&worktree);
-    let _pid =
-        sync_daemon::start_daemon(&devdock_id, &workspace_name, &repo_path, full, log_level)?;
+    let _pid = sync_daemon::start_daemon(
+        &devdock_id,
+        &workspace_name,
+        &repo_path,
+        full,
+        false, // branch_mode = false (manual sync always uses diff mode)
+        log_level,
+    )?;
 
     // Update database
     state.save_sync_session(&devdock_id, &workspace_name, None, full, "running").await?;
