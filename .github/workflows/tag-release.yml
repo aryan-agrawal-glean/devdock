@@ -25,46 +25,50 @@ jobs:
           app-id: ${{ secrets.APP_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
 
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-          ref: main
-          token: ${{ steps.generate-token.outputs.token }}
-
-      - name: Extract version from Cargo.toml
+      - name: Extract version and create tag using GitHub API
         id: get-version
+        env:
+          GH_TOKEN: ${{ steps.generate-token.outputs.token }}
         run: |
-          VERSION=$(awk '/^\[workspace\.package\]/{flag=1; next} /^\[/{flag=0} flag && /^version/{gsub(/[" ]/, "", $3); print $3; exit}' Cargo.toml)
+          set -e
+
+          # Get Cargo.toml content from main branch via API
+          CARGO_CONTENT=$(gh api /repos/${{ github.repository }}/contents/Cargo.toml \
+            --jq '.content' | base64 -d)
+
+          # Extract version
+          VERSION=$(echo "$CARGO_CONTENT" | awk '/^\[workspace\.package\]/{flag=1; next} /^\[/{flag=0} flag && /^version/{gsub(/[" ]/, "", $3); print $3; exit}')
+          TAG="v$VERSION"
+
           echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "tag=v$VERSION" >> $GITHUB_OUTPUT
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
           echo "Extracted version: $VERSION"
 
-      - name: Import GPG key
-        uses: crazy-max/ghaction-import-gpg@v6
-        with:
-          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
-          passphrase: ${{ secrets.GPG_PASSPHRASE }}
-          git_user_signingkey: true
-          git_tag_gpgsign: true
-
-      - name: Configure Git
-        run: |
-          git config user.name "DevDock Release Bot"
-          git config user.email "devdock-bot@users.noreply.github.com"
-
-      - name: Create and push tag
-        env:
-          VERSION: ${{ steps.get-version.outputs.version }}
-          TAG: ${{ steps.get-version.outputs.tag }}
-        run: |
           # Check if tag already exists
-          if git ls-remote --tags origin | grep -q "refs/tags/$TAG$"; then
+          if gh api /repos/${{ github.repository }}/git/ref/tags/$TAG 2>/dev/null; then
             echo "Tag $TAG already exists, skipping"
             exit 0
           fi
 
-          echo "Creating tag $TAG"
-          git tag -a "$TAG" -m "Release $VERSION"
-          git push origin "$TAG"
-          echo "✅ Tag $TAG created and pushed successfully"
+          # Get the SHA of main branch
+          MAIN_SHA=$(gh api /repos/${{ github.repository }}/git/ref/heads/main --jq '.object.sha')
+
+          echo "Creating tag $TAG on commit $MAIN_SHA"
+
+          # Create annotated tag object (auto-signed by GitHub)
+          TAG_OBJECT_SHA=$(gh api /repos/${{ github.repository }}/git/tags \
+            --field tag="$TAG" \
+            --field message="Release $VERSION" \
+            --field object="$MAIN_SHA" \
+            --field type=commit \
+            --field "tagger[name]=devdock-release-bot[bot]" \
+            --field "tagger[email]=${{ secrets.APP_ID }}+devdock-release-bot[bot]@users.noreply.github.com" \
+            --jq '.sha')
+
+          # Create reference to the tag
+          gh api /repos/${{ github.repository }}/git/refs \
+            --field ref="refs/tags/$TAG" \
+            --field sha="$TAG_OBJECT_SHA"
+
+          echo "✅ Tag $TAG created successfully"
           echo "🚀 This will trigger the release workflow to build and publish the release"

@@ -32,27 +32,7 @@ gh secret set APP_ID --body "your-app-id"
 gh secret set APP_PRIVATE_KEY < path/to/key.pem
 ```
 
-### 5. Generate GPG Key
-```bash
-# Generate GPG key for signed commits
-gpg --full-generate-key
-# Name: DevDock Release Bot
-# Email: devdock-bot@users.noreply.github.com
-# Key size: 4096
-
-# Get key ID and export
-gpg --list-secret-keys --keyid-format=long
-gpg --armor --export-secret-keys <KEY_ID>
-gpg --armor --export <KEY_ID>
-```
-
-### 6. Add GPG to GitHub
-- Add public key to: https://github.com/settings/keys
-- Add secrets:
-```bash
-gh secret set GPG_PRIVATE_KEY  # Paste exported private key
-gh secret set GPG_PASSPHRASE   # Enter passphrase
-```
+> **Note**: Commits and tags are automatically signed by GitHub when created via the API. No GPG key management needed! ✅
 
 ## How to Release
 

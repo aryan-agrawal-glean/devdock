@@ -32,30 +32,22 @@ jobs:
           app-id: ${{ secrets.APP_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
 
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-          token: ${{ steps.generate-token.outputs.token }}
-
-      - name: Import GPG key
-        uses: crazy-max/ghaction-import-gpg@v6
-        with:
-          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
-          passphrase: ${{ secrets.GPG_PASSPHRASE }}
-          git_user_signingkey: true
-          git_commit_gpgsign: true
-
-      - name: Configure Git
+      - name: Create PR with version bump using GitHub API
+        id: create-pr
+        env:
+          GH_TOKEN: ${{ steps.generate-token.outputs.token }}
+          VERSION: ${{ github.event.inputs.version }}
         run: |
-          git config user.name "DevDock Release Bot"
-          git config user.email "devdock-bot@users.noreply.github.com"
+          set -e
 
+          BRANCH="release/v${VERSION}"
 
-      - name: Update Cargo.toml version
-        run: |
-          VERSION="${{ github.event.inputs.version }}"
+          # Get current Cargo.toml content from main branch
+          CURRENT_CONTENT=$(gh api /repos/${{ github.repository }}/contents/Cargo.toml \
+            --jq '.content' | base64 -d)
+
           # Update version in workspace.package section
-          awk -v version="$VERSION" '
+          UPDATED_CONTENT=$(echo "$CURRENT_CONTENT" | awk -v version="$VERSION" '
             /^\[workspace\.package\]/ { in_section=1 }
             /^\[/ && !/^\[workspace\.package\]/ { in_section=0 }
             in_section && /^version = / {
@@ -63,40 +55,73 @@ jobs:
               next
             }
             { print }
-          ' Cargo.toml > Cargo.toml.tmp
-          mv Cargo.toml.tmp Cargo.toml
+          ')
 
-      - name: Create Pull Request
-        id: create-pr
-        uses: peter-evans/create-pull-request@v7
-        with:
-          token: ${{ steps.generate-token.outputs.token }}
-          commit-message: "chore: bump version to ${{ github.event.inputs.version }}"
-          branch: release/v${{ github.event.inputs.version }}
-          delete-branch: true
-          title: "chore: bump version to ${{ github.event.inputs.version }}"
-          committer: DevDock Release Bot <devdock-bot@users.noreply.github.com>
-          author: DevDock Release Bot <devdock-bot@users.noreply.github.com>
-          body: |
-            🤖 Automated version bump to **v${{ github.event.inputs.version }}**
+          # Get the SHA of main branch
+          MAIN_SHA=$(gh api /repos/${{ github.repository }}/git/ref/heads/main --jq '.object.sha')
 
-            ## Changes
-            - Update workspace version in `Cargo.toml` to ${{ github.event.inputs.version }}
+          # Create a blob with the new content
+          BLOB_SHA=$(echo "$UPDATED_CONTENT" | gh api /repos/${{ github.repository }}/git/blobs \
+            --input - \
+            --field encoding=utf-8 \
+            --jq '.sha')
 
-            ## Next Steps
-            1. Review and merge this PR
-            2. After merge, the release will be created automatically with tag `v${{ github.event.inputs.version }}`
+          # Get the current tree
+          BASE_TREE=$(gh api /repos/${{ github.repository }}/git/commits/$MAIN_SHA --jq '.tree.sha')
 
-            ---
-            _This PR was created automatically by the [Release workflow](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})_
-          labels: release
-          assignees: ${{ github.actor }}
+          # Create a new tree with updated Cargo.toml
+          TREE_SHA=$(gh api /repos/${{ github.repository }}/git/trees \
+            --field base_tree="$BASE_TREE" \
+            --field "tree[][path]=Cargo.toml" \
+            --field "tree[][mode]=100644" \
+            --field "tree[][type]=blob" \
+            --field "tree[][sha]=$BLOB_SHA" \
+            --jq '.sha')
 
-      - name: Output PR info
-        if: steps.create-pr.outputs.pull-request-number
-        run: |
-          echo "Created PR #${{ steps.create-pr.outputs.pull-request-number }}"
-          echo "URL: ${{ steps.create-pr.outputs.pull-request-url }}"
+          # Create a commit (automatically signed by GitHub!)
+          COMMIT_SHA=$(gh api /repos/${{ github.repository }}/git/commits \
+            --field message="chore: bump version to ${VERSION}" \
+            --field tree="$TREE_SHA" \
+            --field "parents[]=$MAIN_SHA" \
+            --field "author[name]=devdock-release-bot[bot]" \
+            --field "author[email]=${{ secrets.APP_ID }}+devdock-release-bot[bot]@users.noreply.github.com" \
+            --field "committer[name]=devdock-release-bot[bot]" \
+            --field "committer[email]=${{ secrets.APP_ID }}+devdock-release-bot[bot]@users.noreply.github.com" \
+            --jq '.sha')
+
+          # Delete branch if it exists
+          gh api /repos/${{ github.repository }}/git/refs/heads/$BRANCH -X DELETE 2>/dev/null || true
+
+          # Create/update branch reference
+          gh api /repos/${{ github.repository }}/git/refs \
+            --field ref="refs/heads/$BRANCH" \
+            --field sha="$COMMIT_SHA" || \
+          gh api /repos/${{ github.repository }}/git/refs/heads/$BRANCH \
+            --field sha="$COMMIT_SHA" \
+            --field force=true \
+            -X PATCH
+
+          # Create pull request
+          PR_URL=$(gh pr create \
+            --title "chore: bump version to ${VERSION}" \
+            --body "🤖 Automated version bump to **v${VERSION}**
+
+          ## Changes
+          - Update workspace version in \`Cargo.toml\` to ${VERSION}
+
+          ## Next Steps
+          1. Review and merge this PR
+          2. After merge, the release will be created automatically with tag \`v${VERSION}\`
+
+          ---
+          _This PR was created automatically by the [Release workflow](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})_" \
+            --base main \
+            --head "$BRANCH" \
+            --label release \
+            --assignee ${{ github.actor }})
+
+          echo "✅ Pull request created: $PR_URL"
+          echo "pr_url=$PR_URL" >> $GITHUB_OUTPUT
 
   build:
     name: Build ${{ matrix.target }}
