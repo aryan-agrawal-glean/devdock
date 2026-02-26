@@ -37,10 +37,18 @@ jobs:
           fetch-depth: 0
           token: ${{ steps.generate-token.outputs.token }}
 
+      - name: Import GPG key
+        uses: crazy-max/ghaction-import-gpg@v6
+        with:
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+          passphrase: ${{ secrets.GPG_PASSPHRASE }}
+          git_user_signingkey: true
+          git_commit_gpgsign: true
+
       - name: Configure Git
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name "DevDock Release Bot"
+          git config user.email "devdock-bot@users.noreply.github.com"
 
 
       - name: Update Cargo.toml version
@@ -67,6 +75,8 @@ jobs:
           branch: release/v${{ github.event.inputs.version }}
           delete-branch: true
           title: "chore: bump version to ${{ github.event.inputs.version }}"
+          committer: DevDock Release Bot <devdock-bot@users.noreply.github.com>
+          author: DevDock Release Bot <devdock-bot@users.noreply.github.com>
           body: |
             🤖 Automated version bump to **v${{ github.event.inputs.version }}**
 
