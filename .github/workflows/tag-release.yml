@@ -56,19 +56,22 @@ jobs:
           echo "Creating tag $TAG on commit $MAIN_SHA"
 
           # Create annotated tag object (auto-signed by GitHub)
-          TAG_OBJECT_SHA=$(gh api /repos/${{ github.repository }}/git/tags \
-            --field tag="$TAG" \
-            --field message="Release $VERSION" \
-            --field object="$MAIN_SHA" \
-            --field type=commit \
-            --field "tagger[name]=devdock-release-bot[bot]" \
-            --field "tagger[email]=${{ secrets.APP_ID }}+devdock-release-bot[bot]@users.noreply.github.com" \
-            --jq '.sha')
+          TAG_OBJECT_SHA=$(echo "{
+            \"tag\": \"$TAG\",
+            \"message\": \"Release $VERSION\",
+            \"object\": \"$MAIN_SHA\",
+            \"type\": \"commit\",
+            \"tagger\": {
+              \"name\": \"devdock-release-bot[bot]\",
+              \"email\": \"${{ secrets.APP_ID }}+devdock-release-bot[bot]@users.noreply.github.com\"
+            }
+          }" | gh api /repos/${{ github.repository }}/git/tags --input - --jq '.sha')
 
           # Create reference to the tag
-          gh api /repos/${{ github.repository }}/git/refs \
-            --field ref="refs/tags/$TAG" \
-            --field sha="$TAG_OBJECT_SHA"
+          echo "{
+            \"ref\": \"refs/tags/$TAG\",
+            \"sha\": \"$TAG_OBJECT_SHA\"
+          }" | gh api /repos/${{ github.repository }}/git/refs --input -
 
           echo "✅ Tag $TAG created successfully"
           echo "🚀 This will trigger the release workflow to build and publish the release"

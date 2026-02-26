@@ -69,25 +69,33 @@ jobs:
           # Get the current tree
           BASE_TREE=$(gh api /repos/${{ github.repository }}/git/commits/$MAIN_SHA --jq '.tree.sha')
 
-          # Create a new tree with updated Cargo.toml
-          TREE_SHA=$(gh api /repos/${{ github.repository }}/git/trees \
-            --field base_tree="$BASE_TREE" \
-            --field "tree[][path]=Cargo.toml" \
-            --field "tree[][mode]=100644" \
-            --field "tree[][type]=blob" \
-            --field "tree[][sha]=$BLOB_SHA" \
-            --jq '.sha')
+          # Create a new tree with updated Cargo.toml (using raw JSON)
+          TREE_SHA=$(echo "{
+            \"base_tree\": \"$BASE_TREE\",
+            \"tree\": [
+              {
+                \"path\": \"Cargo.toml\",
+                \"mode\": \"100644\",
+                \"type\": \"blob\",
+                \"sha\": \"$BLOB_SHA\"
+              }
+            ]
+          }" | gh api /repos/${{ github.repository }}/git/trees --input - --jq '.sha')
 
           # Create a commit (automatically signed by GitHub!)
-          COMMIT_SHA=$(gh api /repos/${{ github.repository }}/git/commits \
-            --field message="chore: bump version to ${VERSION}" \
-            --field tree="$TREE_SHA" \
-            --field "parents[]=$MAIN_SHA" \
-            --field "author[name]=devdock-release-bot[bot]" \
-            --field "author[email]=${{ secrets.APP_ID }}+devdock-release-bot[bot]@users.noreply.github.com" \
-            --field "committer[name]=devdock-release-bot[bot]" \
-            --field "committer[email]=${{ secrets.APP_ID }}+devdock-release-bot[bot]@users.noreply.github.com" \
-            --jq '.sha')
+          COMMIT_SHA=$(echo "{
+            \"message\": \"chore: bump version to ${VERSION}\",
+            \"tree\": \"$TREE_SHA\",
+            \"parents\": [\"$MAIN_SHA\"],
+            \"author\": {
+              \"name\": \"devdock-release-bot[bot]\",
+              \"email\": \"${{ secrets.APP_ID }}+devdock-release-bot[bot]@users.noreply.github.com\"
+            },
+            \"committer\": {
+              \"name\": \"devdock-release-bot[bot]\",
+              \"email\": \"${{ secrets.APP_ID }}+devdock-release-bot[bot]@users.noreply.github.com\"
+            }
+          }" | gh api /repos/${{ github.repository }}/git/commits --input - --jq '.sha')
 
           # Delete branch if it exists
           gh api /repos/${{ github.repository }}/git/refs/heads/$BRANCH -X DELETE 2>/dev/null || true
