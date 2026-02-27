@@ -86,19 +86,12 @@ jobs:
             ]
           }" | gh api /repos/${{ github.repository }}/git/trees --input - --jq '.sha')
 
-          # Create a commit (automatically signed by GitHub!)
+          # Create a commit (automatically signed by GitHub when using App token!)
+          # NOTE: Do NOT set author/committer - let GitHub set them automatically for signing
           COMMIT_SHA=$(echo "{
             \"message\": \"chore: bump version to ${VERSION}\",
             \"tree\": \"$TREE_SHA\",
-            \"parents\": [\"$MAIN_SHA\"],
-            \"author\": {
-              \"name\": \"devdock-release-bot[bot]\",
-              \"email\": \"${{ secrets.APP_ID }}+devdock-release-bot[bot]@users.noreply.github.com\"
-            },
-            \"committer\": {
-              \"name\": \"devdock-release-bot[bot]\",
-              \"email\": \"${{ secrets.APP_ID }}+devdock-release-bot[bot]@users.noreply.github.com\"
-            }
+            \"parents\": [\"$MAIN_SHA\"]
           }" | gh api /repos/${{ github.repository }}/git/commits --input - --jq '.sha')
 
           # Delete branch if it exists (ignore 404 if it doesn't exist)

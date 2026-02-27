@@ -55,16 +55,13 @@ jobs:
 
           echo "Creating tag $TAG on commit $MAIN_SHA"
 
-          # Create annotated tag object (auto-signed by GitHub)
+          # Create annotated tag object (auto-signed by GitHub when using App token!)
+          # NOTE: Do NOT set tagger - let GitHub set it automatically for signing
           TAG_OBJECT_SHA=$(echo "{
             \"tag\": \"$TAG\",
             \"message\": \"Release $VERSION\",
             \"object\": \"$MAIN_SHA\",
-            \"type\": \"commit\",
-            \"tagger\": {
-              \"name\": \"devdock-release-bot[bot]\",
-              \"email\": \"${{ secrets.APP_ID }}+devdock-release-bot[bot]@users.noreply.github.com\"
-            }
+            \"type\": \"commit\"
           }" | gh api /repos/${{ github.repository }}/git/tags --input - --jq '.sha')
 
           # Create reference to the tag
