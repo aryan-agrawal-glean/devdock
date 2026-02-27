@@ -114,7 +114,7 @@ where
     }
 
     let custom_ini_path = find_custom_ini_path();
-    config_sync::sync_all_config(
+    let sync_status = config_sync::sync_all_config(
         workspace,
         profile_path,
         custom_ini_path.as_deref(),
@@ -130,190 +130,38 @@ where
         callback();
     }
 
-    // 1.5. Verify gcloud authentication (both regular and ADC)
-    info!("Verifying gcloud authentication on remote...");
-    if verbose {
-        print!("  Verifying gcloud auth...");
-        std::io::Write::flush(&mut std::io::stdout()).ok();
-    }
+    // Handle ADC expired (detected during config sync Phase 3, no extra SSH needed)
+    if sync_status.adc_expired {
+        println!();
+        println!("╭─────────────────────────────────────────────────────╮");
+        println!("│  ❌ ERROR: ADC Credentials EXPIRED                  │");
+        println!("╰─────────────────────────────────────────────────────╯");
+        println!();
+        println!("DevDock requires valid Application Default Credentials (ADC).");
+        println!("Your ADC credentials have expired and need to be refreshed.");
+        println!();
+        println!("To fix:");
+        println!("  1. SSH to workspace: coder ssh {workspace}");
+        println!("  2. Run: gcloud auth application-default login");
+        println!("  3. Restart DevDock");
+        println!();
 
-    // Check regular gcloud auth
-    let auth_ok = match ssh::ssh_exec_with_log(
-        workspace,
-        "gcloud auth list --filter=status:ACTIVE --format='value(account)'",
-        log_file,
-    ) {
-        Ok(account) if !account.trim().is_empty() => {
-            if verbose {
-                print!(" ✓ {}", account.trim());
-            }
-            true
-        }
-        _ => {
-            if verbose {
-                print!(" ✗");
-            }
-            false
-        }
-    };
+        // Ask user if they want to continue anyway (for debugging)
+        print!("Continue anyway? (DevDock will likely fail) [y/N] ");
+        use std::io::{self, Write};
+        io::stdout().flush().ok();
 
-    // Check Application Default Credentials (required by DevDock)
-    if verbose {
-        print!(" | ADC...");
-        std::io::Write::flush(&mut std::io::stdout()).ok();
-    }
+        let mut response = String::new();
+        io::stdin().read_line(&mut response).ok();
 
-    let adc_ok = match ssh::ssh_exec_with_log(
-        workspace,
-        "gcloud auth application-default print-access-token 2>&1",
-        log_file,
-    ) {
-        Ok(output) if output.contains("invalid_grant") || output.contains("Bad Request") => {
-            println!(" ✗ EXPIRED");
-            println!();
-            println!("╭─────────────────────────────────────────────────────╮");
-            println!("│  ❌ ERROR: ADC Credentials EXPIRED                  │");
-            println!("╰─────────────────────────────────────────────────────╯");
-            println!();
-            println!("DevDock requires valid Application Default Credentials (ADC).");
-            println!("Your ADC credentials have expired and need to be refreshed.");
-            println!();
-            println!("To fix:");
-            println!("  1. SSH to workspace: coder ssh {workspace}");
-            println!("  2. Run: gcloud auth application-default login");
-            println!("  3. Restart DevDock");
-            println!();
-
-            // Ask user if they want to continue anyway (for debugging)
-            print!("Continue anyway? (DevDock will likely fail) [y/N] ");
-            use std::io::{self, Write};
-            io::stdout().flush().ok();
-
-            let mut response = String::new();
-            io::stdin().read_line(&mut response).ok();
-
-            if !response.trim().eq_ignore_ascii_case("y") {
-                return Err(RemoteError::SshError(
-                    "ADC credentials expired - please refresh and try again".to_string(),
-                ));
-            }
-
-            println!("⚠️  Continuing with expired ADC (expect failures)...");
-            println!();
-            false
-        }
-        Ok(output)
-            if output.starts_with("ya29.")
-                || output.starts_with("ERROR:") && !output.contains("invalid_grant") =>
-        {
-            // Either valid token (ya29.*) or other error
-            if output.starts_with("ya29.") {
-                if verbose {
-                    println!(" ✓");
-                }
-                true
-            } else {
-                if verbose {
-                    println!(" ? (check manually)");
-                    eprintln!(
-                        "  ⚠ Warning: Could not verify ADC: {}",
-                        output.lines().next().unwrap_or("")
-                    );
-                }
-                true // Don't block if we can't verify
-            }
-        }
-        Ok(_) => {
-            if verbose {
-                println!(" ?");
-            }
-            true // Don't block
-        }
-        Err(e) => {
-            if verbose {
-                println!();
-                eprintln!("  ⚠ Warning: Could not check ADC: {e}");
-            }
-            true // Don't block on check failure
-        }
-    };
-
-    if !auth_ok || !adc_ok {
-        eprintln!("  💡 DevDock requires both gcloud auth AND application-default credentials.");
-    }
-
-    // 1.6. Authenticate Docker with GCP Artifact Registry
-    if auth_ok || adc_ok {
-        info!("Authenticating Docker with GCP Artifact Registry...");
-        if verbose {
-            print!("  Authenticating Docker...");
-            std::io::Write::flush(&mut std::io::stdout()).ok();
+        if !response.trim().eq_ignore_ascii_case("y") {
+            return Err(RemoteError::SshError(
+                "ADC credentials expired - please refresh and try again".to_string(),
+            ));
         }
 
-        let docker_login_cmd = "gcloud auth print-access-token | docker login -u oauth2accesstoken --password-stdin https://us-central1-docker.pkg.dev";
-
-        match ssh::ssh_exec_with_log(workspace, docker_login_cmd, log_file) {
-            Ok(output) if output.contains("Login Succeeded") => {
-                if verbose {
-                    println!(" ✓");
-                }
-            }
-            Ok(output) => {
-                if verbose {
-                    println!(" ? (check manually)");
-                    if !output.trim().is_empty() {
-                        eprintln!("  ⚠ Docker login output: {}", output.trim());
-                    }
-                }
-            }
-            Err(e) => {
-                if verbose {
-                    println!();
-                    eprintln!("  ⚠ Warning: Docker login failed: {e}");
-                    eprintln!(
-                        "  You may need to manually authenticate Docker on the remote workspace."
-                    );
-                }
-            }
-        }
-    }
-
-    // 1.7. Verify AWS credentials on remote (via exported env vars)
-    info!("Checking AWS credentials on remote...");
-    if verbose {
-        print!("  Verifying AWS auth...");
-        std::io::Write::flush(&mut std::io::stdout()).ok();
-    }
-
-    match ssh::ssh_exec_with_log(
-        workspace,
-        "aws sts get-caller-identity --query Account --output text 2>&1",
-        log_file,
-    ) {
-        Ok(output)
-            if !output.contains("Unable to locate credentials")
-                && !output.contains("could not be found") =>
-        {
-            let account = output.trim();
-            if output.contains("ExpiredToken") {
-                if verbose {
-                    println!(" ✗ EXPIRED");
-                    eprintln!("  ⚠ AWS credentials have expired");
-                    eprintln!("  💡 Refresh locally: aws sso login (or get new session tokens)");
-                }
-            } else if account.len() == 12 && account.chars().all(|c| c.is_ascii_digit()) {
-                if verbose {
-                    println!(" ✓ [account: {}]", account);
-                }
-            } else if verbose {
-                println!(" ?");
-            }
-        }
-        Ok(_) | Err(_) => {
-            if verbose {
-                println!(" (not configured)");
-            }
-        }
+        println!("⚠️  Continuing with expired ADC (expect failures)...");
+        println!();
     }
 
     // 2. Start DevDock in tmux session on remote
@@ -417,93 +265,56 @@ where
         println!("  To view logs: coder ssh {workspace} -- tmux attach -t devdock");
     }
 
-    // 3. Verify DevDock is actually running (not failed immediately)
-    if verbose {
-        println!("  Verifying DevDock startup (waiting 5s)...");
-    }
-    sleep(Duration::from_secs(5)); // Give it time to start or fail
-
-    // Check if tmux session still exists (with 10s timeout)
-    if verbose {
-        print!("  Checking tmux session...");
-        std::io::Write::flush(&mut std::io::stdout()).ok();
-    }
-    match ssh::ssh_check_with_timeout(
-        workspace,
-        "tmux has-session -t devdock 2>/dev/null",
-        log_file,
-        Some(10),
-    ) {
-        Ok(true) => {
-            if verbose {
-                println!(" ✓ DevDock tmux session is active");
-            }
-        }
-        Ok(false) => {
-            println!();
-            eprintln!("\n  ❌ ERROR: DevDock tmux session terminated unexpectedly!");
-            eprintln!("  The DevDock process may have failed during startup.");
-            eprintln!("\n  To debug:");
-            eprintln!("    1. SSH to workspace: coder ssh {workspace}");
-            eprintln!("    2. Check logs: cat /tmp/devdock-start.log");
-            eprintln!("    3. Try manual start: devdock start {profile}");
-            eprintln!("    4. Check gcloud auth: gcloud auth list");
-            return Err(RemoteError::CommandFailed(
-                "DevDock tmux session terminated - startup failed".to_string(),
-            ));
-        }
-        Err(e) => {
-            println!();
-            eprintln!("  ⚠ Warning: Could not verify tmux session: {e}");
-        }
-    }
-
-    // 4. Wait for Tilt process to start (check if port 10350 is in use)
+    // 3. Wait for Tilt process to start
+    // Combined check: verifies tmux is alive AND Tilt port 10350 is listening
+    // in a single SSH call per iteration (replaces 2 separate SSH calls + sleep(5))
     if verbose {
         println!("  Waiting for Tilt to start (timeout: 60s)...");
     }
-    let timeout = Duration::from_secs(60); // Increased timeout
+    let timeout = Duration::from_secs(60);
     let start = std::time::Instant::now();
     let mut last_print = 0u64;
+
+    // Combined tmux + port check script (single SSH call per iteration)
+    // Always exits 0 so ssh_exec_with_log returns Ok; status is in stdout markers
+    let combined_check = r#"
+if ! tmux has-session -t devdock 2>/dev/null; then
+    echo "DEVDOCK_STATUS:tmux_dead"
+    exit 0
+fi
+if ss -tlnp 2>/dev/null | grep -q ':10350 ' 2>/dev/null; then
+    echo "DEVDOCK_STATUS:tilt_ready"
+    exit 0
+fi
+echo "DEVDOCK_STATUS:waiting"
+exit 0
+"#;
 
     loop {
         let elapsed = start.elapsed().as_secs();
 
-        // First verify tmux session is still alive (with 10s timeout)
-        if let Ok(false) = ssh::ssh_check_with_timeout(
-            workspace,
-            "tmux has-session -t devdock 2>/dev/null",
-            log_file,
-            Some(10),
-        ) {
-            eprintln!("\n  ❌ ERROR: DevDock tmux session died while waiting for Tilt!");
-            eprintln!("\n  To debug:");
-            eprintln!("    1. SSH to workspace: coder ssh {workspace}");
-            eprintln!("    2. Check logs: cat /tmp/devdock-start.log");
-            eprintln!("    3. Try manual start: devdock start {profile}");
-            return Err(RemoteError::CommandFailed(
-                "DevDock process died during startup".to_string(),
-            ));
-        }
-
-        // Check if Tilt is listening on port 10350 using lsof (with 10s timeout)
-        match ssh::ssh_check_with_timeout(
-            workspace,
-            "lsof -i:10350 >/dev/null 2>&1",
-            log_file,
-            Some(10),
-        ) {
-            Ok(true) => {
+        match ssh::ssh_exec_with_log(workspace, combined_check, log_file) {
+            Ok(output) if output.contains("DEVDOCK_STATUS:tilt_ready") => {
                 if verbose {
                     println!("  ✓ Tilt process is running on port 10350!");
                 }
                 break;
             }
-            Ok(false) => {
-                // Not running yet, continue waiting
+            Ok(output) if output.contains("DEVDOCK_STATUS:tmux_dead") => {
+                eprintln!("\n  ❌ ERROR: DevDock tmux session died while waiting for Tilt!");
+                eprintln!("\n  To debug:");
+                eprintln!("    1. SSH to workspace: coder ssh {workspace}");
+                eprintln!("    2. Check logs: cat /tmp/devdock-start.log");
+                eprintln!("    3. Try manual start: devdock start {profile}");
+                return Err(RemoteError::CommandFailed(
+                    "DevDock process died during startup".to_string(),
+                ));
+            }
+            Ok(_) => {
+                // DEVDOCK_STATUS:waiting or unknown — not ready yet, continue
             }
             Err(_) => {
-                // Error executing command, continue waiting
+                // SSH connection error — transient, keep waiting
             }
         }
 
@@ -523,7 +334,7 @@ where
             break;
         }
 
-        sleep(Duration::from_secs(3));
+        sleep(Duration::from_secs(2));
     }
 
     if verbose {

@@ -168,9 +168,9 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
         println!("  {}: {}", "DevDock ID".cyan(), Instance::display_id(&instance_id));
         println!("  {}: {}", "Port Base".cyan(), offset);
         println!();
-        println!("{}", "⏱️  Expected time: ~2-3 minutes total".yellow());
-        println!("   • Creating workspace: ~1-2 min");
-        println!("   • Starting DevDock: ~1 min");
+        println!("{}", "⏱️  Expected time: ~1-2 minutes total".yellow());
+        println!("   • Creating workspace: ~30s");
+        println!("   • Config + Starting: ~30-45s");
         println!();
         println!("📋 Session logs: {}", logger.path().display().to_string().dimmed());
         println!("   Monitor: tail -f {}", logger.path().display().to_string().dimmed());
@@ -188,7 +188,7 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
             format!("ID: {}", Instance::display_id(&instance_id)).dimmed()
         );
         println!();
-        println!("⏱️  Expected: ~2-3 min");
+        println!("⏱️  Expected: ~1-2 min");
         println!();
     }
 
@@ -267,13 +267,6 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
                         workspace::cleanup_existing_devdock(&workspace_name, Some(logger.path()))?;
                         logger.log("Existing DevDock session cleaned up")?;
 
-                        // Wait for cleanup to settle and SSH to stabilize
-                        if verbose {
-                            println!("  Waiting for workspace to stabilize...");
-                        }
-                        std::thread::sleep(std::time::Duration::from_secs(5));
-                        logger.log("Waited 5s for workspace stabilization")?;
-
                         // Note: Gcloud credentials will be re-synced in workspace::start_remote_devdock
                         // No need to sync them here
 
@@ -313,12 +306,6 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
                         output::success("Workspace created");
                         logger.log("Workspace created successfully")?;
 
-                        // Wait for SSH to become available (new workspace needs time to initialize)
-                        if verbose {
-                            println!("  Waiting for SSH to become ready...");
-                        }
-                        std::thread::sleep(std::time::Duration::from_secs(10));
-                        logger.log("Waited 10s for SSH initialization")?;
                         logger.log(&format!("Workspace SSH ready: coder ssh {ws_name}"))?;
                         ws_name
                     }
@@ -354,12 +341,6 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
                 output::success("Workspace created");
                 logger.log("Workspace created successfully")?;
 
-                // Wait for SSH to become available (new workspace needs time to initialize)
-                if verbose {
-                    println!("  Waiting for SSH to become ready...");
-                }
-                std::thread::sleep(std::time::Duration::from_secs(10));
-                logger.log("Waited 10s for SSH initialization")?;
                 logger.log(&format!("Workspace SSH ready: coder ssh {ws_name}"))?;
                 ws_name
             }

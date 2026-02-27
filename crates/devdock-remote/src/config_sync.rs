@@ -262,19 +262,30 @@ fn scp_gcloud_to_remote(workspace: &str, temp_dir: &Path, verbose: bool) -> Resu
 
 // ─── Main entry point ──────────────────────────────────────────────────────────
 
+/// Status returned from config sync, including credential verification results.
+/// This avoids the need for a separate SSH call to verify auth.
+#[derive(Debug, Default)]
+pub struct ConfigSyncStatus {
+    /// Whether ADC credentials are expired on the remote
+    pub adc_expired: bool,
+}
+
 /// Sync all configuration files to remote workspace.
 ///
 /// Uses minimal SSH connections:
 /// - Phase 1 (1 SSH): Create directories, write profile, custom.ini, and claude.json
 /// - Phase 2 (1 SCP): Copy gcloud credentials (GCP/unknown platform only)
 /// - Phase 3 (1 SSH): Finalize gcloud - move creds, verify auth, set project (GCP/unknown platform only)
+///
+/// Returns `ConfigSyncStatus` with credential verification results from Phase 3,
+/// allowing the caller to handle ADC expiration without an additional SSH call.
 pub fn sync_all_config(
     workspace: &str,
     profile_path: &Path,
     custom_ini_path: Option<&Path>,
     log_file: Option<&Path>,
     verbose: bool,
-) -> Result<()> {
+) -> Result<ConfigSyncStatus> {
     use std::fs::OpenOptions;
     use std::io::Write;
 
@@ -466,6 +477,8 @@ print(f"✓ Claude MCP configuration updated at {claude_config_path}")
 
     // ─── Credential sync (Phase 2 + 3 for GCP, local-only for others) ─────
 
+    let mut status = ConfigSyncStatus::default();
+
     match platform.as_deref() {
         Some("google") | Some("gcp") => {
             if let Some((ref temp_dir, _count)) = gcloud_staging {
@@ -474,7 +487,8 @@ print(f"✓ Claude MCP configuration updated at {claude_config_path}")
 
                 // Phase 3: Single SSH for gcloud finalization
                 let project = get_profile_project(profile_path).ok();
-                run_gcloud_finalize(workspace, project.as_deref(), log_file, verbose)?;
+                status.adc_expired =
+                    run_gcloud_finalize(workspace, project.as_deref(), log_file, verbose)?;
             }
         }
         Some("aws") => {
@@ -501,7 +515,10 @@ print(f"✓ Claude MCP configuration updated at {claude_config_path}")
             // Best-effort gcloud: SCP + finalize (swallow errors)
             if let Some((ref temp_dir, _count)) = gcloud_staging {
                 if let Ok(()) = scp_gcloud_to_remote(workspace, temp_dir.path(), verbose) {
-                    let _ = run_gcloud_finalize(workspace, None, log_file, verbose);
+                    if let Ok(adc_expired) = run_gcloud_finalize(workspace, None, log_file, verbose)
+                    {
+                        status.adc_expired = adc_expired;
+                    }
                 }
             }
             let _ = sync_aws_credentials(workspace, verbose);
@@ -518,18 +535,19 @@ print(f"✓ Claude MCP configuration updated at {claude_config_path}")
         println!("    ✓ All configuration files synced");
     }
 
-    Ok(())
+    Ok(status)
 }
 
 /// Phase 3: Finalize gcloud setup on remote in a single SSH connection.
 ///
 /// Moves staged credentials to final locations, verifies auth, and optionally sets project.
+/// Returns whether ADC credentials are expired.
 fn run_gcloud_finalize(
     workspace: &str,
     project: Option<&str>,
     log_file: Option<&Path>,
     verbose: bool,
-) -> Result<()> {
+) -> Result<bool> {
     use std::fs::OpenOptions;
     use std::io::Write;
 
@@ -629,6 +647,8 @@ fi
     }
 
     // Parse structured output markers
+    let mut adc_expired = false;
+
     for line in stdout.lines() {
         if let Some(account) = line.strip_prefix("DEVDOCK_AUTH:") {
             if account != "none" {
@@ -641,16 +661,18 @@ fi
             }
         }
 
-        if line == "DEVDOCK_ADC:invalid"
-            && (stderr.contains("invalid_grant")
-                || stderr.contains("refreshing your current auth tokens"))
-        {
-            eprintln!("\n⚠️  WARNING: Synced gcloud credentials appear to be expired!");
-            eprintln!("   You will need to authenticate on the remote workspace:");
-            eprintln!("     1. coder ssh {workspace}");
-            eprintln!("     2. gcloud auth login");
-            eprintln!("     3. gcloud auth application-default login");
-            eprintln!();
+        if line == "DEVDOCK_ADC:invalid" {
+            adc_expired = true;
+            if stderr.contains("invalid_grant")
+                || stderr.contains("refreshing your current auth tokens")
+            {
+                eprintln!("\n⚠️  WARNING: Synced gcloud credentials appear to be expired!");
+                eprintln!("   You will need to authenticate on the remote workspace:");
+                eprintln!("     1. coder ssh {workspace}");
+                eprintln!("     2. gcloud auth login");
+                eprintln!("     3. gcloud auth application-default login");
+                eprintln!();
+            }
         }
 
         if line.contains("DEVDOCK_WARN:project_set_failed") {
@@ -670,5 +692,5 @@ fi
     }
 
     debug!("Phase 3 complete: gcloud setup finalized");
-    Ok(())
+    Ok(adc_expired)
 }
