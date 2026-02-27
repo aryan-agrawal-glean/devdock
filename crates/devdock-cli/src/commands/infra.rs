@@ -241,15 +241,18 @@ fn wait_for_mysql(container: &str, timeout: Duration) -> Result<()> {
 /// Check if a MySQL error message indicates a transient connection failure worth retrying.
 ///
 /// Retryable errors:
+/// - ERROR 1053: Server shutdown in progress
 /// - ERROR 2002: Can't connect to local MySQL server through socket
 /// - ERROR 2003: Can't connect to MySQL server
 /// - ERROR 2013: Lost connection to MySQL server during query
 fn is_retryable_mysql_error(stderr: &str) -> bool {
-    stderr.contains("ERROR 2002")
+    stderr.contains("ERROR 1053")
+        || stderr.contains("ERROR 2002")
         || stderr.contains("ERROR 2003")
         || stderr.contains("ERROR 2013")
         || stderr.contains("Can't connect")
         || stderr.contains("Lost connection")
+        || stderr.contains("Server shutdown in progress")
 }
 
 /// Run a MySQL operation with retry logic for transient connection failures.
