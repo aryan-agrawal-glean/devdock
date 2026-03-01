@@ -306,11 +306,17 @@ fn docker_mysql_exec(container: &str, sql: &str) -> Result<()> {
 }
 
 /// Execute SQL file in container (with GTID stripping and retry logic)
+///
+/// Reads the file as raw bytes and strips GTID statements at the byte level
+/// to correctly handle mysqldump files containing binary data (BLOB fields, etc.)
 fn docker_mysql_import(container: &str, sql_file: &PathBuf) -> Result<()> {
-    // Read file and strip GTID statements once (no need to re-read on retry)
-    let content = std::fs::read_to_string(sql_file)?;
-    let re = regex::Regex::new(r"SET @@GLOBAL\.GTID_[A-Z_]+=[^;]*;").unwrap();
-    let cleaned = re.replace_all(&content, "");
+    // Read file as raw bytes to handle binary data (e.g., BLOB fields, encoded attachments)
+    // that mysqldump may include in INSERT statements
+    let bytes = std::fs::read(sql_file)?;
+
+    // Strip GTID statements using byte-level regex to avoid any UTF-8 conversion
+    let re = regex::bytes::Regex::new(r"SET @@GLOBAL\.GTID_[A-Z_]+=[^;]*;").unwrap();
+    let cleaned = re.replace_all(&bytes, &b""[..]);
 
     let label = format!("Import {:?}", sql_file.file_name().unwrap_or_default());
     with_mysql_retry(&label, 10, || {
@@ -322,7 +328,7 @@ fn docker_mysql_import(container: &str, sql_file: &PathBuf) -> Result<()> {
 
         if let Some(ref mut stdin) = child.stdin {
             use std::io::Write;
-            stdin.write_all(cleaned.as_bytes())?;
+            stdin.write_all(&cleaned)?;
         }
         // Drop stdin so mysql sees EOF and finishes processing
         drop(child.stdin.take());
