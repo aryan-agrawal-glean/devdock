@@ -20,9 +20,18 @@ def bazel_build(name, target, watch_dirs = None, type = None, target_is_director
     )
 
     devdock_root = os.getenv('DEVDOCK_ROOT')
-    local('[ ! -s {devdock_root}/devdock/runtime_generated/watch_file_{name}.yaml ] && python {devdock_root}/devdock/core/config/cquery.py {devdock_root} {name} {target} || true'.format(devdock_root=devdock_root, name=name, target=target))
 
-    paths = read_yaml('{devdock_root}/devdock/runtime_generated/watch_file_{name}.yaml'.format(devdock_root=devdock_root, name=name))
+    # Try to generate watch file via cquery (optional — may not exist in OSS mode)
+    cquery_script = '{devdock_root}/devdock/core/config/cquery.py'.format(devdock_root=devdock_root)
+    watch_file = '{devdock_root}/devdock/runtime_generated/watch_file_{name}.yaml'.format(devdock_root=devdock_root, name=name)
+    if os.path.exists(cquery_script):
+        local('[ ! -s {watch} ] && python {script} {root} {name} {target} || true'.format(
+            watch=watch_file, script=cquery_script, root=devdock_root, name=name, target=target))
+
+    # Read watch file if it exists, otherwise use empty paths
+    paths = {}
+    if os.path.exists(watch_file):
+        paths = read_yaml(watch_file)
     if not paths:
         paths = {}
 

@@ -1,8 +1,8 @@
 # -*- mode: Python -*-
 """Docker-related utilities for building and managing containers."""
 
-load("../lib/bazel.Tiltfile", "bazel_build", "bazel_sourcefile_deps")
-load("./utils.Tiltfile", "get_bazel_cmd", "get_bazel_flags")
+load("bazel.Tiltfile", "bazel_build", "bazel_sourcefile_deps")
+load("utils.Tiltfile", "get_bazel_cmd", "get_bazel_flags")
 
 def cleanup_generated_files(service_name):
     """Clean up generated Dockerfile and docker-compose.yaml"""
@@ -54,8 +54,13 @@ def generate_compose(template_path, context, type = 'services'):
 
 def setup_docker_build(context, dockerfile = None, compose_file = None):
     """Set up a Docker build with optional custom Dockerfile and compose file"""
-    dockerfile = dockerfile or "core/templates/Dockerfile.tpl"
-    compose_file = compose_file or "{}/devdock/core/templates/compose.yaml.tpl".format(os.getenv('DEVDOCK_ROOT'))
+    # Find templates in shipped libs or monorepo
+    _devdock_root = os.getenv('DEVDOCK_ROOT')
+    _shipped = "{}/devdock/runtime_generated/core/templates".format(_devdock_root)
+    _legacy = "{}/devdock/core/templates".format(_devdock_root)
+    _tpl_dir = _shipped if os.path.exists(_shipped) else _legacy
+    dockerfile = dockerfile or "{}/Dockerfile.tpl".format(_tpl_dir)
+    compose_file = compose_file or "{}/compose.yaml.tpl".format(_tpl_dir)
 
     # Read profile to get architecture
     devdock_root = os.getenv('DEVDOCK_ROOT')

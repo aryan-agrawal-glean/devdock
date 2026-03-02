@@ -280,11 +280,21 @@ def setup_service(name, config, auto_init=True):
         # Copy wheels directory for custom packages (remove existing to avoid nested wheels/wheels)
         local('rm -rf {}/wheels && cp -r {}/python_scio/requirements/wheels {}/wheels'.format(service_path, devdock_root, service_path))
 
-        dockerfile_template = "{}/devdock/core/templates/Dockerfile.python.tpl".format(devdock_root)
+        # Look for templates in shipped libs first, fall back to monorepo
+        shipped_templates = "{}/devdock/runtime_generated/core/templates".format(devdock_root)
+        legacy_templates = "{}/devdock/core/templates".format(devdock_root)
+        template_dir = shipped_templates if os.path.exists(shipped_templates) else legacy_templates
+        dockerfile_template = "{}/Dockerfile.python.tpl".format(template_dir)
     elif service_type == "go":
-        dockerfile_template = "{}/devdock/core/templates/Dockerfile.go.tpl".format(devdock_root)
+        shipped_templates = "{}/devdock/runtime_generated/core/templates".format(devdock_root)
+        legacy_templates = "{}/devdock/core/templates".format(devdock_root)
+        template_dir = shipped_templates if os.path.exists(shipped_templates) else legacy_templates
+        dockerfile_template = "{}/Dockerfile.go.tpl".format(template_dir)
     else:
-        dockerfile_template = "{}/devdock/core/templates/Dockerfile.tpl".format(devdock_root)
+        shipped_templates = "{}/devdock/runtime_generated/core/templates".format(devdock_root)
+        legacy_templates = "{}/devdock/core/templates".format(devdock_root)
+        template_dir = shipped_templates if os.path.exists(shipped_templates) else legacy_templates
+        dockerfile_template = "{}/Dockerfile.tpl".format(template_dir)
 
     # Set up Docker build
     docker_config = setup_docker_build(context, dockerfile=dockerfile_template)
