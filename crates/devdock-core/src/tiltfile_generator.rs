@@ -58,18 +58,37 @@ pub fn generate_tiltfile(
 
     // Docker networks
     out.push_str("# Docker networks\n");
-    out.push_str("local('docker network create devdock_network 2>/dev/null || true')\n");
-    out.push_str("local('docker network create devdock_infra 2>/dev/null || true')\n\n");
+    out.push_str("setup_networks()\n");
+    out.push_str(
+        "local('docker images --filter \"dangling=true\" -q | xargs -r docker rmi || true')\n\n",
+    );
 
-    // Infrastructure
+    // Helper: gcloud auth (copies ADC credentials for Docker registry access)
+    out.push_str("# ─── Helper Resources ───────────────────────────────────────\n\n");
+    out.push_str(GCLOUD_AUTH_RESOURCE);
+    out.push('\n');
+
+    // Helper: central bazel build (parallel compilation for non-Go services)
+    out.push_str("load('./core/lib/central_bazel.Tiltfile', 'setup_central_bazel_build')\n");
+    out.push_str("setup_central_bazel_build(profile)\n\n");
+
+    // Infrastructure — load Tiltfiles if available (includes hydrators), fall back to compose
     if !resolved.infra.is_empty() {
         out.push_str("# ─── Infrastructure ─────────────────────────────────────────\n\n");
         let mut infra_sorted: Vec<_> = resolved.infra.iter().collect();
         infra_sorted.sort();
         for name in &infra_sorted {
-            let compose_path = resolve_infra_compose(name, infra_dir, project_root);
-            out.push_str(&format!("docker_compose('{compose_path}')\n"));
-            out.push_str(&format!("dc_resource('{name}', labels=['infra'])\n\n"));
+            let infra_tiltfile = project_root.join(format!("{infra_dir}/{name}/Tiltfile"));
+            if infra_tiltfile.exists() {
+                // Use the repo's infra Tiltfile (includes hydrators, custom setup)
+                let tiltfile_path = format!("../../{infra_dir}/{name}/Tiltfile");
+                out.push_str(&format!("load_dynamic('{tiltfile_path}')\n\n"));
+            } else {
+                // Fall back to compose file
+                let compose_path = resolve_infra_compose(name, infra_dir, project_root);
+                out.push_str(&format!("docker_compose('{compose_path}')\n"));
+                out.push_str(&format!("dc_resource('{name}', labels=['infra'])\n\n"));
+            }
         }
     }
 
@@ -200,6 +219,30 @@ pub fn extract_shipped_libs_to(workspace_root: &Path) -> std::io::Result<()> {
         include_str!("../../../lib/templates/compose.yaml.tpl"),
     )?;
 
+    // Create core/lib symlink in devdock/ dir so infra Tiltfiles can find libs
+    // Infra Tiltfiles do: load('../../../core/lib/bazel.Tiltfile', ...)
+    // This symlink makes those paths resolve to our shipped libs
+    let devdock_core_lib = workspace_root.join("devdock/core/lib");
+    if !devdock_core_lib.exists() {
+        // core/lib doesn't exist (OSS mode) — symlink to our shipped libs
+        std::fs::create_dir_all(workspace_root.join("devdock/core"))?;
+        #[cfg(unix)]
+        {
+            let target = runtime_dir.join("core/lib");
+            std::os::unix::fs::symlink(&target, &devdock_core_lib)?;
+        }
+    }
+
+    // Same for core/templates
+    let devdock_core_templates = workspace_root.join("devdock/core/templates");
+    if !devdock_core_templates.exists() {
+        #[cfg(unix)]
+        {
+            let target = runtime_dir.join("core/templates");
+            std::os::unix::fs::symlink(&target, &devdock_core_templates)?;
+        }
+    }
+
     // Create service_hooks stub (or symlink to repo if exists)
     let hooks_dir = runtime_dir.join("config/services/service_hooks");
     std::fs::create_dir_all(&hooks_dir)?;
@@ -231,6 +274,20 @@ pub fn extract_shipped_libs_to(workspace_root: &Path) -> std::io::Result<()> {
 
     Ok(())
 }
+
+const GCLOUD_AUTH_RESOURCE: &str = r#"# GCloud auth — copies ADC credentials for Docker registry access
+local_resource(
+    name='init-gcloud-auth',
+    cmd='''
+    if [ -f ~/.config/gcloud/application_default_credentials.json ]; then
+        mkdir -p ~/.devdock/auth/
+        rsync -rltD -L ~/.config/gcloud/application_default_credentials.json ~/.devdock/auth/
+    fi
+    ''',
+    allow_parallel=True,
+    labels=['devdock-core'],
+)
+"#;
 
 fn write_embedded(dir: &Path, name: &str, content: &str) -> std::io::Result<()> {
     std::fs::write(dir.join(name), content)
@@ -466,15 +523,16 @@ mod tests {
     }
 
     #[test]
-    fn tiltfile_has_networks() {
+    fn tiltfile_has_networks_and_helpers() {
         let tf = generate_tiltfile(
             &HashMap::new(),
             &ResolvedDeps { services: vec![], infra: vec![] },
             &test_config(),
             Path::new("/tmp"),
         );
-        assert!(tf.contains("devdock_network"));
-        assert!(tf.contains("devdock_infra"));
+        assert!(tf.contains("setup_networks()"));
+        assert!(tf.contains("init-gcloud-auth"));
+        assert!(tf.contains("central_bazel"));
     }
 
     #[test]
