@@ -63,23 +63,17 @@ pub fn generate_tiltfile(
         "local('docker images --filter \"dangling=true\" -q | xargs -r docker rmi || true')\n\n",
     );
 
-    // Helper: gcloud auth (copies ADC credentials for Docker registry access)
+    // Helper resources
     out.push_str("# ─── Helper Resources ───────────────────────────────────────\n\n");
-    out.push_str(GCLOUD_AUTH_RESOURCE);
-    out.push('\n');
 
-    // Helper: central bazel build (parallel compilation for non-Go services)
-    out.push_str("load('./core/lib/central_bazel.Tiltfile', 'setup_central_bazel_build')\n");
-    out.push_str("setup_central_bazel_build(profile)\n\n");
-
-    // Helper: startup monitor
-    out.push_str(STARTUP_MONITOR_RESOURCE);
-    out.push('\n');
-
-    // Helper: load repo-specific helpers if they exist
+    // Load repo-specific helpers if they exist (auth, misc, profile_update)
+    // These provide init-gcloud-auth, gcloud-auth, misc_helper, etc.
     let helpers_dir = project_root.join("devdock/config/helpers");
     if helpers_dir.join("auth/Tiltfile").exists() {
         out.push_str("load_dynamic('../../devdock/config/helpers/auth/Tiltfile')\n");
+    } else {
+        // No repo auth helper — provide built-in gcloud auth
+        out.push_str(GCLOUD_AUTH_RESOURCE);
     }
     if helpers_dir.join("misc/Tiltfile").exists() {
         out.push_str("load_dynamic('../../devdock/config/helpers/misc/Tiltfile')\n");
@@ -87,7 +81,17 @@ pub fn generate_tiltfile(
     if helpers_dir.join("profile_update/Tiltfile").exists() {
         out.push_str("load_dynamic('../../devdock/config/helpers/profile_update/Tiltfile')\n");
     }
+    if helpers_dir.join("observability/Tiltfile").exists() {
+        out.push_str("load_dynamic('../../devdock/config/helpers/observability/Tiltfile')\n");
+    } else {
+        // No repo observability — provide built-in startup monitor
+        out.push_str(STARTUP_MONITOR_RESOURCE);
+    }
     out.push('\n');
+
+    // Central bazel build (parallel compilation for non-Go services)
+    out.push_str("load('./core/lib/central_bazel.Tiltfile', 'setup_central_bazel_build')\n");
+    out.push_str("setup_central_bazel_build(profile)\n\n");
 
     // Infrastructure — load Tiltfiles if available (includes hydrators), fall back to compose
     if !resolved.infra.is_empty() {
