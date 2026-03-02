@@ -1,4 +1,4 @@
-load("./utils.Tiltfile", "get_bazel_cmd", "get_bazel_flags")
+load("utils.Tiltfile", "get_bazel_cmd", "get_bazel_flags")
 
 def bazel_build(name, target, watch_dirs = None, type = None, target_is_directory = "True", hot_reload = "enable", copy_runfiles = False):
     """Build a bazel target and watch for changes"""

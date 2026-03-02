@@ -1,6 +1,6 @@
 """Central Bazel build resource for parallel compilation."""
 
-load("./utils.Tiltfile", "get_bazel_flags")
+load("utils.Tiltfile", "get_bazel_flags")
 
 def setup_central_bazel_build(profile):
     """

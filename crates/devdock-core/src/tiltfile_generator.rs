@@ -72,6 +72,23 @@ pub fn generate_tiltfile(
     out.push_str("load('./core/lib/central_bazel.Tiltfile', 'setup_central_bazel_build')\n");
     out.push_str("setup_central_bazel_build(profile)\n\n");
 
+    // Helper: startup monitor
+    out.push_str(STARTUP_MONITOR_RESOURCE);
+    out.push('\n');
+
+    // Helper: load repo-specific helpers if they exist
+    let helpers_dir = project_root.join("devdock/config/helpers");
+    if helpers_dir.join("auth/Tiltfile").exists() {
+        out.push_str("load_dynamic('../../devdock/config/helpers/auth/Tiltfile')\n");
+    }
+    if helpers_dir.join("misc/Tiltfile").exists() {
+        out.push_str("load_dynamic('../../devdock/config/helpers/misc/Tiltfile')\n");
+    }
+    if helpers_dir.join("profile_update/Tiltfile").exists() {
+        out.push_str("load_dynamic('../../devdock/config/helpers/profile_update/Tiltfile')\n");
+    }
+    out.push('\n');
+
     // Infrastructure — load Tiltfiles if available (includes hydrators), fall back to compose
     if !resolved.infra.is_empty() {
         out.push_str("# ─── Infrastructure ─────────────────────────────────────────\n\n");
@@ -286,6 +303,19 @@ local_resource(
     ''',
     allow_parallel=True,
     labels=['devdock-core'],
+)
+"#;
+
+const STARTUP_MONITOR_RESOURCE: &str = r#"# Startup monitor — tracks service health
+_services = profile.get('services', {})
+_infra = profile.get('infra', {})
+_monitor_deps = ['{}-bazel-build'.format(s) for s in _services.keys() if type(_services[s]) == 'dict' and _services[s].get('type', 'local') == 'local'] + [i for i in _infra.keys()]
+local_resource(
+    name='startup-monitor',
+    labels=['devdock-core'],
+    cmd=['devdock', 'monitor'],
+    resource_deps=_monitor_deps,
+    allow_parallel=True,
 )
 "#;
 
