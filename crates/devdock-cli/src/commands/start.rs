@@ -448,8 +448,8 @@ fn start_tilt(services: Option<&str>, profile_name: &str, oss_pipeline: bool) ->
         let runtime_dir = workspace_root.join("devdock/runtime_generated");
         cmd.current_dir(&runtime_dir);
 
-        // Extract shipped Starlark libraries if needed
-        if let Err(e) = devdock_core::tiltfile_generator::extract_shipped_libs() {
+        // Extract shipped Starlark libraries to runtime_generated/core/lib/
+        if let Err(e) = devdock_core::tiltfile_generator::extract_shipped_libs_to(&workspace_root) {
             output::warn(&format!("Failed to extract shipped libs: {e}"));
         }
     } else {

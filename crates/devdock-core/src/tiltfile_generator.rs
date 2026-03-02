@@ -38,11 +38,19 @@ pub fn generate_tiltfile(
     out.push_str("allow_k8s_contexts(k8s_context())\n\n");
 
     // Load shipped DevDock libraries
-    out.push_str("# Load shipped DevDock libraries\n");
-    out.push_str("devdock_lib = os.path.expanduser('~/.devdock/lib')\n");
-    out.push_str("load_dynamic(devdock_lib + '/service.Tiltfile')\n");
-    out.push_str("load_dynamic(devdock_lib + '/docker.Tiltfile')\n");
-    out.push_str("load_dynamic(devdock_lib + '/bazel.Tiltfile')\n\n");
+    // Libs are extracted to devdock/runtime_generated/core/lib/ at runtime,
+    // mirroring the monorepo layout so relative load() paths work.
+    out.push_str("# Load DevDock libraries\n");
+    out.push_str("load('ext://restart_process', 'docker_build_with_restart')\n");
+    out.push_str("load('./core/lib/service.Tiltfile', 'load_service_config', 'setup_service')\n");
+    out.push_str(
+        "load('./core/lib/docker.Tiltfile', 'cleanup_generated_files', 'setup_networks')\n",
+    );
+    out.push_str("load('./core/lib/bazel.Tiltfile', 'bazel_build')\n\n");
+
+    // Settings
+    out.push_str("update_settings(max_parallel_updates=10)\n");
+    out.push_str("analytics_settings(enable=False)\n\n");
 
     // Read runtime config
     out.push_str("# Read runtime config\n");
@@ -95,43 +103,41 @@ fn resolve_infra_compose(name: &str, infra_dir: &str, project_root: &Path) -> St
 
 fn generate_service_block(
     name: &str,
-    config: &DevdockServiceConfig,
+    _config: &DevdockServiceConfig,
     project_config: &ProjectConfig,
 ) -> String {
     let mut out = String::new();
     let config_dir = format!("../../{}/{name}", project_config.project.services_dir);
 
-    // Dependency list
-    let deps: Vec<String> = config.dependencies.iter().map(|d| format!("'{d}'")).collect();
-
-    // setup_service call — delegates to shipped Starlark library
-    out.push_str(&format!("setup_service('{name}', {{\n"));
-    out.push_str(&format!("  'config_dir': '{config_dir}',\n"));
-
-    if !deps.is_empty() {
-        out.push_str(&format!("  'resource_deps': [{}],\n", deps.join(", ")));
-    }
-
-    out.push_str("})\n");
+    // Load service config and call setup_service
+    // This matches how existing per-service Tiltfiles work:
+    //   config = load_service_config('.')
+    //   setup_service('name', config)
+    out.push_str(&format!("setup_service('{name}', load_service_config('{config_dir}'))\n"));
 
     out
 }
 
-/// Extract shipped Starlark libraries and infra compose files to ~/.devdock/lib/.
-/// Only writes if files are missing or version has changed.
-pub fn extract_shipped_libs() -> std::io::Result<()> {
-    let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
-    let lib_dir = home.join(".devdock/lib");
-    let infra_dir = lib_dir.join("infra");
-    let templates_dir = lib_dir.join("templates");
+/// Extract shipped Starlark libraries to the runtime_generated directory.
+///
+/// Writes to `{workspace_root}/devdock/runtime_generated/core/lib/` and
+/// `{workspace_root}/devdock/runtime_generated/core/templates/` so that
+/// relative `load()` paths in Starlark work correctly.
+///
+/// Also creates service_hooks stub if not present in the repo.
+pub fn extract_shipped_libs_to(workspace_root: &Path) -> std::io::Result<()> {
+    let runtime_dir = workspace_root.join("devdock/runtime_generated");
+    let lib_dir = runtime_dir.join("core/lib");
+    let templates_dir = runtime_dir.join("core/templates");
+    let infra_dir = runtime_dir.join("infra");
 
     std::fs::create_dir_all(&lib_dir)?;
     std::fs::create_dir_all(&infra_dir)?;
     std::fs::create_dir_all(&templates_dir)?;
 
-    // Check version marker
+    // Check version marker — skip extraction if already up to date
     let version = env!("CARGO_PKG_VERSION");
-    let version_file = lib_dir.join(".version");
+    let version_file = runtime_dir.join(".lib_version");
     if version_file.exists() {
         if let Ok(existing) = std::fs::read_to_string(&version_file) {
             if existing.trim() == version {
@@ -193,6 +199,25 @@ pub fn extract_shipped_libs() -> std::io::Result<()> {
         "compose.yaml.tpl",
         include_str!("../../../lib/templates/compose.yaml.tpl"),
     )?;
+
+    // Create service_hooks stub (or symlink to repo if exists)
+    let hooks_dir = runtime_dir.join("config/services/service_hooks");
+    std::fs::create_dir_all(&hooks_dir)?;
+    let repo_hooks = workspace_root.join("devdock/config/services/service_hooks/Tiltfile");
+    let stub_hooks = hooks_dir.join("Tiltfile");
+    if repo_hooks.exists() {
+        // Symlink to repo's actual hooks
+        if stub_hooks.exists() {
+            std::fs::remove_file(&stub_hooks)?;
+        }
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&repo_hooks, &stub_hooks)?;
+        #[cfg(not(unix))]
+        std::fs::copy(&repo_hooks, &stub_hooks)?;
+    } else if !stub_hooks.exists() {
+        // Write a no-op stub
+        std::fs::write(&stub_hooks, "def get_pre_service_hooks(name):\n    return []\n")?;
+    }
 
     // Extract default infra compose files
     for (name, content) in DEFAULT_INFRA_COMPOSE {
@@ -428,17 +453,16 @@ mod tests {
     }
 
     #[test]
-    fn tiltfile_loads_shipped_libs() {
+    fn tiltfile_loads_libs() {
         let tf = generate_tiltfile(
             &HashMap::new(),
             &ResolvedDeps { services: vec![], infra: vec![] },
             &test_config(),
             Path::new("/tmp"),
         );
-        assert!(tf.contains("~/.devdock/lib"));
-        assert!(tf.contains("service.Tiltfile"));
-        assert!(tf.contains("docker.Tiltfile"));
-        assert!(tf.contains("bazel.Tiltfile"));
+        assert!(tf.contains("./core/lib/service.Tiltfile"));
+        assert!(tf.contains("./core/lib/docker.Tiltfile"));
+        assert!(tf.contains("./core/lib/bazel.Tiltfile"));
     }
 
     #[test]
@@ -465,7 +489,7 @@ mod tests {
     }
 
     #[test]
-    fn tiltfile_service_with_deps() {
+    fn tiltfile_service_calls_setup() {
         let mut svcs = HashMap::new();
         svcs.insert("api".into(), svc(&["sql", "redis"]));
         let resolved = ResolvedDeps {
@@ -473,17 +497,26 @@ mod tests {
             infra: vec!["sql".into(), "redis".into()],
         };
         let tf = generate_tiltfile(&svcs, &resolved, &test_config(), Path::new("/tmp"));
-        assert!(tf.contains("'resource_deps': ['sql', 'redis']"));
+        assert!(tf.contains("setup_service('api', load_service_config("));
     }
 
     #[test]
-    fn extract_creates_version_marker() {
+    fn extract_creates_libs_in_runtime_dir() {
         let dir = tempfile::tempdir().unwrap();
-        std::env::set_var("HOME", dir.path());
-        extract_shipped_libs().unwrap();
-        assert!(dir.path().join(".devdock/lib/.version").exists());
-        assert!(dir.path().join(".devdock/lib/service.Tiltfile").exists());
-        assert!(dir.path().join(".devdock/lib/infra/sql/docker-compose.yaml").exists());
-        std::env::remove_var("HOME");
+        // Create the devdock/runtime_generated dir structure
+        std::fs::create_dir_all(dir.path().join("devdock/runtime_generated")).unwrap();
+        extract_shipped_libs_to(dir.path()).unwrap();
+        assert!(dir.path().join("devdock/runtime_generated/.lib_version").exists());
+        assert!(dir.path().join("devdock/runtime_generated/core/lib/service.Tiltfile").exists());
+        assert!(dir.path().join("devdock/runtime_generated/core/lib/docker.Tiltfile").exists());
+        assert!(dir.path().join("devdock/runtime_generated/core/lib/bazel.Tiltfile").exists());
+        assert!(dir
+            .path()
+            .join("devdock/runtime_generated/core/templates/Dockerfile.python.tpl")
+            .exists());
+        assert!(dir
+            .path()
+            .join("devdock/runtime_generated/config/services/service_hooks/Tiltfile")
+            .exists());
     }
 }
