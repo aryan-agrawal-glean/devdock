@@ -140,13 +140,59 @@ pub fn extract_shipped_libs() -> std::io::Result<()> {
         }
     }
 
-    // Extract Starlark libraries (embedded in binary)
-    // For now, create stub files. In production, these would be
-    // include_str!() from the scio devdock/core/lib/ directory.
-    write_stub_lib(&lib_dir, "service.Tiltfile", SERVICE_TILTFILE_STUB)?;
-    write_stub_lib(&lib_dir, "docker.Tiltfile", DOCKER_TILTFILE_STUB)?;
-    write_stub_lib(&lib_dir, "bazel.Tiltfile", BAZEL_TILTFILE_STUB)?;
-    write_stub_lib(&lib_dir, "utils.Tiltfile", UTILS_TILTFILE_STUB)?;
+    // Extract Starlark libraries (embedded in binary via include_str!)
+    write_embedded(&lib_dir, "service.Tiltfile", include_str!("../../../lib/service.Tiltfile"))?;
+    write_embedded(&lib_dir, "docker.Tiltfile", include_str!("../../../lib/docker.Tiltfile"))?;
+    write_embedded(&lib_dir, "bazel.Tiltfile", include_str!("../../../lib/bazel.Tiltfile"))?;
+    write_embedded(&lib_dir, "utils.Tiltfile", include_str!("../../../lib/utils.Tiltfile"))?;
+    write_embedded(
+        &lib_dir,
+        "hot_reload.Tiltfile",
+        include_str!("../../../lib/hot_reload.Tiltfile"),
+    )?;
+    write_embedded(
+        &lib_dir,
+        "central_bazel.Tiltfile",
+        include_str!("../../../lib/central_bazel.Tiltfile"),
+    )?;
+    write_embedded(
+        &lib_dir,
+        "remote_service.Tiltfile",
+        include_str!("../../../lib/remote_service.Tiltfile"),
+    )?;
+    write_embedded(
+        &lib_dir,
+        "pipelines.Tiltfile",
+        include_str!("../../../lib/pipelines.Tiltfile"),
+    )?;
+    write_embedded(
+        &lib_dir,
+        "test_suite.Tiltfile",
+        include_str!("../../../lib/test_suite.Tiltfile"),
+    )?;
+    write_embedded(&lib_dir, "logger.Tiltfile", include_str!("../../../lib/logger.Tiltfile"))?;
+
+    // Extract templates
+    write_embedded(
+        &templates_dir,
+        "Dockerfile.python.tpl",
+        include_str!("../../../lib/templates/Dockerfile.python.tpl"),
+    )?;
+    write_embedded(
+        &templates_dir,
+        "Dockerfile.go.tpl",
+        include_str!("../../../lib/templates/Dockerfile.go.tpl"),
+    )?;
+    write_embedded(
+        &templates_dir,
+        "Dockerfile.tpl",
+        include_str!("../../../lib/templates/Dockerfile.tpl"),
+    )?;
+    write_embedded(
+        &templates_dir,
+        "compose.yaml.tpl",
+        include_str!("../../../lib/templates/compose.yaml.tpl"),
+    )?;
 
     // Extract default infra compose files
     for (name, content) in DEFAULT_INFRA_COMPOSE {
@@ -161,75 +207,9 @@ pub fn extract_shipped_libs() -> std::io::Result<()> {
     Ok(())
 }
 
-fn write_stub_lib(dir: &Path, name: &str, content: &str) -> std::io::Result<()> {
+fn write_embedded(dir: &Path, name: &str, content: &str) -> std::io::Result<()> {
     std::fs::write(dir.join(name), content)
 }
-
-// ─── Embedded Starlark stubs ───────────────────────────────────────────────────
-// These are minimal stubs. In production, they'd be the actual content from
-// ~/workspace/scio/devdock/core/lib/*.Tiltfile embedded via include_str!()
-
-const SERVICE_TILTFILE_STUB: &str = r#"
-# DevDock service library (stub — will be replaced with actual content)
-def load_service_config(config_dir):
-    """Load devdock_config.json from service directory."""
-    return read_json(config_dir + '/devdock_config.json')
-
-def setup_service(name, opts):
-    """Set up a service: bazel build + Docker + Tilt resource."""
-    config_dir = opts.get('config_dir', '.')
-    resource_deps = opts.get('resource_deps', [])
-    config = load_service_config(config_dir)
-
-    # Bazel build (if target specified)
-    bazel_target = config.get('bazel_target', '')
-    binary_mount = config.get('binary_mount', name)
-    if bazel_target:
-        local_resource(name + '-build',
-            cmd='bazel build ' + bazel_target + ' && mkdir -p ~/.devdock/' + name + ' && rsync -a --delete bazel-bin/' + binary_mount + '/ ~/.devdock/' + name + '/',
-            labels=['build'],
-        )
-        resource_deps = resource_deps + [name + '-build']
-
-    # Docker compose for this service
-    # In production, this would use setup_docker_build() + generate_compose()
-    # from the shipped templates. For now, use a minimal compose.
-    port = config.get('port', '8080')
-
-    dc_resource(name,
-        resource_deps=resource_deps,
-        labels=['service'],
-    )
-"#;
-
-const DOCKER_TILTFILE_STUB: &str = r#"
-# DevDock Docker library (stub)
-def setup_docker_build(name, config, context='.'):
-    """Generate Dockerfile from template and build Docker image."""
-    pass
-
-def generate_compose(name, config):
-    """Generate docker-compose.yaml for a service."""
-    pass
-"#;
-
-const BAZEL_TILTFILE_STUB: &str = r#"
-# DevDock Bazel library (stub)
-def bazel_build(name, target, binary_mount=''):
-    """Build a Bazel target and sync output."""
-    if not binary_mount:
-        binary_mount = name
-    local_resource(name + '-build',
-        cmd='bazel build ' + target + ' && mkdir -p ~/.devdock/' + name + ' && rsync -a --delete bazel-bin/' + binary_mount + '/ ~/.devdock/' + name + '/',
-        labels=['build'],
-    )
-"#;
-
-const UTILS_TILTFILE_STUB: &str = r#"
-# DevDock utilities (stub)
-def get_devdock_root():
-    return os.getenv('DEVDOCK_ROOT', os.getcwd())
-"#;
 
 // ─── Default infra compose files ───────────────────────────────────────────────
 

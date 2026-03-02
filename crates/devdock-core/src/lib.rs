@@ -4,6 +4,7 @@
 //! including profiles, services, infrastructure components, and errors.
 
 pub mod error;
+pub mod plugin;
 pub mod profile;
 pub mod project_config;
 pub mod resolver;
@@ -13,6 +14,7 @@ pub mod tiltfile_generator;
 pub mod types;
 
 pub use error::{Error, Result};
+pub use plugin::BackendRegistry;
 pub use profile::{InfraConfig, IniOverride, Profile, ServiceConfig};
 pub use project_config::ProjectConfig;
 pub use resolver::{resolve, ResolvedDeps};

@@ -20,6 +20,13 @@ toml.workspace = true
 async-trait.workspace = true
 tokio.workspace = true
 dirs.workspace = true
+tracing.workspace = true
+
+[features]
+default = []
+gcp = []
+aws = []
+datadog = []
 
 [dev-dependencies]
 tempfile.workspace = true
