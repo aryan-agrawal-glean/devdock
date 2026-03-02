@@ -126,6 +126,13 @@ pub async fn execute(
     generate_configs_rust(&workspace_root, &profile, services, Some(&profile_path_str), dry_run)
         .await?;
 
+    // Step 6b: OSS pipeline — generate Tiltfile if .devdock/devdock.toml exists
+    let use_oss_pipeline = workspace_root.join(".devdock/devdock.toml").exists();
+    if use_oss_pipeline {
+        output::info("OSS pipeline detected (.devdock/devdock.toml)");
+        generate_oss_tiltfile(&workspace_root, &profile)?;
+    }
+
     // Step 7: Clean old logs and startup state files
     cleanup_old_logs()?;
     cleanup_startup_state_files()?;
@@ -154,7 +161,7 @@ pub async fn execute(
     write_profile_state(profile_name)?;
 
     output::info("Starting Tilt...");
-    let tilt_process = start_tilt(services, profile_name)?;
+    let tilt_process = start_tilt(services, profile_name, use_oss_pipeline)?;
 
     // Track tilt up time for telemetry
     let tilt_up_time = chrono::Utc::now();
@@ -305,6 +312,61 @@ async fn generate_configs_rust(
     Ok(())
 }
 
+/// Generate Tiltfile for OSS pipeline.
+///
+/// Reads .devdock/devdock.toml, discovers service configs, resolves deps,
+/// and generates a Tiltfile that loads shipped Starlark libraries.
+fn generate_oss_tiltfile(
+    workspace_root: &Path,
+    profile: &devdock_core::profile::Profile,
+) -> Result<()> {
+    use devdock_core::project_config::ProjectConfig;
+    use devdock_core::resolver;
+    use devdock_core::service_config::discover_services;
+    use devdock_core::tiltfile_generator;
+
+    let config_path = workspace_root.join(".devdock/devdock.toml");
+    let project_config =
+        ProjectConfig::load(&config_path).context("Failed to load .devdock/devdock.toml")?;
+
+    // Discover service configs
+    let services_dir = workspace_root.join(&project_config.project.services_dir);
+    let service_configs =
+        discover_services(&services_dir).context("Failed to discover service configs")?;
+
+    output::info(&format!("Discovered {} service config(s)", service_configs.len()));
+
+    // Extract requested services + infra from profile
+    let mut requested: Vec<String> = profile.services.keys().cloned().collect();
+    requested.extend(profile.infra.keys().cloned());
+
+    // Resolve dependencies
+    let resolved = resolver::resolve(&requested, &service_configs)
+        .context("Failed to resolve dependencies")?;
+
+    output::info(&format!(
+        "Resolved: {} service(s), {} infra component(s)",
+        resolved.services.len(),
+        resolved.infra.len()
+    ));
+
+    // Generate Tiltfile
+    let tiltfile = tiltfile_generator::generate_tiltfile(
+        &service_configs,
+        &resolved,
+        &project_config,
+        workspace_root,
+    );
+
+    // Write to runtime_generated/
+    let runtime_dir = workspace_root.join("devdock/runtime_generated");
+    std::fs::create_dir_all(&runtime_dir)?;
+    std::fs::write(runtime_dir.join("Tiltfile"), &tiltfile)?;
+
+    output::success("Generated OSS Tiltfile");
+    Ok(())
+}
+
 /// Clean up old logs
 fn cleanup_old_logs() -> Result<()> {
     output::info("Cleaning up old logs...");
@@ -370,44 +432,52 @@ fn cleanup_startup_state_files() -> Result<()> {
 }
 
 /// Start Tilt process
-fn start_tilt(services: Option<&str>, profile_name: &str) -> Result<Child> {
-    // Find monorepo root (where devdock directory is)
+fn start_tilt(services: Option<&str>, profile_name: &str, oss_pipeline: bool) -> Result<Child> {
     let workspace_root = find_workspace_root()?;
-    let devdock_dir = workspace_root.join("devdock");
 
-    if !devdock_dir.exists() {
-        anyhow::bail!(
-            "devdock directory not found at {}. Are you in the monorepo?",
-            workspace_root.display()
-        );
-    }
-
-    // Set DEVDOCK_ROOT environment variable
+    // Set environment variables
     std::env::set_var("DEVDOCK_ROOT", &workspace_root);
-
-    // Set DEVDOCK_RUST_BINARY to indicate the Rust implementation is being used
     std::env::set_var("DEVDOCK_RUST_BINARY", "true");
-
-    // Set DEVDOCK_PROFILE for telemetry in monitor command
     std::env::set_var("DEVDOCK_PROFILE", profile_name);
 
-    // Build tilt command
     let mut cmd = Command::new("tilt");
     cmd.arg("up");
-    cmd.current_dir(&devdock_dir);
 
-    // Add services if specified
-    if let Some(svcs) = services {
-        for service in svcs.split(',') {
-            cmd.arg(service.trim());
+    if oss_pipeline {
+        // OSS mode: use generated Tiltfile, run from runtime_generated/
+        let runtime_dir = workspace_root.join("devdock/runtime_generated");
+        cmd.current_dir(&runtime_dir);
+
+        // Extract shipped Starlark libraries if needed
+        if let Err(e) = devdock_core::tiltfile_generator::extract_shipped_libs() {
+            output::warn(&format!("Failed to extract shipped libs: {e}"));
         }
-        // Add helper services
-        cmd.args(["gcloud-auth", "trigger-profile-update", "current-config", "startup-monitor"]);
+    } else {
+        // Legacy mode: use hand-written Tiltfile, run from devdock/
+        let devdock_dir = workspace_root.join("devdock");
+        if !devdock_dir.exists() {
+            anyhow::bail!(
+                "devdock directory not found at {}. Are you in the monorepo?",
+                workspace_root.display()
+            );
+        }
+        cmd.current_dir(&devdock_dir);
+
+        // Add services if specified (legacy helper services)
+        if let Some(svcs) = services {
+            for service in svcs.split(',') {
+                cmd.arg(service.trim());
+            }
+            cmd.args([
+                "gcloud-auth",
+                "trigger-profile-update",
+                "current-config",
+                "startup-monitor",
+            ]);
+        }
     }
 
-    // Spawn tilt process
     let child = cmd.stdin(Stdio::null()).spawn().context("Failed to start tilt")?;
-
     Ok(child)
 }
 

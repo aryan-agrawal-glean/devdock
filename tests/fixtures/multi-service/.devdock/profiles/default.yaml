@@ -1,0 +1,15 @@
+project: multi-service
+
+infra:
+  sql:
+    type: local
+  redis:
+    type: local
+
+services:
+  api:
+    type: local
+  worker:
+    type: local
+  frontend:
+    type: local

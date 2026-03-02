@@ -5,6 +5,7 @@ pub mod docker;
 pub mod exec;
 pub mod generate;
 pub mod infra;
+pub mod init;
 pub mod list;
 pub mod logs;
 pub mod monitor;

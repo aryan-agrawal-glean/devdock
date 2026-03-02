@@ -5,8 +5,15 @@
 
 pub mod error;
 pub mod profile;
+pub mod project_config;
+pub mod resolver;
 pub mod service;
+pub mod service_config;
+pub mod tiltfile_generator;
 pub mod types;
 
 pub use error::{Error, Result};
 pub use profile::{InfraConfig, IniOverride, Profile, ServiceConfig};
+pub use project_config::ProjectConfig;
+pub use resolver::{resolve, ResolvedDeps};
+pub use service_config::{discover_services, DevdockServiceConfig};

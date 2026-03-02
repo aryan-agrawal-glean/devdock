@@ -24,6 +24,9 @@ pub enum Error {
     #[error("Infrastructure component not found: {0}")]
     InfraNotFound(String),
 
+    #[error("Configuration error: {0}")]
+    Config(String),
+
     #[error("Invalid configuration: {0}")]
     InvalidConfig(String),
 

@@ -1,0 +1,5 @@
+project: multi-service
+
+services:
+  api:
+    type: local

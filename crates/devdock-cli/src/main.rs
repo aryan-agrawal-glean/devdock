@@ -132,6 +132,9 @@ enum Commands {
         output: Option<String>,
     },
 
+    /// Initialize DevDock for the current project
+    Init {},
+
     /// Full cleanup of containers, networks, and files
     #[command(alias = "-c")]
     Cleanup {
@@ -621,6 +624,8 @@ async fn main() {
         Commands::Generate { profile, output } => {
             commands::generate::execute(&profile, output.as_deref()).await
         }
+
+        Commands::Init {} => commands::init::execute().await,
 
         Commands::Cleanup { soft, logs, no_local } => {
             commands::cleanup::execute(soft, logs, !no_local).await
