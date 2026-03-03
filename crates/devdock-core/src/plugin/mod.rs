@@ -11,8 +11,10 @@
 //! - [`DiagnosticsBackend`] — stdout, Jira, GitHub Issues
 //! - [`RemoteProviderBackend`] — SSH, Coder, Codespaces
 
+pub mod external;
 mod registry;
 mod traits;
 
+pub use external::ExternalTelemetryPlugin;
 pub use registry::BackendRegistry;
 pub use traits::*;

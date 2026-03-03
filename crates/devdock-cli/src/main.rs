@@ -298,12 +298,23 @@ enum ProfileCommands {
 
 #[derive(Subcommand)]
 enum PluginCommands {
-    /// List installed plugins
+    /// List installed plugins and available backends
     List,
     /// Install a plugin
     Install { name: String },
     /// Remove a plugin
     Remove { name: String },
+    /// Create a new external plugin from template
+    Create {
+        /// Plugin name
+        name: String,
+        /// Plugin type: telemetry, diagnostics, storage
+        #[arg(long, default_value = "telemetry")]
+        r#type: String,
+        /// Language: python, go, bash
+        #[arg(long, default_value = "python")]
+        language: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -705,6 +716,9 @@ async fn main() {
             PluginCommands::List => commands::plugin::list().await,
             PluginCommands::Install { name } => commands::plugin::install(&name).await,
             PluginCommands::Remove { name } => commands::plugin::remove(&name).await,
+            PluginCommands::Create { name, r#type, language } => {
+                commands::plugin::create(&name, &r#type, &language).await
+            }
         },
 
         Commands::Infra { command } => match command {
