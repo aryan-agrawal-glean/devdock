@@ -33,57 +33,37 @@ impl BackendRegistry {
     pub fn from_config(config: &ProjectConfig) -> crate::Result<Self> {
         let registry = Self::with_defaults();
 
-        // Telemetry backend selection
-        match config.telemetry.backend.as_str() {
-            "stdout" | "file" => {} // defaults already set
-            "bigquery" => {
-                #[cfg(not(feature = "gcp"))]
-                return Err(crate::Error::Config(
-                    "BigQuery telemetry requires devdock built with --features gcp".into(),
-                ));
-                // #[cfg(feature = "gcp")]
-                // registry would set BigQuery backend here
-            }
-            "datadog" => {
-                #[cfg(not(feature = "datadog"))]
-                return Err(crate::Error::Config(
-                    "Datadog telemetry requires devdock built with --features datadog".into(),
-                ));
-            }
-            other => {
-                tracing::warn!("Unknown telemetry backend '{other}', using stdout");
-            }
+        // Log selected backends (actual registration happens in devdock-cli
+        // which has access to the telemetry/storage crates)
+        if config.telemetry.enabled {
+            tracing::info!(
+                "Telemetry backend: {} (registration handled by CLI)",
+                config.telemetry.backend
+            );
         }
-
-        // Storage backend selection
-        match config.cloud.platform.as_str() {
-            "google" | "gcp" => {
-                #[cfg(not(feature = "gcp"))]
-                tracing::warn!("GCS storage requires --features gcp, falling back to local");
-                // #[cfg(feature = "gcp")]
-                // registry would set GCS backend here
-            }
-            "aws" => {
-                #[cfg(not(feature = "aws"))]
-                tracing::warn!("S3 storage requires --features aws, falling back to local");
-            }
-            _ => {} // local storage is default
-        }
-
-        // Diagnostics backend selection
-        match config.diagnostics.reporter.as_str() {
-            "stdout" => {} // default
-            "jira" => {
-                #[cfg(not(feature = "gcp"))]
-                tracing::warn!("Jira diagnostics requires --features gcp (for Secret Manager), falling back to stdout");
-            }
-            "github-issues" => {} // would configure GitHub backend
-            other => {
-                tracing::warn!("Unknown diagnostics reporter '{other}', using stdout");
-            }
+        if config.cloud.platform != "none" {
+            tracing::info!(
+                "Cloud platform: {} (storage backend selected accordingly)",
+                config.cloud.platform
+            );
         }
 
         Ok(registry)
+    }
+
+    /// Replace the telemetry backend (e.g., with BigQuery).
+    pub async fn set_telemetry(&self, backend: Box<dyn TelemetrySyncBackend>) {
+        *self.telemetry.write().await = backend;
+    }
+
+    /// Replace the storage backend.
+    pub async fn set_storage(&self, backend: Box<dyn ConfigStorageBackend>) {
+        *self.storage.write().await = backend;
+    }
+
+    /// Replace the diagnostics backend.
+    pub async fn set_diagnostics(&self, backend: Box<dyn DiagnosticsBackend>) {
+        *self.diagnostics.write().await = backend;
     }
 
     /// Emit a telemetry event.

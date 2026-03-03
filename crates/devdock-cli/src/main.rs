@@ -1,5 +1,6 @@
 //! DevDock CLI entry point.
 
+mod backends;
 mod commands;
 mod logging;
 mod output;

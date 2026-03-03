@@ -25,6 +25,51 @@ pub async fn execute(
 
     output::info("Starting DevDock...");
 
+    // Initialize backend registry (config-driven — selects backends from devdock.toml)
+    let workspace_root_for_config = find_workspace_root().ok();
+    let backend_registry = if let Some(ref ws) = workspace_root_for_config {
+        let config_path = ws.join(".devdock/devdock.toml");
+        if config_path.exists() {
+            match devdock_core::ProjectConfig::load(&config_path) {
+                Ok(project_config) => {
+                    match devdock_core::BackendRegistry::from_config(&project_config) {
+                        Ok(registry) => {
+                            // Register GCP backends if configured
+                            crate::backends::register_gcp_backends(&registry, &project_config)
+                                .await;
+                            tracing::debug!("Backend registry initialized from devdock.toml");
+                            Some(registry)
+                        }
+                        Err(e) => {
+                            tracing::warn!("Failed to initialize backend registry: {e}");
+                            None
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::debug!("No devdock.toml: {e}");
+                    None
+                }
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    // Emit session start via backend registry
+    if let Some(ref registry) = backend_registry {
+        use devdock_core::plugin::TelemetryEvent;
+        let _ = registry
+            .emit_telemetry(&TelemetryEvent::SessionStart {
+                session_id: "pending".to_string(),
+                profile: profile_name.to_string(),
+                mode: "local".to_string(),
+            })
+            .await;
+    }
+
     // Step 0: Enable rich logging if requested (skip in dry-run mode)
     if enable_logs && !dry_run {
         output::info("Enabling rich logging...");
@@ -986,6 +1031,23 @@ async fn emit_telemetry(
     let tilt_bootstrap_secs = (tilt_up_time - command_start_time).num_seconds() as f64;
     let total_startup_secs = (now - command_start_time).num_seconds() as f64;
 
+    // Also emit via backend registry (config-driven telemetry sync)
+    // This is the OSS-compatible path that uses devdock.toml config
+    {
+        use devdock_core::plugin::TelemetryEvent;
+        let event = TelemetryEvent::SessionEnd {
+            session_id: devdock_id.to_string(),
+            duration_secs: total_startup_secs as u64,
+            success: status == "success",
+        };
+        // Try to emit via registry (will use stdout for OSS, BigQuery for Glean)
+        let registry = devdock_core::BackendRegistry::with_defaults();
+        if let Err(e) = registry.emit_telemetry(&event).await {
+            tracing::debug!("Backend telemetry: {e}");
+        }
+    }
+
+    // Legacy BigQuery emission (direct, for backward compatibility)
     let session = SessionMetrics {
         devdock_id: devdock_id.to_string(),
         machine_id: machine_id.clone(),
