@@ -30,7 +30,7 @@ def toggle_hot_reload():
             text_input(
                 'command',
                 label='Command',
-                default='scio devdock',
+                default='devdock start',
                 placeholder='Command that triggered the issue'
             )
         ])

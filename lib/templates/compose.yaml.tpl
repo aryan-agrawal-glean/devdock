@@ -12,7 +12,6 @@ $compose_env
     volumes:
       - ~/.devdock/auth/application_default_credentials.json:/tmp/.config/gcloud/application_default_credentials.json
       - ${DEVDOCK_ROOT}/config/:/config
-      - ${DEVDOCK_ROOT}/python_scio/requirements/bazel/linux/requirements.txt:/app/requirements.txt
       - $mount_binary_path
 $extra_mounts
     restart: unless-stopped

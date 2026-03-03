@@ -198,7 +198,10 @@ def setup_test(name, profile, project):
 
     file_path = bazel_target.split(':')[0].split('//')[-1] + "/" + test_name + ".py"
     local('cp {}/{} ~/.devdock/{}/{}.py'.format(devdock_root, file_path, name, test_name))
-    local('cp {}/python_scio/scripts/tests/conftest.py ~/.devdock/{}/conftest.py'.format(devdock_root, name))
+    # Copy conftest if it exists (project-specific)
+    conftest_path = '{}/python_scio/scripts/tests/conftest.py'.format(devdock_root)
+    if os.path.exists(conftest_path):
+        local('cp {} ~/.devdock/{}/conftest.py'.format(conftest_path, name))
     mount_binary_path = "~/.devdock/{}:/app/{}".format(name, name)
 
     # Create necessary directories
@@ -274,7 +277,7 @@ def setup_test(name, profile, project):
     compose_env = "\n".join(['      {}: "{}"'.format(k, v) for k, v in env_vars.items()])
 
     # Determine base image tag based on architecture
-    base_image = "us-central1-docker.pkg.dev/scio-engineering/glean-images/devdock_python_base"
+    base_image = test_config.get("base_image", "python:3.11-slim")
     if architecture == 'linux':
         base_image += ":latest-amd64"
 

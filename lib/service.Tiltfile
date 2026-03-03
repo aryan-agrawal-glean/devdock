@@ -122,8 +122,13 @@ def setup_service(name, config, auto_init=True):
 
     extra_hosts_entries = []
 
+    # Add host gateway entries for debug port access and local domain
     if debug_port:
-        extra_hosts_entries += ['host.docker.internal:host-gateway', 'local.glean.com:host-gateway']
+        extra_hosts_entries += ['host.docker.internal:host-gateway']
+        # Add custom domain if configured in profile
+        domain = profile.get('domain', os.getenv('DEVDOCK_DOMAIN', ''))
+        if domain:
+            extra_hosts_entries.append(domain + ':host-gateway')
 
     if profile.get('services', {}).get('composio_apollo', {}).get('type', '') == 'remote':
         extra_hosts_entries += [
@@ -266,19 +271,37 @@ def setup_service(name, config, auto_init=True):
 
     devdock_root = os.getenv('DEVDOCK_ROOT')
 
-    # For Python services, copy the appropriate requirements file based on architecture
+    # For Python services, copy requirements and wheels if configured
     if service_type == "python":
         architecture = profile.get('architecture', 'unknown')
         service_path = "{}/devdock/config/services/{}".format(devdock_root, name)
-        if architecture == 'linux':
-            # Use Linux-specific requirements
-            local('cp {}/python_scio/requirements/bazel/linux/requirements.txt {}/requirements.txt'.format(devdock_root, service_path))
-        else:
-            # Use default requirements (for darwin/arm64)
-            local('cp {}/python_scio/requirements/bazel/linux_aarch64/requirements.txt {}/requirements.txt'.format(devdock_root, service_path))
 
-        # Copy wheels directory for custom packages (remove existing to avoid nested wheels/wheels)
-        local('rm -rf {}/wheels && cp -r {}/python_scio/requirements/wheels {}/wheels'.format(service_path, devdock_root, service_path))
+        # Requirements path from devdock_config.json (generic) or legacy hardcoded path
+        requirements_config = config.get("requirements", {})
+        if type(requirements_config) == "dict":
+            linux_req = requirements_config.get("linux", "")
+            darwin_req = requirements_config.get("darwin", requirements_config.get("default", ""))
+            wheels_dir = requirements_config.get("wheels", "")
+        else:
+            # Legacy fallback for repos with python_scio layout
+            linux_req = "python_scio/requirements/bazel/linux/requirements.txt"
+            darwin_req = "python_scio/requirements/bazel/linux_aarch64/requirements.txt"
+            wheels_dir = "python_scio/requirements/wheels"
+
+        if architecture == 'linux' and linux_req:
+            req_path = "{}/{}".format(devdock_root, linux_req)
+            if os.path.exists(req_path):
+                local('cp {} {}/requirements.txt'.format(req_path, service_path))
+        elif darwin_req:
+            req_path = "{}/{}".format(devdock_root, darwin_req)
+            if os.path.exists(req_path):
+                local('cp {} {}/requirements.txt'.format(req_path, service_path))
+
+        # Copy wheels directory if it exists
+        if wheels_dir:
+            wheels_path = "{}/{}".format(devdock_root, wheels_dir)
+            if os.path.exists(wheels_path):
+                local('rm -rf {}/wheels && cp -r {} {}/wheels'.format(service_path, wheels_path, service_path))
 
         # Look for templates in shipped libs first, fall back to monorepo
         shipped_templates = "{}/devdock/runtime_generated/core/templates".format(devdock_root)

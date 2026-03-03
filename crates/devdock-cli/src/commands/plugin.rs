@@ -190,14 +190,14 @@ if __name__ == "__main__":
     {class_name}().run()
 "#,
         class_name = name
-            .chars()
-            .enumerate()
-            .map(|(i, c)| if i == 0 || name.as_bytes().get(i.wrapping_sub(1)) == Some(&b'_') {
-                c.to_uppercase().to_string()
-            } else if c == '_' {
-                String::new()
-            } else {
-                c.to_string()
+            .replace('-', "_")
+            .split('_')
+            .map(|word| {
+                let mut chars = word.chars();
+                match chars.next() {
+                    None => String::new(),
+                    Some(c) => c.to_uppercase().to_string() + &chars.collect::<String>(),
+                }
             })
             .collect::<String>()
             + "Plugin"
