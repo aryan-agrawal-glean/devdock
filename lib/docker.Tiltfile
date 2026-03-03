@@ -54,11 +54,8 @@ def generate_compose(template_path, context, type = 'services'):
 
 def setup_docker_build(context, dockerfile = None, compose_file = None):
     """Set up a Docker build with optional custom Dockerfile and compose file"""
-    # Find templates in shipped libs or monorepo
     _devdock_root = os.getenv('DEVDOCK_ROOT')
-    _shipped = "{}/devdock/runtime_generated/core/templates".format(_devdock_root)
-    _legacy = "{}/devdock/core/templates".format(_devdock_root)
-    _tpl_dir = _shipped if os.path.exists(_shipped) else _legacy
+    _tpl_dir = "{}/devdock/runtime_generated/core/templates".format(_devdock_root)
     dockerfile = dockerfile or "{}/Dockerfile.tpl".format(_tpl_dir)
     compose_file = compose_file or "{}/compose.yaml.tpl".format(_tpl_dir)
 

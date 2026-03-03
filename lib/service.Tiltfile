@@ -276,17 +276,16 @@ def setup_service(name, config, auto_init=True):
         architecture = profile.get('architecture', 'unknown')
         service_path = "{}/devdock/config/services/{}".format(devdock_root, name)
 
-        # Requirements path from devdock_config.json (generic) or legacy hardcoded path
+        # Requirements path from devdock_config.json
         requirements_config = config.get("requirements", {})
         if type(requirements_config) == "dict":
             linux_req = requirements_config.get("linux", "")
             darwin_req = requirements_config.get("darwin", requirements_config.get("default", ""))
             wheels_dir = requirements_config.get("wheels", "")
         else:
-            # Legacy fallback for repos with python_scio layout
-            linux_req = "python_scio/requirements/bazel/linux/requirements.txt"
-            darwin_req = "python_scio/requirements/bazel/linux_aarch64/requirements.txt"
-            wheels_dir = "python_scio/requirements/wheels"
+            linux_req = ""
+            darwin_req = ""
+            wheels_dir = ""
 
         if architecture == 'linux' and linux_req:
             req_path = "{}/{}".format(devdock_root, linux_req)
@@ -303,20 +302,13 @@ def setup_service(name, config, auto_init=True):
             if os.path.exists(wheels_path):
                 local('rm -rf {}/wheels && cp -r {} {}/wheels'.format(service_path, wheels_path, service_path))
 
-        # Look for templates in shipped libs first, fall back to monorepo
-        shipped_templates = "{}/devdock/runtime_generated/core/templates".format(devdock_root)
-        legacy_templates = "{}/devdock/core/templates".format(devdock_root)
-        template_dir = shipped_templates if os.path.exists(shipped_templates) else legacy_templates
+        template_dir = "{}/devdock/runtime_generated/core/templates".format(devdock_root)
         dockerfile_template = "{}/Dockerfile.python.tpl".format(template_dir)
     elif service_type == "go":
-        shipped_templates = "{}/devdock/runtime_generated/core/templates".format(devdock_root)
-        legacy_templates = "{}/devdock/core/templates".format(devdock_root)
-        template_dir = shipped_templates if os.path.exists(shipped_templates) else legacy_templates
+        template_dir = "{}/devdock/runtime_generated/core/templates".format(devdock_root)
         dockerfile_template = "{}/Dockerfile.go.tpl".format(template_dir)
     else:
-        shipped_templates = "{}/devdock/runtime_generated/core/templates".format(devdock_root)
-        legacy_templates = "{}/devdock/core/templates".format(devdock_root)
-        template_dir = shipped_templates if os.path.exists(shipped_templates) else legacy_templates
+        template_dir = "{}/devdock/runtime_generated/core/templates".format(devdock_root)
         dockerfile_template = "{}/Dockerfile.tpl".format(template_dir)
 
     # Set up Docker build

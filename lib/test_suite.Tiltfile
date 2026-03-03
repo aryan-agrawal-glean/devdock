@@ -198,10 +198,12 @@ def setup_test(name, profile, project):
 
     file_path = bazel_target.split(':')[0].split('//')[-1] + "/" + test_name + ".py"
     local('cp {}/{} ~/.devdock/{}/{}.py'.format(devdock_root, file_path, name, test_name))
-    # Copy conftest if it exists (project-specific)
-    conftest_path = '{}/python_scio/scripts/tests/conftest.py'.format(devdock_root)
-    if os.path.exists(conftest_path):
-        local('cp {} ~/.devdock/{}/conftest.py'.format(conftest_path, name))
+    # Copy conftest if configured in test config
+    conftest_path = test_config.get('conftest', '')
+    if conftest_path:
+        full_path = '{}/{}'.format(devdock_root, conftest_path)
+        if os.path.exists(full_path):
+            local('cp {} ~/.devdock/{}/conftest.py'.format(full_path, name))
     mount_binary_path = "~/.devdock/{}:/app/{}".format(name, name)
 
     # Create necessary directories
