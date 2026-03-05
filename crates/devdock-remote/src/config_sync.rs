@@ -9,7 +9,7 @@ use crate::{RemoteError, Result};
 use devdock_core::profile::Profile;
 use std::path::Path;
 use std::process::Command;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 // ─── Profile helpers (local only, no SSH) ──────────────────────────────────────
 
@@ -260,74 +260,6 @@ fn scp_gcloud_to_remote(workspace: &str, temp_dir: &Path, verbose: bool) -> Resu
     Ok(())
 }
 
-// ─── IAP cookie sync (best-effort, local only) ─────────────────────────────────
-
-/// Python script to extract IAP cookies from local browser using browser_cookie3.
-/// Returns a JSON array of cookie objects with name, value, and domain fields.
-const IAP_COOKIE_EXTRACT_SCRIPT: &str = r#"
-import json
-import sys
-
-try:
-    import browser_cookie3
-except ImportError:
-    sys.exit(0)
-
-cookies = []
-for browser_fn in [browser_cookie3.chrome, browser_cookie3.firefox]:
-    try:
-        cj = browser_fn(domain_name=".glean.com")
-        for c in cj:
-            if c.name.startswith("__Host-GCP_IAP_AUTH_TOKEN"):
-                cookies.append({"name": c.name, "value": c.value, "domain": c.domain})
-    except Exception:
-        pass
-
-if cookies:
-    print(json.dumps(cookies))
-"#;
-
-/// Attempt to read IAP cookies from the local browser cookie store.
-///
-/// Uses a Python subprocess with `browser_cookie3` to extract
-/// `__Host-GCP_IAP_AUTH_TOKEN_*` cookies for `*.glean.com`.
-/// This is best-effort: returns `None` on any failure without raising errors.
-fn read_local_iap_cookies(verbose: bool) -> Option<String> {
-    debug!("Attempting to read IAP cookies from local browser");
-
-    let output = Command::new("python3")
-        .arg("-c")
-        .arg(IAP_COOKIE_EXTRACT_SCRIPT)
-        .output()
-        .ok()?;
-
-    if !output.status.success() {
-        debug!("IAP cookie extraction script exited with non-zero status");
-        return None;
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if stdout.is_empty() {
-        debug!("No IAP cookies found in local browser");
-        if verbose {
-            println!("    → No IAP cookies found in local browser (Erasmus may need manual login)");
-        }
-        return None;
-    }
-
-    // Validate that we got valid JSON
-    if serde_json::from_str::<serde_json::Value>(&stdout).is_err() {
-        warn!("IAP cookie extraction returned invalid JSON");
-        return None;
-    }
-
-    info!("Found IAP cookies for Erasmus");
-    if verbose {
-        println!("    → Found IAP cookies for Erasmus remote sync");
-    }
-    Some(stdout)
-}
-
 // ─── Main entry point ──────────────────────────────────────────────────────────
 
 /// Status returned from config sync, including credential verification results.
@@ -414,7 +346,7 @@ pub fn sync_all_config(
     let needs_secrets_sync = gcloud_staging.is_some();
 
     // Stage IAP cookies locally (best-effort, for Erasmus on remote)
-    let iap_cookies_json = read_local_iap_cookies(verbose);
+    let iap_cookies_json = crate::iap_cookies::read_local_iap_cookies(verbose);
 
     // ─── Phase 1: Single SSH for all config file writes ────────────────────
 
