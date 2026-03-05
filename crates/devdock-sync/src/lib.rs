@@ -4,6 +4,7 @@
 //! workspaces using rsync and file watching.
 
 pub mod daemon;
+pub mod force;
 pub mod git;
 pub mod health;
 pub mod rsync;

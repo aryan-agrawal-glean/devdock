@@ -19,6 +19,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 dirs = { workspace = true }
 chrono = "0.4"
+glob = { workspace = true }
 
 # File watching
 notify = "6.1"

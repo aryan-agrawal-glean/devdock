@@ -514,6 +514,91 @@ pub async fn history(tail: Option<usize>) -> Result<()> {
     Ok(())
 }
 
+/// Force-sync files/directories bypassing normal filters.
+pub async fn force(paths: Vec<String>, workspace: Option<String>, watch: bool) -> Result<()> {
+    // 1. Determine workspace name
+    let (devdock_id, workspace_name) = if let Some(ws) = workspace {
+        // Standalone mode: user provided workspace name explicitly
+        let state = StateManager::new().await?;
+        match get_current_instance(&state).await {
+            Ok((id, _)) => (id, ws),
+            Err(_) => {
+                if watch {
+                    return Err(anyhow!(
+                        "--watch requires a running DevDock instance (no instance found for current worktree)"
+                    ));
+                }
+                (String::new(), ws)
+            }
+        }
+    } else {
+        let state = StateManager::new().await?;
+        get_current_instance(&state).await?
+    };
+
+    let worktree = get_current_worktree()?;
+    let repo_path = PathBuf::from(&worktree);
+
+    // 2. Resolve paths/globs to file list
+    println!("Resolving paths...");
+    let resolved = devdock_sync::force::resolve_paths(&repo_path, &paths)?;
+
+    // Warn about unmatched patterns
+    for pattern in &resolved.unmatched_patterns {
+        eprintln!("{} Pattern matched no files: {}", "Warning:".yellow(), pattern);
+    }
+
+    if resolved.files.is_empty() {
+        println!("{}", "No files found matching the specified paths/patterns.".yellow());
+        return Ok(());
+    }
+
+    // 3. Display file list
+    println!();
+    println!("Files to sync: {}", resolved.files.len().to_string().cyan());
+    for (i, file) in resolved.files.iter().enumerate() {
+        if i >= 20 {
+            println!("  ... and {} more", resolved.files.len() - 20);
+            break;
+        }
+        println!("  {}", file.display().to_string().dimmed());
+    }
+    println!();
+
+    // 4. Execute force sync
+    println!("Syncing {} files to {}...", resolved.files.len(), workspace_name.cyan());
+    let start = std::time::Instant::now();
+    devdock_sync::force::force_sync(&workspace_name, &repo_path, &resolved.files)?;
+    let elapsed = start.elapsed();
+
+    println!(
+        "{} {} files synced in {:.1}s",
+        "✅".green(),
+        resolved.files.len(),
+        elapsed.as_secs_f64()
+    );
+
+    // 6. Handle --watch: persist patterns
+    if watch {
+        if devdock_id.is_empty() {
+            return Err(anyhow!("--watch requires a running DevDock instance"));
+        }
+
+        println!();
+        println!("Adding patterns to daemon watch list...");
+        devdock_sync::force::save_force_patterns(&devdock_id, &paths)?;
+
+        println!("{} Patterns added to daemon watch list.", "✅".green());
+        println!("  The daemon will now sync matching files on change, bypassing normal filters.");
+        println!(
+            "  Patterns file: {}",
+            format!("~/.devdock/sync/{}.force_patterns.json", devdock_id).dimmed()
+        );
+    }
+
+    Ok(())
+}
+
 /// Show sync errors.
 pub async fn errors(tail: Option<usize>) -> Result<()> {
     let state = StateManager::new().await?;

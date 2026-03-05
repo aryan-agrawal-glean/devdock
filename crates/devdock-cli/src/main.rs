@@ -399,6 +399,21 @@ enum SyncCommands {
         #[arg(long, short = 'n')]
         tail: Option<usize>,
     },
+
+    /// Force-sync files/directories that bypass normal filters
+    Force {
+        /// File paths, directory paths, or glob patterns to sync
+        #[arg(required = true)]
+        paths: Vec<String>,
+
+        /// Workspace name (standalone mode, otherwise auto-detected from running instance)
+        #[arg(long)]
+        workspace: Option<String>,
+
+        /// Also add patterns to the daemon's ongoing watch list
+        #[arg(long)]
+        watch: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -667,6 +682,9 @@ async fn main() {
             SyncCommands::Status => commands::sync::status().await,
             SyncCommands::History { tail } => commands::sync::history(tail).await,
             SyncCommands::Errors { tail } => commands::sync::errors(tail).await,
+            SyncCommands::Force { paths, workspace, watch } => {
+                commands::sync::force(paths, workspace, watch).await
+            }
         },
 
         Commands::Report { summary, description, command } => match (summary, description, command)

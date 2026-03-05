@@ -10,7 +10,7 @@ use crate::{
 };
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 use tracing::{debug, error, info};
 
 /// Sync daemon state.
@@ -24,6 +24,8 @@ pub struct SyncDaemon {
     repo_path: PathBuf,
     full_mode: bool,
     branch_mode: bool,
+    force_patterns: Vec<String>,
+    force_patterns_mtime: Option<SystemTime>,
 }
 
 impl SyncDaemon {
@@ -43,6 +45,16 @@ impl SyncDaemon {
         let health_monitor = HealthMonitor::new(workspace_name.clone());
         let stats_tracker = SyncStatsTracker::new(&devdock_id)?;
 
+        // Load persisted force-watch patterns
+        let force_patterns = crate::force::load_force_patterns(&devdock_id)
+            .map(|fp| fp.patterns)
+            .unwrap_or_default();
+        let force_patterns_mtime = Self::read_force_patterns_mtime(&devdock_id);
+
+        if !force_patterns.is_empty() {
+            info!("Loaded {} force-watch patterns", force_patterns.len());
+        }
+
         Ok(Self {
             devdock_id,
             workspace_name,
@@ -53,6 +65,8 @@ impl SyncDaemon {
             repo_path,
             full_mode,
             branch_mode,
+            force_patterns,
+            force_patterns_mtime,
         })
     }
 
@@ -99,6 +113,9 @@ impl SyncDaemon {
 
         info!("File watcher setup complete, watching {watched_count} directories");
 
+        // Watch directories for any force-watch patterns
+        self.watch_force_pattern_dirs();
+
         // Main event loop
         info!("File sync daemon running, watching for changes...");
         debug!("Entering main event loop...");
@@ -109,6 +126,9 @@ impl SyncDaemon {
             if iteration % 100 == 0 {
                 debug!("Event loop iteration {iteration}, daemon is alive");
             }
+
+            // Check for updated force-watch patterns (file-based polling)
+            self.reload_force_patterns_if_changed();
 
             // Check health
             if !self.health_monitor.is_healthy() {
@@ -313,6 +333,15 @@ impl SyncDaemon {
 
             debug!("Checking file: {relative_path:?}");
 
+            // Check force patterns first - bypass all other filters
+            if !self.force_patterns.is_empty()
+                && crate::force::matches_force_pattern(&relative_path, &self.force_patterns)
+            {
+                debug!("✅ Force pattern match, bypassing filters: {relative_path:?}");
+                filtered.push(relative_path);
+                continue;
+            }
+
             // Check if file matches sync patterns (monitored dirs + extensions)
             if !git::should_sync_file_by_pattern(&relative_path) {
                 debug!("❌ Filtered out: not in monitored dirs or wrong extension");
@@ -330,6 +359,58 @@ impl SyncDaemon {
         }
 
         Ok(filtered)
+    }
+
+    /// Watch directories implied by force-watch patterns.
+    fn watch_force_pattern_dirs(&mut self) {
+        for pattern in &self.force_patterns {
+            // Extract the directory prefix before any glob metacharacter
+            let dir_part = pattern.split(['*', '?', '[']).next().unwrap_or("");
+
+            let dir = if dir_part.ends_with('/') {
+                dir_part.trim_end_matches('/')
+            } else if let Some(pos) = dir_part.rfind('/') {
+                &dir_part[..pos]
+            } else {
+                continue;
+            };
+
+            if dir.is_empty() {
+                continue;
+            }
+
+            let dir_path = self.repo_path.join(dir);
+            if dir_path.exists() && dir_path.is_dir() {
+                if let Err(e) = self.file_watcher.watch(&dir_path) {
+                    debug!("Failed to watch force pattern dir {}: {}", dir, e);
+                } else {
+                    info!("Watching force-pattern directory: {}", dir);
+                }
+            }
+        }
+    }
+
+    /// Reload force-watch patterns if the file has been modified.
+    fn reload_force_patterns_if_changed(&mut self) {
+        let patterns_path = crate::force::force_patterns_path(&self.devdock_id);
+        if let Ok(meta) = fs::metadata(&patterns_path) {
+            if let Ok(modified) = meta.modified() {
+                if self.force_patterns_mtime.map_or(true, |m| modified > m) {
+                    info!("Force patterns file changed, reloading...");
+                    if let Ok(fp) = crate::force::load_force_patterns(&self.devdock_id) {
+                        self.force_patterns = fp.patterns;
+                        self.watch_force_pattern_dirs();
+                    }
+                    self.force_patterns_mtime = Some(modified);
+                }
+            }
+        }
+    }
+
+    /// Read the modification time of the force patterns file.
+    fn read_force_patterns_mtime(devdock_id: &str) -> Option<SystemTime> {
+        let path = crate::force::force_patterns_path(devdock_id);
+        fs::metadata(&path).ok().and_then(|m| m.modified().ok())
     }
 
     /// Write PID file.
