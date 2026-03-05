@@ -1,7 +1,7 @@
 //! Configuration file synchronization to remote workspaces.
 //!
 //! Optimized for minimal SSH connections:
-//! - Phase 1 (1 SSH): Create directories, write profile, custom.ini, and claude.json
+//! - Phase 1 (1 SSH): Create directories, write profile, custom.ini, IAP cookies, and claude.json
 //! - Phase 2 (1 SCP): Copy gcloud credential files (GCP/unknown platform only)
 //! - Phase 3 (1 SSH): Finalize gcloud - move creds, verify auth, set project (GCP/unknown platform only)
 
@@ -9,7 +9,7 @@ use crate::{RemoteError, Result};
 use devdock_core::profile::Profile;
 use std::path::Path;
 use std::process::Command;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 // ─── Profile helpers (local only, no SSH) ──────────────────────────────────────
 
@@ -260,6 +260,74 @@ fn scp_gcloud_to_remote(workspace: &str, temp_dir: &Path, verbose: bool) -> Resu
     Ok(())
 }
 
+// ─── IAP cookie sync (best-effort, local only) ─────────────────────────────────
+
+/// Python script to extract IAP cookies from local browser using browser_cookie3.
+/// Returns a JSON array of cookie objects with name, value, and domain fields.
+const IAP_COOKIE_EXTRACT_SCRIPT: &str = r#"
+import json
+import sys
+
+try:
+    import browser_cookie3
+except ImportError:
+    sys.exit(0)
+
+cookies = []
+for browser_fn in [browser_cookie3.chrome, browser_cookie3.firefox]:
+    try:
+        cj = browser_fn(domain_name=".glean.com")
+        for c in cj:
+            if c.name.startswith("__Host-GCP_IAP_AUTH_TOKEN"):
+                cookies.append({"name": c.name, "value": c.value, "domain": c.domain})
+    except Exception:
+        pass
+
+if cookies:
+    print(json.dumps(cookies))
+"#;
+
+/// Attempt to read IAP cookies from the local browser cookie store.
+///
+/// Uses a Python subprocess with `browser_cookie3` to extract
+/// `__Host-GCP_IAP_AUTH_TOKEN_*` cookies for `*.glean.com`.
+/// This is best-effort: returns `None` on any failure without raising errors.
+fn read_local_iap_cookies(verbose: bool) -> Option<String> {
+    debug!("Attempting to read IAP cookies from local browser");
+
+    let output = Command::new("python3")
+        .arg("-c")
+        .arg(IAP_COOKIE_EXTRACT_SCRIPT)
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        debug!("IAP cookie extraction script exited with non-zero status");
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if stdout.is_empty() {
+        debug!("No IAP cookies found in local browser");
+        if verbose {
+            println!("    → No IAP cookies found in local browser (Erasmus may need manual login)");
+        }
+        return None;
+    }
+
+    // Validate that we got valid JSON
+    if serde_json::from_str::<serde_json::Value>(&stdout).is_err() {
+        warn!("IAP cookie extraction returned invalid JSON");
+        return None;
+    }
+
+    info!("Found IAP cookies for Erasmus");
+    if verbose {
+        println!("    → Found IAP cookies for Erasmus remote sync");
+    }
+    Some(stdout)
+}
+
 // ─── Main entry point ──────────────────────────────────────────────────────────
 
 /// Status returned from config sync, including credential verification results.
@@ -345,6 +413,9 @@ pub fn sync_all_config(
 
     let needs_secrets_sync = gcloud_staging.is_some();
 
+    // Stage IAP cookies locally (best-effort, for Erasmus on remote)
+    let iap_cookies_json = read_local_iap_cookies(verbose);
+
     // ─── Phase 1: Single SSH for all config file writes ────────────────────
 
     if verbose {
@@ -359,13 +430,18 @@ pub fn sync_all_config(
     if needs_secrets_sync {
         script.push_str("rm -rf ~/.secrets-sync\n");
     }
+    let extra_dirs = match (needs_secrets_sync, iap_cookies_json.is_some()) {
+        (true, true) => " ~/.secrets-sync ~/.config/erasmus",
+        (true, false) => " ~/.secrets-sync",
+        (false, true) => " ~/.config/erasmus",
+        (false, false) => "",
+    };
     script.push_str(&format!(
         "mkdir -p '{}' \
          /home/workspace/scio/devdock/profiles/user_profiles \
          /home/workspace/scio/devdock/profiles/integration_tests \
-         /home/workspace/scio/config/{}\n\n",
+         /home/workspace/scio/config/{extra_dirs}\n\n",
         remote_profile_dir,
-        if needs_secrets_sync { " ~/.secrets-sync" } else { "" }
     ));
 
     // Write profile via heredoc
@@ -379,6 +455,14 @@ pub fn sync_all_config(
         script.push_str(&format!(
             "cat > /home/workspace/scio/config/custom.ini << 'DEVDOCK_INI_EOF'\n{}\nDEVDOCK_INI_EOF\n\n",
             ini_content
+        ));
+    }
+
+    // Write IAP cookies for Erasmus (best-effort: || true so set -e doesn't abort)
+    if let Some(ref cookies_json) = iap_cookies_json {
+        script.push_str(&format!(
+            "{{ cat > ~/.config/erasmus/iap_cookies << 'DEVDOCK_IAP_EOF'\n{}\nDEVDOCK_IAP_EOF\nchmod 600 ~/.config/erasmus/iap_cookies; }} || echo 'DEVDOCK_WARN:iap_cookies_failed'\n\n",
+            cookies_json
         ));
     }
 
@@ -459,10 +543,21 @@ print(f"✓ Claude MCP configuration updated at {claude_config_path}")
         }
     }
 
+    let iap_cookies_ok = !stdout.contains("DEVDOCK_WARN:iap_cookies_failed");
+    if !iap_cookies_ok {
+        debug!("IAP cookie sync failed on remote (non-critical)");
+        if verbose {
+            eprintln!("    ⚠ Warning: Failed to write IAP cookies to remote");
+        }
+    }
+
     if verbose {
         println!("      ✓ Profile synced to {}", remote_profile_path);
         if custom_ini_content.is_some() {
             println!("      ✓ custom.ini synced");
+        }
+        if iap_cookies_json.is_some() && iap_cookies_ok {
+            println!("      ✓ IAP cookies synced for Erasmus");
         }
         if claude_config_ok {
             for line in stdout.lines() {
