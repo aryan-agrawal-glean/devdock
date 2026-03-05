@@ -156,6 +156,9 @@ cargo build
 # Run tests
 cargo test
 
+# Set devdock root
+export DEVDOCK_ROOT=~/workspace/scio
+
 # Run locally
 cargo run -p devdock-cli -- start default_profile
 
