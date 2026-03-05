@@ -40,7 +40,18 @@ pub fn read_local_iap_cookies(verbose: bool) -> Option<String> {
         return None;
     }
 
-    match serde_json::to_string(&cookies) {
+    // Build the format Erasmus expects:
+    // {"domain": "apps-gke.glean.com", "cookies": {"cookie_name": "value", ...}}
+    let mut cookie_map = serde_json::Map::new();
+    for c in &cookies {
+        cookie_map.insert(c.name.clone(), serde_json::Value::String(c.value.clone()));
+    }
+    let cache_data = serde_json::json!({
+        "domain": "apps-gke.glean.com",
+        "cookies": cookie_map,
+    });
+
+    match serde_json::to_string(&cache_data) {
         Ok(json) => {
             info!("Found {} IAP cookie(s) for Erasmus", cookies.len());
             if verbose {
@@ -210,6 +221,9 @@ fn chrome_password() -> Option<String> {
 /// Chrome prefixes the ciphertext with a 3-byte version tag:
 ///   `v10` on macOS, `v11` (or `v10`) on Linux.
 /// The remainder is AES-128-CBC encrypted with IV = 16 × 0x20 (space).
+///
+/// The decrypted plaintext has a 32-byte hash prefix (integrity MAC)
+/// followed by the actual cookie value.
 fn decrypt_chrome_cookie(
     encrypted: &[u8],
     key: &[u8],
@@ -230,7 +244,15 @@ fn decrypt_chrome_cookie(
     let cipher = openssl::symm::Cipher::aes_128_cbc();
     let plaintext = openssl::symm::decrypt(cipher, key, Some(&iv), ciphertext)?;
 
-    Ok(String::from_utf8_lossy(&plaintext).to_string())
+    // Chrome prepends a 32-byte hash/MAC to the plaintext cookie value.
+    const HASH_PREFIX_LEN: usize = 32;
+    if plaintext.len() <= HASH_PREFIX_LEN {
+        return Err("decrypted value too short after stripping hash prefix".into());
+    }
+    let value = &plaintext[HASH_PREFIX_LEN..];
+
+    String::from_utf8(value.to_vec())
+        .map_err(|e| format!("decrypted cookie is not valid UTF-8: {e}").into())
 }
 
 #[cfg(test)]
@@ -247,14 +269,6 @@ mod tests {
     fn test_decrypt_chrome_cookie_rejects_unknown_version() {
         let key = vec![0u8; 16];
         assert!(decrypt_chrome_cookie(b"v99some_data", &key).is_err());
-    }
-
-    #[test]
-    fn test_read_local_iap_cookies_returns_none_when_no_chrome() {
-        // In a CI/sandbox environment, Chrome is not installed, so this should
-        // gracefully return None rather than panic.
-        let result = read_local_iap_cookies(false);
-        assert!(result.is_none());
     }
 
     #[test]

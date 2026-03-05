@@ -363,9 +363,9 @@ pub fn sync_all_config(
         script.push_str("rm -rf ~/.secrets-sync\n");
     }
     let extra_dirs = match (needs_secrets_sync, iap_cookies_json.is_some()) {
-        (true, true) => " ~/.secrets-sync ~/.config/erasmus",
+        (true, true) => " ~/.secrets-sync /home/workspace/scio/experimental/users/sriram_vudayagiri_glean/erasmus/.cache",
         (true, false) => " ~/.secrets-sync",
-        (false, true) => " ~/.config/erasmus",
+        (false, true) => " /home/workspace/scio/experimental/users/sriram_vudayagiri_glean/erasmus/.cache",
         (false, false) => "",
     };
     script.push_str(&format!(
@@ -391,9 +391,11 @@ pub fn sync_all_config(
     }
 
     // Write IAP cookies for Erasmus (best-effort: || true so set -e doesn't abort)
+    // Erasmus reads from its own .cache/iap_cookies relative to its source tree
     if let Some(ref cookies_json) = iap_cookies_json {
+        let erasmus_cache = "/home/workspace/scio/experimental/users/sriram_vudayagiri_glean/erasmus/.cache";
         script.push_str(&format!(
-            "{{ cat > ~/.config/erasmus/iap_cookies << 'DEVDOCK_IAP_EOF'\n{}\nDEVDOCK_IAP_EOF\nchmod 600 ~/.config/erasmus/iap_cookies; }} || echo 'DEVDOCK_WARN:iap_cookies_failed'\n\n",
+            "{{ cat > {erasmus_cache}/iap_cookies << 'DEVDOCK_IAP_EOF'\n{}\nDEVDOCK_IAP_EOF\nchmod 600 {erasmus_cache}/iap_cookies; }} || echo 'DEVDOCK_WARN:iap_cookies_failed'\n\n",
             cookies_json
         ));
     }
