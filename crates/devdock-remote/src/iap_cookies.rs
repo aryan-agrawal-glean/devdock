@@ -1,4 +1,4 @@
-//! Pure-Rust extraction of IAP cookies from local Chrome and Firefox browser stores.
+//! Pure-Rust extraction of IAP cookies from the local Chrome cookie store.
 //!
 //! Best-effort: any failure (missing browser, locked DB, decryption error) is
 //! silently swallowed and the function returns `None`.
@@ -16,31 +16,21 @@ struct IapCookie {
     domain: String,
 }
 
-/// Attempt to read IAP cookies from local Chrome and Firefox cookie stores.
+/// Attempt to read IAP cookies from the local Chrome cookie store.
 ///
 /// Looks for `__Host-GCP_IAP_AUTH_TOKEN_*` cookies scoped to `*.glean.com`.
 /// Returns `Some(json_string)` with a JSON array of `{name, value, domain}` objects,
 /// or `None` if no cookies are found or any error occurs.
 pub fn read_local_iap_cookies(verbose: bool) -> Option<String> {
-    debug!("Attempting to read IAP cookies from local browser");
+    debug!("Attempting to read IAP cookies from local Chrome");
 
-    let mut cookies = Vec::new();
-
-    // Try Chrome
-    match read_chrome_cookies() {
-        Ok(mut c) => cookies.append(&mut c),
-        Err(e) => debug!("Chrome cookie extraction failed: {e}"),
-    }
-
-    // Try Firefox
-    match read_firefox_cookies() {
-        Ok(mut c) => cookies.append(&mut c),
-        Err(e) => debug!("Firefox cookie extraction failed: {e}"),
-    }
-
-    // Deduplicate by cookie name (Chrome and Firefox might have the same cookie)
-    cookies.sort_by(|a, b| a.name.cmp(&b.name));
-    cookies.dedup_by(|a, b| a.name == b.name);
+    let cookies = match read_chrome_cookies() {
+        Ok(c) => c,
+        Err(e) => {
+            debug!("Chrome cookie extraction failed: {e}");
+            Vec::new()
+        }
+    };
 
     if cookies.is_empty() {
         debug!("No IAP cookies found in local browser");
@@ -243,104 +233,6 @@ fn decrypt_chrome_cookie(
     Ok(String::from_utf8_lossy(&plaintext).to_string())
 }
 
-// ─── Firefox ───────────────────────────────────────────────────────────────────
-
-/// Locate Firefox cookie databases (there may be multiple profiles).
-fn firefox_cookie_db_paths() -> Vec<PathBuf> {
-    let home = match dirs::home_dir() {
-        Some(h) => h,
-        None => return vec![],
-    };
-
-    #[cfg(target_os = "macos")]
-    let profile_root = home.join("Library/Application Support/Firefox/Profiles");
-
-    #[cfg(target_os = "linux")]
-    let profile_root = home.join(".mozilla/firefox");
-
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-    let profile_root = PathBuf::new();
-
-    if !profile_root.exists() {
-        return vec![];
-    }
-
-    let mut paths = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(&profile_root) {
-        for entry in entries.flatten() {
-            let cookies_db = entry.path().join("cookies.sqlite");
-            if cookies_db.exists() {
-                paths.push(cookies_db);
-            }
-        }
-    }
-    paths
-}
-
-/// Read IAP cookies from all Firefox profiles.
-fn read_firefox_cookies() -> Result<Vec<IapCookie>, Box<dyn std::error::Error>> {
-    let db_paths = firefox_cookie_db_paths();
-    if db_paths.is_empty() {
-        return Err("No Firefox cookie databases found".into());
-    }
-
-    let mut cookies = Vec::new();
-
-    for db_path in db_paths {
-        debug!("Reading Firefox cookies from {}", db_path.display());
-
-        // Copy to temp file to avoid locking issues.
-        let tmp = tempfile::NamedTempFile::new()?;
-        if std::fs::copy(&db_path, tmp.path()).is_err() {
-            debug!("Failed to copy Firefox DB {}", db_path.display());
-            continue;
-        }
-
-        let conn = match rusqlite::Connection::open_with_flags(
-            tmp.path(),
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
-                | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        ) {
-            Ok(c) => c,
-            Err(e) => {
-                debug!("Failed to open Firefox DB {}: {e}", db_path.display());
-                continue;
-            }
-        };
-
-        let mut stmt = match conn.prepare(
-            "SELECT name, value, host FROM moz_cookies \
-             WHERE host LIKE '%.glean.com' \
-             AND name LIKE '__Host-GCP_IAP_AUTH_TOKEN%'",
-        ) {
-            Ok(s) => s,
-            Err(e) => {
-                debug!("Failed to prepare Firefox query: {e}");
-                continue;
-            }
-        };
-
-        let rows = stmt
-            .query_map([], |row| {
-                let name: String = row.get(0)?;
-                let value: String = row.get(1)?;
-                let domain: String = row.get(2)?;
-                Ok(IapCookie { name, value, domain })
-            })
-            .ok();
-
-        if let Some(rows) = rows {
-            for row in rows.flatten() {
-                if !row.value.is_empty() {
-                    cookies.push(row);
-                }
-            }
-        }
-    }
-
-    Ok(cookies)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -358,8 +250,8 @@ mod tests {
     }
 
     #[test]
-    fn test_read_local_iap_cookies_returns_none_when_no_browsers() {
-        // In a CI/sandbox environment, no browsers are installed, so this should
+    fn test_read_local_iap_cookies_returns_none_when_no_chrome() {
+        // In a CI/sandbox environment, Chrome is not installed, so this should
         // gracefully return None rather than panic.
         let result = read_local_iap_cookies(false);
         assert!(result.is_none());
