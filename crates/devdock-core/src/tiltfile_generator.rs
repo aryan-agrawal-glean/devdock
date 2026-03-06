@@ -240,28 +240,29 @@ pub fn extract_shipped_libs_to(workspace_root: &Path) -> std::io::Result<()> {
         include_str!("../../../lib/templates/compose.yaml.tpl"),
     )?;
 
-    // Create core/lib symlink in devdock/ dir so infra Tiltfiles can find libs
-    // Infra Tiltfiles do: load('../../../core/lib/bazel.Tiltfile', ...)
-    // This symlink makes those paths resolve to our shipped libs
+    // Copy shipped libs into devdock/core/lib/ so that infra Tiltfiles and
+    // helper Tiltfiles can find them via relative paths like:
+    //   load('../../../core/lib/bazel.Tiltfile', ...)
+    //   load('../../../core/lib/utils.Tiltfile', ...)
     let devdock_core_lib = workspace_root.join("devdock/core/lib");
-    if !devdock_core_lib.exists() {
-        // core/lib doesn't exist (OSS mode) — symlink to our shipped libs
-        std::fs::create_dir_all(workspace_root.join("devdock/core"))?;
-        #[cfg(unix)]
-        {
-            let target = runtime_dir.join("core/lib");
-            std::os::unix::fs::symlink(&target, &devdock_core_lib)?;
+    std::fs::create_dir_all(&devdock_core_lib)?;
+    // Copy each shipped Tiltfile into core/lib/ (alongside any existing files)
+    for entry in std::fs::read_dir(lib_dir.as_path())? {
+        let entry = entry?;
+        let src = entry.path();
+        if src.extension().and_then(|e| e.to_str()) == Some("Tiltfile") {
+            let dest = devdock_core_lib.join(entry.file_name());
+            std::fs::copy(&src, &dest)?;
         }
     }
 
-    // Same for core/templates
+    // Same for templates
     let devdock_core_templates = workspace_root.join("devdock/core/templates");
-    if !devdock_core_templates.exists() {
-        #[cfg(unix)]
-        {
-            let target = runtime_dir.join("core/templates");
-            std::os::unix::fs::symlink(&target, &devdock_core_templates)?;
-        }
+    std::fs::create_dir_all(&devdock_core_templates)?;
+    for entry in std::fs::read_dir(templates_dir.as_path())? {
+        let entry = entry?;
+        let dest = devdock_core_templates.join(entry.file_name());
+        std::fs::copy(entry.path(), &dest)?;
     }
 
     // Create service_hooks stub (or symlink to repo if exists)
