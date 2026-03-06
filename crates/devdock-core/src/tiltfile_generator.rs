@@ -113,12 +113,22 @@ pub fn generate_tiltfile(
         }
     }
 
-    // Services
+    // Services — only set up local services
+    // Remote services (transitive deps not in profile) are skipped.
+    // They're accessible via their remote endpoints (kubectl port-forward etc.)
     if !resolved.services.is_empty() {
-        out.push_str("# ─── Services ───────────────────────────────────────────────\n\n");
+        out.push_str("# ─── Services ───────────────────────────────────────────────\n");
+        out.push_str("# Only services with type=local are started.\n\n");
         for svc_name in &resolved.services {
-            if let Some(svc_config) = services.get(svc_name) {
-                out.push_str(&generate_service_block(svc_name, svc_config, config));
+            if services.contains_key(svc_name) {
+                let services_dir = &config.project.services_dir;
+                out.push_str(&format!(
+                    "_svc_type = profile.get('services', {{}}).get('{svc_name}', {{}}).get('type', 'remote')\n"
+                ));
+                out.push_str("if _svc_type == 'local':\n");
+                out.push_str(&format!(
+                    "    setup_service('{svc_name}', load_service_config('../../{services_dir}/{svc_name}'))\n"
+                ));
                 out.push('\n');
             }
         }
@@ -139,23 +149,6 @@ fn resolve_infra_compose(name: &str, infra_dir: &str, project_root: &Path) -> St
     // Fall back to built-in (shipped with devdock binary)
     let home = std::env::var("HOME").unwrap_or_else(|_| "~".into());
     format!("{home}/.devdock/lib/infra/{name}/docker-compose.yaml")
-}
-
-fn generate_service_block(
-    name: &str,
-    _config: &DevdockServiceConfig,
-    project_config: &ProjectConfig,
-) -> String {
-    let mut out = String::new();
-    let config_dir = format!("../../{}/{name}", project_config.project.services_dir);
-
-    // Load service config and call setup_service
-    // This matches how existing per-service Tiltfiles work:
-    //   config = load_service_config('.')
-    //   setup_service('name', config)
-    out.push_str(&format!("setup_service('{name}', load_service_config('{config_dir}'))\n"));
-
-    out
 }
 
 /// Extract shipped Starlark libraries to the runtime_generated directory.
@@ -590,6 +583,8 @@ mod tests {
             infra: vec!["sql".into(), "redis".into()],
         };
         let tf = generate_tiltfile(&svcs, &resolved, &test_config(), Path::new("/tmp"));
+        // Service setup is conditional on type=local from profile
+        assert!(tf.contains("if _svc_type == 'local'"));
         assert!(tf.contains("setup_service('api', load_service_config("));
     }
 
