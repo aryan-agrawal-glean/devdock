@@ -113,15 +113,18 @@ pub fn generate_tiltfile(
         }
     }
 
-    // Services — only set up local services
-    // Remote services (transitive deps not in profile) are skipped.
-    // They're accessible via their remote endpoints (kubectl port-forward etc.)
+    // Services — local services get full setup, remote services get port-forward
     if !resolved.services.is_empty() {
         out.push_str("# ─── Services ───────────────────────────────────────────────\n");
-        out.push_str("# Only services with type=local are started.\n\n");
+        out.push_str("# Local services: full build + Docker container\n");
+        out.push_str("# Remote services: kubectl port-forward to remote endpoint\n\n");
+        out.push_str("load('./core/lib/remote_service.Tiltfile', 'setup_remote_service')\n\n");
+
         for svc_name in &resolved.services {
-            if services.contains_key(svc_name) {
+            if let Some(svc_config) = services.get(svc_name) {
                 let services_dir = &config.project.services_dir;
+                let port = svc_config.port.as_deref().unwrap_or("8080");
+
                 out.push_str(&format!(
                     "_svc_type = profile.get('services', {{}}).get('{svc_name}', {{}}).get('type', 'remote')\n"
                 ));
@@ -129,6 +132,8 @@ pub fn generate_tiltfile(
                 out.push_str(&format!(
                     "    setup_service('{svc_name}', load_service_config('../../{services_dir}/{svc_name}'))\n"
                 ));
+                out.push_str("else:\n");
+                out.push_str(&format!("    setup_remote_service('{svc_name}', {port})\n"));
                 out.push('\n');
             }
         }
