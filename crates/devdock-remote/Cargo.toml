@@ -23,6 +23,8 @@ async-trait = { workspace = true }
 regex = { workspace = true }
 dirs = { workspace = true }
 tempfile = { workspace = true }
+rusqlite = { version = "0.30", features = ["bundled"] }
+openssl = { workspace = true }
 
 # Internal dependencies
 devdock-core = { path = "../devdock-core" }
