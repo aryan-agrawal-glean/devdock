@@ -393,7 +393,8 @@ pub fn sync_all_config(
     // Write IAP cookies for Erasmus (best-effort: || true so set -e doesn't abort)
     // Erasmus reads from its own .cache/iap_cookies relative to its source tree
     if let Some(ref cookies_json) = iap_cookies_json {
-        let erasmus_cache = "/home/workspace/scio/experimental/users/sriram_vudayagiri_glean/erasmus/.cache";
+        let erasmus_cache =
+            "/home/workspace/scio/experimental/users/sriram_vudayagiri_glean/erasmus/.cache";
         script.push_str(&format!(
             "{{ cat > {erasmus_cache}/iap_cookies << 'DEVDOCK_IAP_EOF'\n{}\nDEVDOCK_IAP_EOF\nchmod 600 {erasmus_cache}/iap_cookies; }} || echo 'DEVDOCK_WARN:iap_cookies_failed'\n\n",
             cookies_json

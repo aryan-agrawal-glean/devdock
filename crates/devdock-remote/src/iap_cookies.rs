@@ -194,9 +194,8 @@ fn chrome_password() -> Option<String> {
     #[cfg(target_os = "linux")]
     {
         // Try GNOME Keyring / Secret Service via secret-tool
-        if let Ok(output) = Command::new("secret-tool")
-            .args(["lookup", "application", "chrome"])
-            .output()
+        if let Ok(output) =
+            Command::new("secret-tool").args(["lookup", "application", "chrome"]).output()
         {
             if output.status.success() {
                 let pw = String::from_utf8_lossy(&output.stdout).trim().to_string();
