@@ -212,6 +212,7 @@ impl IniGenerator {
             "docbuilder" => self.apply_docbuilder_config(node),
             "dse" => self.apply_dse_config(node),
             "git_crawler" => self.apply_git_crawler_config(node),
+            "llm_proxy_service" => self.apply_llm_proxy_service_config(node),
             "notebook_sandbox" => self.apply_notebook_sandbox_config(node),
             "py_agents" => self.apply_py_agents_config(node),
             "qe" => self.apply_qe_config(node),
@@ -542,6 +543,24 @@ impl IniGenerator {
                 "queryapi",
                 "otel.tempoQueryFrontendEndpoint",
                 "http://host.docker.internal:3100",
+            );
+        }
+    }
+
+    fn apply_llm_proxy_service_config(&mut self, node: &ServiceNode) {
+        if node.config.is_local() {
+            let port = node.config.env.get("PORT").unwrap_or(&"7980".to_string()).clone();
+            self.config.set(
+                "deploy",
+                "llm_proxy_service.url",
+                format!("http://local.glean.com:{port}"),
+            );
+        } else {
+            let port = node.config.env.get("PORT").unwrap_or(&"7980".to_string()).clone();
+            self.config.set(
+                "deploy",
+                "llm_proxy_service.url",
+                format!("http://host.docker.internal:{port}"),
             );
         }
     }
