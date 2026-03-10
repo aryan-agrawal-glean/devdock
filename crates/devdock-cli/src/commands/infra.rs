@@ -451,6 +451,10 @@ pub async fn sql_setup(
     // Wait for MySQL
     wait_for_mysql(container, Duration::from_secs(120))?;
 
+    // On remote/Coder environments, always do a full cleanup to avoid stale schemas
+    // from pre-built Docker volumes (e.g. missing columns added after the volume was created).
+    let full_cleanup = full_cleanup || std::env::var("CODER").is_ok();
+
     // State tracking
     let state = SqlState::new()?;
     let prev_project = state.prev_project();
@@ -484,7 +488,8 @@ pub async fn sql_setup(
         update_tables = true;
     }
     // Handle full cleanup
-    else if full_cleanup && !prev_full_cleanup {
+    // On Coder (remote), always clean up regardless of previous state to avoid stale schemas.
+    else if full_cleanup && (!prev_full_cleanup || std::env::var("CODER").is_ok()) {
         output::info("Full cleanup requested, cleaning up...");
         state.clear_scripts()?;
         manager.clean_sql("")?;
