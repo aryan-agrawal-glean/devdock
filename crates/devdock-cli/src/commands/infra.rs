@@ -386,15 +386,62 @@ fn set_seed_permissions(seed_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Get SQL scripts path for a project
-fn get_sql_scripts_path(devdock_root: &Path, project: &str) -> PathBuf {
+/// Get SQL scripts paths for a project.
+/// Returns multiple directories for projects that need scripts from several locations.
+/// The `multitenant` directory contains shared schemas (e.g., `deployment_info.sql`)
+/// needed by services across projects and is always included when it exists.
+fn get_sql_scripts_paths(devdock_root: &Path, project: &str) -> Vec<PathBuf> {
     let base = devdock_root.join("java/com/askscio/storage/sql/scripts");
+    let multitenant = base.join("multitenant");
+
+    let mut paths = vec![];
+    if multitenant.exists() {
+        paths.push(multitenant);
+    }
 
     match project {
-        "scio-apps" | "glean-apps-canary" => base.join("scio_apps"),
-        "scio-engineering" => base.join("scio_engineering"),
-        _ => base,
+        "scio-apps" | "glean-apps-canary" => paths.push(base.join("scio_apps")),
+        "scio-engineering" => paths.push(base.join("scio_engineering")),
+        _ => paths.push(base),
     }
+
+    paths
+}
+
+/// Auto-create databases referenced in dynamic.ini that may not exist in local MySQL.
+///
+/// The Python legacy flow (sql_service_dependency.py) auto-detected all databases from
+/// the INI config and ensured they existed in local MySQL. Without this step, databases
+/// like `deployment_info` that services depend on (e.g., central_datasources) won't exist,
+/// causing `Unknown database` errors at startup.
+///
+/// This reads all `X.db.instance` entries from the `[sql]` section of the merged INI config
+/// and issues `CREATE DATABASE IF NOT EXISTS` for each database name found.
+fn auto_create_databases_from_config(config: &ParsedIniConfig, container: &str) -> Result<()> {
+    let db_instance_entries = config.get_options_by_suffix("sql", ".db.instance");
+
+    if db_instance_entries.is_empty() {
+        return Ok(());
+    }
+
+    let mut db_names: Vec<String> = db_instance_entries
+        .iter()
+        .filter_map(|(key, _)| key.strip_suffix(".db.instance").map(String::from))
+        .collect();
+    db_names.sort();
+    db_names.dedup();
+
+    output::info(&format!("Auto-creating {} database(s) from INI config...", db_names.len()));
+
+    for db_name in &db_names {
+        let sql = format!("CREATE DATABASE IF NOT EXISTS `{db_name}`;");
+        if let Err(e) = docker_mysql_exec(container, &sql) {
+            output::warn(&format!("Failed to create database {db_name}: {e}"));
+        }
+    }
+
+    output::success(&format!("Auto-created databases from INI config: {}", db_names.join(", ")));
+    Ok(())
 }
 
 /// Full SQL setup - replaces sql_hydrator.sh
@@ -473,6 +520,12 @@ pub async fn sql_setup(
     // Load INI config (default.ini merged with dynamic.ini from cloud storage)
     // Uses GCS for Google, S3 for AWS - the dynamic.ini contains project-specific values like SQL instance names
     let config = load_platform_config(project, platform, region, devdock_root.clone()).await?;
+
+    // Auto-create databases from dynamic.ini that may not be covered by schema scripts.
+    // Must happen before config is moved into SqlOperationsManager. The operation is
+    // idempotent (CREATE DATABASE IF NOT EXISTS), so safe to run before schema hydration.
+    auto_create_databases_from_config(&config, container)?;
+
     let manager = SqlOperationsManager::new(project, platform, region, config);
 
     // Handle project change
@@ -519,18 +572,20 @@ pub async fn sql_setup(
     docker_mysql_exec(container, "SET GLOBAL max_allowed_packet=512*1024*1024;")?;
 
     // Copy and run schema scripts
-    let source_scripts = get_sql_scripts_path(&devdock_root, project);
+    let source_script_dirs = get_sql_scripts_paths(&devdock_root, project);
     let target_scripts = state.scripts_dir().join(project);
     std::fs::create_dir_all(&target_scripts)?;
 
-    if source_scripts.exists() {
-        output::info(&format!("Copying SQL scripts from {source_scripts:?}"));
-        for entry in std::fs::read_dir(&source_scripts)? {
-            let entry = entry?;
-            let path = entry.path();
-            if path.is_file() {
-                let dest = target_scripts.join(path.file_name().unwrap());
-                std::fs::copy(&path, &dest)?;
+    for source_scripts in &source_script_dirs {
+        if source_scripts.exists() {
+            output::info(&format!("Copying SQL scripts from {source_scripts:?}"));
+            for entry in std::fs::read_dir(source_scripts)? {
+                let entry = entry?;
+                let path = entry.path();
+                if path.is_file() {
+                    let dest = target_scripts.join(path.file_name().unwrap());
+                    std::fs::copy(&path, &dest)?;
+                }
             }
         }
     }
@@ -541,7 +596,9 @@ pub async fn sql_setup(
         .filter_map(std::result::Result::ok)
         .map(|e| e.path())
         .filter(|p| {
-            p.extension().is_some_and(|e| e == "sql") && !p.to_string_lossy().ends_with(".template")
+            p.extension().is_some_and(|e| e == "sql")
+                && !p.to_string_lossy().ends_with(".template")
+                && p.file_name().is_some_and(|f| f != "deployment_db_no_delimiters.sql")
         })
         .collect();
     sql_files.sort();
@@ -879,6 +936,10 @@ async fn sql_setup_with_full_instance(
 
     // Load config using platform-appropriate storage (GCS for Google, S3 for AWS)
     let config = load_platform_config(project, platform, region, devdock_root.clone()).await?;
+
+    // Auto-create databases from dynamic.ini (see sql_setup for details)
+    auto_create_databases_from_config(&config, container)?;
+
     let manager = SqlOperationsManager::new(project, platform, region, config);
 
     // Reset MySQL master
@@ -887,18 +948,20 @@ async fn sql_setup_with_full_instance(
     docker_mysql_exec(container, "SET GLOBAL max_allowed_packet=512*1024*1024;")?;
 
     // Copy and run schema scripts first (same as regular setup)
-    let source_scripts = get_sql_scripts_path(&devdock_root, project);
+    let source_script_dirs = get_sql_scripts_paths(&devdock_root, project);
     let target_scripts = state.scripts_dir().join(project);
     std::fs::create_dir_all(&target_scripts)?;
 
-    if source_scripts.exists() {
-        output::info(&format!("Copying SQL scripts from {source_scripts:?}"));
-        for entry in std::fs::read_dir(&source_scripts)? {
-            let entry = entry?;
-            let path = entry.path();
-            if path.is_file() {
-                let dest = target_scripts.join(path.file_name().unwrap());
-                std::fs::copy(&path, &dest)?;
+    for source_scripts in &source_script_dirs {
+        if source_scripts.exists() {
+            output::info(&format!("Copying SQL scripts from {source_scripts:?}"));
+            for entry in std::fs::read_dir(source_scripts)? {
+                let entry = entry?;
+                let path = entry.path();
+                if path.is_file() {
+                    let dest = target_scripts.join(path.file_name().unwrap());
+                    std::fs::copy(&path, &dest)?;
+                }
             }
         }
     }
@@ -909,7 +972,9 @@ async fn sql_setup_with_full_instance(
         .filter_map(std::result::Result::ok)
         .map(|e| e.path())
         .filter(|p| {
-            p.extension().is_some_and(|e| e == "sql") && !p.to_string_lossy().ends_with(".template")
+            p.extension().is_some_and(|e| e == "sql")
+                && !p.to_string_lossy().ends_with(".template")
+                && p.file_name().is_some_and(|f| f != "deployment_db_no_delimiters.sql")
         })
         .collect();
     sql_files.sort();
