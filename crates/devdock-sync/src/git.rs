@@ -37,6 +37,7 @@ const SYNC_EXTENSIONS: &[&str] = &[
     ".sql",
     ".gradle",
     ".properties",
+    ".csv",
 ];
 
 /// File names to always sync.
