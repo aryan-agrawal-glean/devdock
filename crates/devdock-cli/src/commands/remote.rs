@@ -22,6 +22,7 @@ pub struct RemoteStartConfig {
     pub branch: Option<String>,
     pub region: String,
     pub port_base: Option<u16>,
+    pub disk_size: Option<u32>,
     pub vm: Option<String>,
     pub auto_forward: bool,
     pub services: Option<String>,
@@ -67,6 +68,7 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
         branch,
         region,
         port_base,
+        disk_size,
         vm,
         auto_forward,
         services,
@@ -299,6 +301,7 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
                             port_base: Some(offset),
                             profile: profile.clone(),
                             branch: branch_for_workspace.clone(),
+                            disk_size,
                         };
 
                         let ws_name = workspace::provision_workspace(&config).await?;
@@ -334,6 +337,7 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
                     port_base: Some(offset),
                     profile: profile.clone(),
                     branch: branch_for_workspace.clone(),
+                    disk_size,
                 };
 
                 let ws_name = workspace::provision_workspace(&config).await?;

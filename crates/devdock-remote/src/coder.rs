@@ -20,6 +20,8 @@ pub struct CoderWorkspaceConfig {
     pub profile: String,
     /// Git branch to checkout in remote workspace
     pub branch: String,
+    /// Data disk size in GB (default: 300)
+    pub disk_size: Option<u32>,
 }
 
 /// Check if coder CLI is installed and available.
@@ -63,6 +65,8 @@ pub fn create_workspace(config: &CoderWorkspaceConfig) -> Result<String> {
         .arg(format!("branch_name={}", config.branch)) // Use specified branch
         .arg("--parameter")
         .arg("force_fresh_data=false")
+        .arg("--parameter")
+        .arg(format!("data_disk_size={}", config.disk_size.unwrap_or(300)))
         .arg("--preset")
         .arg(preset)
         .arg("--yes"); // Non-interactive

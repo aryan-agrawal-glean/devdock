@@ -59,6 +59,10 @@ enum Commands {
         #[arg(long)]
         port_base: Option<u16>,
 
+        /// Data disk size in GB for Coder workspace (default: 300)
+        #[arg(long)]
+        disk_size: Option<u32>,
+
         /// Auto-forward all service ports (opt-in for remote)
         #[arg(long)]
         auto_forward: bool,
@@ -585,6 +589,7 @@ async fn main() {
             branch,
             region,
             port_base,
+            disk_size,
             auto_forward,
             verbose,
             monitor,
@@ -600,6 +605,7 @@ async fn main() {
                     branch,
                     region,
                     port_base,
+                    disk_size,
                     vm,
                     auto_forward,
                     services,
