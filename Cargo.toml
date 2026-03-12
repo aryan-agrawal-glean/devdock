@@ -11,6 +11,16 @@ members = [
     "crates/devdock-monitor",
     "crates/devdock-telemetry",
 ]
+exclude = [
+    "plugins/sdk",
+    "plugins/common/bigquery-sync",
+    "plugins/common/jira-reporter",
+    "plugins/common/slack-notifier",
+    "plugins/common/sql-hydrator",
+    "plugins/common/opensearch-reindex",
+    "plugins/glean/gcs-storage",
+    "plugins/glean/s3-storage",
+]
 resolver = "2"
 
 [workspace.package]
