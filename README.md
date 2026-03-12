@@ -242,6 +242,28 @@ devdock/
 
 ## Development
 
+### With Claude Code
+
+DevDock is a Claude-friendly repo with built-in skills for agentic development:
+
+```bash
+# Build and test everything
+/build-and-test
+
+# Test a specific profile against scio
+/test-profile qe
+
+# Check running Tilt resource status
+/check-tilt-status
+
+# Set up scio for testing
+/setup-scio-test
+```
+
+See `CLAUDE.md` for the full development guide and `.claude/skills/` for available skills.
+
+### Manual
+
 ```bash
 # Build
 cargo build
