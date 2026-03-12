@@ -256,7 +256,7 @@ devdock plugin create my-metrics --type telemetry --language python
 # Generates ~/.devdock/plugins/my-metrics/ with boilerplate
 ```
 
-Plugin templates available for **Python**, **Go**, and **Bash**.
+Plugin templates available for **Rust**, **Python**, **Go**, and **Bash**. Rust plugins use the `devdock-plugin-sdk` crate for type-safe, native-performance plugins.
 
 ### Plugin Protocol
 
@@ -351,7 +351,7 @@ devdock/
 │   ├── sdk/                    #   Plugin SDK (Rust crate)
 │   ├── common/                 #   Community plugins (BigQuery, Jira, Slack)
 │   ├── glean/                  #   Glean-specific plugins (GCS, S3)
-│   ├── templates/              #   Plugin scaffolding (Python, Go, Bash)
+│   ├── templates/              #   Plugin scaffolding (Rust, Python, Go, Bash)
 │   └── examples/               #   Example plugins (Prometheus, Slack)
 ├── tests/fixtures/             # Test repos
 ├── docs/                       # Documentation
@@ -392,6 +392,87 @@ cd plugins/common/bigquery-sync
 cargo build
 cargo install --path .
 ```
+
+## Deployment: Binary Releases
+
+### OSS Binary (public)
+
+The devdock binary has **zero cloud-specific code**. It contains:
+- Core CLI commands
+- Telemetry collection (sync via external plugins)
+- Shipped Starlark libraries
+- Default infra compose files
+- Plugin SDK protocol handler
+
+```bash
+# Install from source (OSS)
+cargo install --path crates/devdock-cli
+
+# Or download pre-built binary from GitHub Releases
+curl -L https://github.com/askscio/devdock/releases/latest/download/devdock-$(uname -s)-$(uname -m) -o devdock
+chmod +x devdock
+```
+
+### Organization-Specific Plugins (separate repo)
+
+Cloud integrations ship as separate plugin binaries. For example, Glean's plugins
+live in a private repo (`devdock-glean-plugins`) and are installed separately:
+
+```bash
+# Install devdock (same binary for everyone)
+cargo install devdock
+
+# Install organization plugins (from private repo)
+cargo install --git https://github.com/your-org/devdock-plugins devdock-plugin-bigquery-sync
+cargo install --git https://github.com/your-org/devdock-plugins devdock-plugin-jira-reporter
+cargo install --git https://github.com/your-org/devdock-plugins devdock-plugin-gcs-storage
+```
+
+The plugin binaries go to `~/.cargo/bin/` (in PATH). DevDock finds them by name.
+
+### Plugin Repo Structure
+
+```
+your-org/devdock-plugins/           # Private repo
+├── Cargo.toml                      # Workspace
+├── bigquery-sync/
+│   ├── Cargo.toml                  # depends on devdock-plugin-sdk
+│   └── src/main.rs
+├── jira-reporter/
+│   ├── Cargo.toml
+│   └── src/main.rs
+├── gcs-storage/
+│   ├── Cargo.toml
+│   └── src/main.rs
+└── s3-storage/
+    ├── Cargo.toml
+    └── src/main.rs
+```
+
+Each plugin depends only on `devdock-plugin-sdk` (published to crates.io), NOT on devdock internals.
+
+### How It All Connects
+
+```
+User's Machine
+├── devdock (binary)                     ← from github.com/askscio/devdock
+├── devdock-plugin-bigquery-sync         ← from your-org/devdock-plugins
+├── devdock-plugin-jira-reporter         ← from your-org/devdock-plugins
+└── devdock-plugin-gcs-storage           ← from your-org/devdock-plugins
+
+devdock.toml
+├── [telemetry]
+│   backend = "external"
+│   plugin = "devdock-plugin-bigquery-sync"   ← found in $PATH
+├── [diagnostics]
+│   reporter = "jira"                          ← built-in config-driven
+└── [cloud]
+    storage = "external"
+    plugin = "devdock-plugin-gcs-storage"      ← found in $PATH
+```
+
+When `devdock start` runs, it spawns plugin binaries as subprocesses and communicates
+via JSON stdin/stdout. The main binary never imports cloud SDK code.
 
 ## Contributing
 
