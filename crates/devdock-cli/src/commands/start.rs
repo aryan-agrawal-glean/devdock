@@ -117,10 +117,15 @@ pub async fn execute(
         .await?;
 
     // Step 6b: Generate OSS Tiltfile (requires .devdock/devdock.toml)
-    if !workspace_root.join(".devdock/devdock.toml").exists() {
+    let devdock_toml_path = workspace_root.join(".devdock/devdock.toml");
+    if !devdock_toml_path.exists() {
         anyhow::bail!(
             "Missing .devdock/devdock.toml — run `devdock init` to initialize your project"
         );
+    }
+    // Export diagnostics config as env vars (for jira.rs/slack.rs)
+    if let Ok(project_config) = devdock_core::ProjectConfig::load(&devdock_toml_path) {
+        project_config.export_diagnostics_env();
     }
     generate_oss_tiltfile(&workspace_root, &profile)?;
 

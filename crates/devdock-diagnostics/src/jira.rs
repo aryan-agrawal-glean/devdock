@@ -9,9 +9,22 @@ use std::path::Path;
 use std::process::Command;
 use tracing::{info, warn};
 
-const JIRA_URL: &str = "";
-const PARENT_ISSUE: &str = "EN-404402";
-const JIRA_EMAIL: &str = "";
+/// Jira URL — configured via DEVDOCK_JIRA_URL env var or devdock.toml diagnostics.jira_url
+fn jira_url() -> String {
+    std::env::var("DEVDOCK_JIRA_URL").unwrap_or_default()
+}
+
+/// Get the Jira URL (public, for checking if configured)
+pub fn get_jira_url() -> String {
+    jira_url()
+}
+
+fn parent_issue() -> String {
+    std::env::var("DEVDOCK_JIRA_PARENT_ISSUE").unwrap_or_default()
+}
+fn jira_email() -> String {
+    std::env::var("DEVDOCK_JIRA_EMAIL").unwrap_or_default()
+}
 
 #[derive(Debug, Serialize)]
 struct JiraIssueFields {
@@ -100,15 +113,24 @@ struct JiraUser {
 
 /// Get Jira API token from Google Cloud Secret Manager.
 pub fn get_jira_token() -> Result<String> {
+    let secret_project = std::env::var("DEVDOCK_SECRET_PROJECT").unwrap_or_default();
+    let secret_name =
+        std::env::var("DEVDOCK_JIRA_SECRET").unwrap_or("ONCALL_USER_JIRA_TOKEN".into());
+    if secret_project.is_empty() {
+        return Err(DiagnosticsError::Jira(
+            "DEVDOCK_SECRET_PROJECT not set — configure diagnostics.secret_project in devdock.toml"
+                .into(),
+        ));
+    }
     let output = Command::new("gcloud")
         .args([
             "--project",
-            &std::env::var("DEVDOCK_GCP_PROJECT").unwrap_or_default(),
+            &secret_project,
             "secrets",
             "versions",
             "access",
-            "1",
-            "--secret=ONCALL_USER_JIRA_TOKEN",
+            "latest",
+            &format!("--secret={secret_name}"),
         ])
         .output()
         .map_err(|e| DiagnosticsError::Jira(format!("Failed to run gcloud command: {e}")))?;
@@ -137,7 +159,7 @@ pub fn get_reporter_email() -> Result<String> {
     }
 
     warn!("Failed to get gcloud account, using oncall user");
-    Ok(JIRA_EMAIL.to_string())
+    Ok(jira_email())
 }
 
 /// Get Jira account ID for a user by their email.
@@ -146,8 +168,8 @@ async fn get_user_account_id(
     email: &str,
     token: &str,
 ) -> Result<Option<String>> {
-    let url = format!("{JIRA_URL}/rest/api/3/user/search");
-    let auth = format!("{JIRA_EMAIL}:{token}");
+    let url = format!("{}/rest/api/3/user/search", jira_url());
+    let auth = format!("{}:{token}", jira_email());
     let encoded = base64::engine::general_purpose::STANDARD.encode(auth.as_bytes());
 
     let response = client
@@ -352,7 +374,7 @@ pub async fn create_jira_ticket(
     let reporter_email = get_reporter_email()?;
 
     let client = reqwest::Client::new();
-    let auth = format!("{JIRA_EMAIL}:{jira_token}");
+    let auth = format!("{}:{jira_token}", jira_email());
     let encoded = base64::engine::general_purpose::STANDARD.encode(auth.as_bytes());
 
     // Try to get reporter account ID
@@ -365,14 +387,14 @@ pub async fn create_jira_ticket(
         summary: format!("Devdock Bug Report - {summary}"),
         description,
         issuetype: JiraIssueType { name: "Sub-task".to_string() },
-        parent: JiraParent { key: PARENT_ISSUE.to_string() },
+        parent: JiraParent { key: parent_issue() },
         reporter: reporter_account_id.map(|id| JiraReporter { account_id: id }),
     };
 
     let issue_request = JiraCreateIssue { fields };
 
     // Create the issue
-    let url = format!("{JIRA_URL}/rest/api/3/issue");
+    let url = format!("{}/rest/api/3/issue", jira_url());
     let response = client
         .post(&url)
         .header("Authorization", format!("Basic {encoded}"))
@@ -414,7 +436,7 @@ async fn attach_file_to_issue(
     let part = multipart::Part::bytes(file_content).file_name(filename.to_string());
     let form = multipart::Form::new().part("file", part);
 
-    let url = format!("{JIRA_URL}/rest/api/3/issue/{issue_key}/attachments");
+    let url = format!("{}/rest/api/3/issue/{issue_key}/attachments", jira_url());
     let response = client
         .post(&url)
         .header("Authorization", format!("Basic {auth_header}"))

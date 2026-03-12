@@ -99,27 +99,52 @@ impl BugReporter {
             &config_files,
         );
 
-        // Create Jira ticket
-        println!("\n{}", "📝 Creating Jira ticket...".yellow());
-        let ticket_key =
-            jira::create_jira_ticket(&summary, full_description, &archive_path).await?;
-        println!("  {} Jira ticket created: {}", "✓".green(), ticket_key.bold());
+        // Try to create Jira ticket (optional — skipped if not configured)
+        let jira_url = jira::get_jira_url();
+        let ticket_key = if !jira_url.is_empty() {
+            println!("\n{}", "📝 Creating Jira ticket...".yellow());
+            match jira::create_jira_ticket(&summary, full_description, &archive_path).await {
+                Ok(key) => {
+                    println!("  {} Jira ticket created: {}", "✓".green(), key.bold());
 
-        // Post to Slack
-        println!("\n{}", "💬 Posting to Slack...".yellow());
-        let reporter_email = jira::get_reporter_email().unwrap_or_else(|_| "unknown".to_string());
-        match slack::post_to_slack(&ticket_key, &summary, &reporter_email).await {
-            Ok(()) => println!("  {} Slack notification sent", "✓".green()),
-            Err(e) => warn!("  {} Slack notification failed: {}", "⚠".yellow(), e),
-        }
+                    // Post to Slack (optional)
+                    println!("\n{}", "💬 Posting to Slack...".yellow());
+                    let reporter_email =
+                        jira::get_reporter_email().unwrap_or_else(|_| "unknown".to_string());
+                    match slack::post_to_slack(&key, &summary, &reporter_email).await {
+                        Ok(()) => println!("  {} Slack notification sent", "✓".green()),
+                        Err(e) => {
+                            warn!("  {} Slack notification failed: {}", "⚠".yellow(), e)
+                        }
+                    }
+                    key
+                }
+                Err(e) => {
+                    warn!("  {} Jira ticket creation failed: {}", "⚠".yellow(), e);
+                    println!("  {} Report archive saved — submit manually", "ℹ".blue());
+                    "local-report".to_string()
+                }
+            }
+        } else {
+            println!("\n{}", "ℹ Jira not configured — report saved locally.".blue());
+            println!(
+                "  Configure Jira via devdock-plugin-jira-reporter for automatic ticket creation."
+            );
+            "local-report".to_string()
+        };
 
         // Cleanup temporary files
         let temp_files = vec![temp_dir, archive_path.parent().unwrap().to_path_buf()];
         archive::cleanup_temp_files(&temp_files);
 
-        println!("\n{}", "✅ Bug report successfully created!".bold().green());
-        println!("\n{}", "View ticket:".bold());
-        println!("  {}", ticket_key.cyan());
+        println!("\n{}", "✅ Bug report created!".bold().green());
+        if ticket_key != "local-report" {
+            println!("\n{}", "View ticket:".bold());
+            println!("  {}", ticket_key.cyan());
+        } else {
+            println!("\n{}", "Report archive:".bold());
+            println!("  {}", archive_path.display());
+        }
 
         Ok(ticket_key)
     }

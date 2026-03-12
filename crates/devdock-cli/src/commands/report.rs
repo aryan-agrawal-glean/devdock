@@ -5,6 +5,13 @@ use devdock_diagnostics::BugReporter;
 
 /// Run the bug reporting workflow interactively.
 pub async fn report_bug() -> Result<()> {
+    // Load diagnostics config from devdock.toml (sets DEVDOCK_JIRA_URL etc.)
+    if let Ok(cwd) = std::env::current_dir() {
+        if let Ok((config, _)) = devdock_core::ProjectConfig::discover(&cwd) {
+            config.export_diagnostics_env();
+        }
+    }
+
     let reporter = BugReporter::new().interactive(true);
 
     match reporter.report().await {

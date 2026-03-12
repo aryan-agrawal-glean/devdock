@@ -5,7 +5,9 @@ use serde::{Deserialize, Serialize};
 use std::process::Command;
 use tracing::{info, warn};
 
-const SLACK_CHANNEL: &str = "";
+fn slack_channel() -> String {
+    std::env::var("DEVDOCK_SLACK_CHANNEL").unwrap_or_default()
+}
 
 #[derive(Debug, Serialize)]
 struct SlackMessage {
@@ -51,15 +53,24 @@ struct SlackResponse {
 
 /// Get Slack bot token from Google Cloud Secret Manager.
 pub fn get_slack_bot_token() -> Result<String> {
+    let secret_project = std::env::var("DEVDOCK_SECRET_PROJECT").unwrap_or_default();
+    let secret_name =
+        std::env::var("DEVDOCK_SLACK_SECRET").unwrap_or("DEVDOCK_SLACK_BOT_TOKEN".into());
+    if secret_project.is_empty() {
+        return Err(DiagnosticsError::Slack(
+            "DEVDOCK_SECRET_PROJECT not set — configure diagnostics.secret_project in devdock.toml"
+                .into(),
+        ));
+    }
     let output = Command::new("gcloud")
         .args([
             "--project",
-            &std::env::var("DEVDOCK_GCP_PROJECT").unwrap_or_default(),
+            &secret_project,
             "secrets",
             "versions",
             "access",
-            "1",
-            "--secret=DEVDOCK_SLACK_BOT_TOKEN",
+            "latest",
+            &format!("--secret={secret_name}"),
         ])
         .output()
         .map_err(|e| DiagnosticsError::Slack(format!("Failed to run gcloud command: {e}")))?;
@@ -89,7 +100,7 @@ pub async fn post_to_slack(jira_key: &str, summary: &str, reporter_email: &str) 
     let reporter_name = reporter_email.split('@').next().unwrap_or(reporter_email);
 
     let message = SlackMessage {
-        channel: SLACK_CHANNEL.to_string(),
+        channel: slack_channel(),
         blocks: vec![
             SlackBlock::Header {
                 text: SlackText {

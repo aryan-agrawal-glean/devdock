@@ -69,6 +69,20 @@ pub struct CloudSection {
 pub struct DiagnosticsSection {
     #[serde(default = "default_diagnostics_reporter")]
     pub reporter: String,
+    /// Jira instance URL (e.g., "https://your-org.atlassian.net")
+    pub jira_url: Option<String>,
+    /// Jira service account email
+    pub jira_email: Option<String>,
+    /// Jira project key (e.g., "ENG")
+    pub jira_project: Option<String>,
+    /// GCP project for Secret Manager (to fetch Jira/Slack tokens)
+    pub secret_project: Option<String>,
+    /// Secret name for Jira API token
+    pub jira_secret: Option<String>,
+    /// Slack channel for notifications
+    pub slack_channel: Option<String>,
+    /// Secret name for Slack bot token
+    pub slack_secret: Option<String>,
 }
 
 fn default_domain() -> String {
@@ -113,11 +127,45 @@ impl Default for CloudSection {
 }
 impl Default for DiagnosticsSection {
     fn default() -> Self {
-        Self { reporter: default_diagnostics_reporter() }
+        Self {
+            reporter: default_diagnostics_reporter(),
+            jira_url: None,
+            jira_email: None,
+            jira_project: None,
+            secret_project: None,
+            jira_secret: None,
+            slack_channel: None,
+            slack_secret: None,
+        }
     }
 }
 
 impl ProjectConfig {
+    /// Export diagnostics config as environment variables so jira.rs/slack.rs can read them.
+    pub fn export_diagnostics_env(&self) {
+        if let Some(ref url) = self.diagnostics.jira_url {
+            std::env::set_var("DEVDOCK_JIRA_URL", url);
+        }
+        if let Some(ref email) = self.diagnostics.jira_email {
+            std::env::set_var("DEVDOCK_JIRA_EMAIL", email);
+        }
+        if let Some(ref project) = self.diagnostics.jira_project {
+            std::env::set_var("DEVDOCK_JIRA_PROJECT", project);
+        }
+        if let Some(ref project) = self.diagnostics.secret_project {
+            std::env::set_var("DEVDOCK_SECRET_PROJECT", project);
+        }
+        if let Some(ref secret) = self.diagnostics.jira_secret {
+            std::env::set_var("DEVDOCK_JIRA_SECRET", secret);
+        }
+        if let Some(ref channel) = self.diagnostics.slack_channel {
+            std::env::set_var("DEVDOCK_SLACK_CHANNEL", channel);
+        }
+        if let Some(ref secret) = self.diagnostics.slack_secret {
+            std::env::set_var("DEVDOCK_SLACK_SECRET", secret);
+        }
+    }
+
     pub fn load(path: &Path) -> crate::Result<Self> {
         let content = std::fs::read_to_string(path)
             .map_err(|e| crate::Error::Config(format!("Failed to read {}: {e}", path.display())))?;
