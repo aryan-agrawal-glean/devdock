@@ -32,7 +32,8 @@ struct JiraIssueFields {
     summary: String,
     description: JiraDescription,
     issuetype: JiraIssueType,
-    parent: JiraParent,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parent: Option<JiraParent>,
     #[serde(skip_serializing_if = "Option::is_none")]
     reporter: Option<JiraReporter>,
 }
@@ -382,12 +383,16 @@ pub async fn create_jira_ticket(
         get_user_account_id(&client, &reporter_email, &jira_token).await.ok().flatten();
 
     // Create issue fields
+    let project_key = std::env::var("DEVDOCK_JIRA_PROJECT").unwrap_or("EN".into());
+    let parent_key = parent_issue();
+    let issue_type = if parent_key.is_empty() { "Bug" } else { "Sub-task" };
+
     let fields = JiraIssueFields {
-        project: JiraProject { key: "EN".to_string() },
+        project: JiraProject { key: project_key },
         summary: format!("Devdock Bug Report - {summary}"),
         description,
-        issuetype: JiraIssueType { name: "Sub-task".to_string() },
-        parent: JiraParent { key: parent_issue() },
+        issuetype: JiraIssueType { name: issue_type.to_string() },
+        parent: if parent_key.is_empty() { None } else { Some(JiraParent { key: parent_key }) },
         reporter: reporter_account_id.map(|id| JiraReporter { account_id: id }),
     };
 

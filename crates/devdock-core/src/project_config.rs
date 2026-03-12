@@ -83,6 +83,8 @@ pub struct DiagnosticsSection {
     pub slack_channel: Option<String>,
     /// Secret name for Slack bot token
     pub slack_secret: Option<String>,
+    /// Jira parent issue key (tickets created under this epic)
+    pub jira_parent_issue: Option<String>,
 }
 
 fn default_domain() -> String {
@@ -136,6 +138,7 @@ impl Default for DiagnosticsSection {
             jira_secret: None,
             slack_channel: None,
             slack_secret: None,
+            jira_parent_issue: None,
         }
     }
 }
@@ -163,6 +166,9 @@ impl ProjectConfig {
         }
         if let Some(ref secret) = self.diagnostics.slack_secret {
             std::env::set_var("DEVDOCK_SLACK_SECRET", secret);
+        }
+        if let Some(ref issue) = self.diagnostics.jira_parent_issue {
+            std::env::set_var("DEVDOCK_JIRA_PARENT_ISSUE", issue);
         }
     }
 
