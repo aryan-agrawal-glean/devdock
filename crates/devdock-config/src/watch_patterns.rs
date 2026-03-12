@@ -132,7 +132,7 @@ impl WatchPatternConfig {
             ],
         );
 
-        map.insert("java".to_string(), vec!["java/com/askscio/".to_string()]);
+        map.insert("java".to_string(), vec!["java/".to_string()]);
 
         map.insert(
             "frontend".to_string(),
@@ -287,7 +287,7 @@ impl WatchPatternGenerator {
     /// Examples:
     /// - `//go/platform/gcp/query_endpoint:query_endpoint_binary` → `go/platform/gcp/query_endpoint/`
     /// - `//python_scio/platform/google/app/query_parser` → `python_scio/platform/google/app/query_parser/`
-    /// - `//java/com/askscio/crawler:crawler.war` → `java/com/askscio/crawler/`
+    /// - `//java/crawler:crawler.war` → `java/crawler/`
     fn target_to_package_pattern(&self, target: &str) -> Option<String> {
         let target = target.strip_prefix("//").unwrap_or(target);
 
@@ -469,8 +469,8 @@ mod tests {
         );
 
         assert_eq!(
-            gen.target_to_package_pattern("//java/com/askscio/crawler:crawler.war"),
-            Some("java/com/askscio/crawler/".to_string())
+            gen.target_to_package_pattern("//java/crawler:crawler.war"),
+            Some("java/crawler/".to_string())
         );
     }
 

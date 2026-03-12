@@ -119,7 +119,7 @@ impl BugReporter {
 
         println!("\n{}", "✅ Bug report successfully created!".bold().green());
         println!("\n{}", "View ticket:".bold());
-        println!("  {}", format!("https://askscio.atlassian.net/browse/{ticket_key}").cyan());
+        println!("  {}", ticket_key.cyan());
 
         Ok(ticket_key)
     }

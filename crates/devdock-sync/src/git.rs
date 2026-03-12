@@ -13,7 +13,7 @@ pub const MONITORED_DIRS: &[&str] = &[
     "python_scio/",
     "typescript/",
     "java/",
-    "com/askscio/proto/",
+    "proto/",
     "config/",
     "javatests/",
     "openapi/",

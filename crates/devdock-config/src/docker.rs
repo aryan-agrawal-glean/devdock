@@ -15,7 +15,7 @@ pub const DEVDOCK_NETWORKS: &[&str] = &["devdock_network", "devdock_infra"];
 
 /// Docker images required for DevDock
 pub const REQUIRED_IMAGES: &[&str] = &[
-    "us-central1-docker.pkg.dev/scio-engineering/glean-images/devdock_python_base:latest",
+    "python:3.11-slim",
     "memcached:alpine3.21",
     "debian:bullseye-slim",
     "mcr.microsoft.com/azure-messaging/servicebus-emulator:latest",
@@ -33,8 +33,7 @@ pub const REQUIRED_IMAGES: &[&str] = &[
 ];
 
 /// Python-only images (subset for faster updates)
-pub const PYTHON_IMAGES: &[&str] =
-    &["us-central1-docker.pkg.dev/scio-engineering/glean-images/devdock_python_base:latest"];
+pub const PYTHON_IMAGES: &[&str] = &["python:3.11-slim"];
 
 /// Rich logging images (Grafana stack)
 pub const RICH_LOGGING_IMAGES: &[&str] = &[
@@ -246,7 +245,7 @@ pub fn load_cached_image(image: &str) -> Result<bool> {
 }
 
 /// Extract image name from full image path
-/// e.g., "us-central1-docker.pkg.dev/scio-engineering/glean-images/devdock_python_base:latest"
+/// e.g., "python:3.11-slim"
 ///       -> "devdock_python_base"
 fn extract_image_name(image: &str) -> String {
     // Split by '/' and get the last part, then split by ':' and get the first part
@@ -327,10 +326,7 @@ mod tests {
 
     #[test]
     fn test_extract_image_name() {
-        assert_eq!(
-            extract_image_name("us-central1-docker.pkg.dev/scio-engineering/glean-images/devdock_python_base:latest"),
-            "devdock_python_base"
-        );
+        assert_eq!(extract_image_name("python:3.11-slim"), "python");
         assert_eq!(extract_image_name("grafana/grafana:latest"), "grafana");
         assert_eq!(extract_image_name("nginx:1.27.3-alpine"), "nginx");
         assert_eq!(extract_image_name("redis"), "redis");

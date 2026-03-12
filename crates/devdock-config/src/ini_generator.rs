@@ -297,12 +297,7 @@ impl IniGenerator {
                 self.context.sql_metadata.as_ref().map(|m| m.use_public_ip).unwrap_or(false);
 
             // Set auth configuration based on public IP
-            if use_public_ip
-                && !matches!(
-                    self.context.project.as_str(),
-                    "glean-apps-canary" | "scio-engineering"
-                )
-            {
+            if use_public_ip && !matches!(self.context.project.as_str(), "glean-apps-canary") {
                 // Public IP in test projects: use glean_local user, no IAM
                 self.config.set("sql", "useDbIAMAuth", "false");
                 self.config.set("sql", "useCloudSqlConnectorInQe", "false");
@@ -333,12 +328,7 @@ impl IniGenerator {
                 self.config.set("sql", &format!("{}.googlecloud.instanceName", instance), "");
 
                 // Set db.user for public IP instances
-                if use_public_ip
-                    && !matches!(
-                        self.context.project.as_str(),
-                        "glean-apps-canary" | "scio-engineering"
-                    )
-                {
+                if use_public_ip && !matches!(self.context.project.as_str(), "glean-apps-canary") {
                     self.config.set("sql", &format!("{}.db.user", instance), "glean_local");
                 }
             }

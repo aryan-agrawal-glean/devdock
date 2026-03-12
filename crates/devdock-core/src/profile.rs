@@ -212,7 +212,7 @@ mod tests {
     #[test]
     fn test_parse_minimal_profile() {
         let yaml = r"
-project: dev-sandbox-334901
+project: test-project
 infra:
   sql:
     type: local
@@ -221,7 +221,7 @@ services:
     type: local
 ";
         let profile: Profile = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(profile.project, "dev-sandbox-334901");
+        assert_eq!(profile.project, "test-project");
         assert_eq!(profile.infra.len(), 1);
         assert_eq!(profile.services.len(), 1);
         assert!(profile.has_component("sql"));
@@ -345,7 +345,7 @@ services:
     #[test]
     fn test_parse_profile_with_multi_project() {
         let yaml = r"
-project: dev-sandbox-334901
+project: test-project
 infra:
   sql:
     type: local

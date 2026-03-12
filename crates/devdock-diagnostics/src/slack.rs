@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::process::Command;
 use tracing::{info, warn};
 
-const SLACK_CHANNEL: &str = "help-devdock";
+const SLACK_CHANNEL: &str = "";
 
 #[derive(Debug, Serialize)]
 struct SlackMessage {
@@ -54,12 +54,12 @@ pub fn get_slack_bot_token() -> Result<String> {
     let output = Command::new("gcloud")
         .args([
             "--project",
-            "dev-sandbox-334901",
+            &std::env::var("DEVDOCK_GCP_PROJECT").unwrap_or_default(),
             "secrets",
             "versions",
             "access",
             "1",
-            "--secret=GLEAN_AUTOMATION_SLACK_BOT_TOKEN",
+            "--secret=DEVDOCK_SLACK_BOT_TOKEN",
         ])
         .output()
         .map_err(|e| DiagnosticsError::Slack(format!("Failed to run gcloud command: {e}")))?;
@@ -85,7 +85,7 @@ pub async fn post_to_slack(jira_key: &str, summary: &str, reporter_email: &str) 
         }
     };
 
-    let jira_url = format!("https://askscio.atlassian.net/browse/{jira_key}");
+    let jira_url = jira_key.to_string();
     let reporter_name = reporter_email.split('@').next().unwrap_or(reporter_email);
 
     let message = SlackMessage {

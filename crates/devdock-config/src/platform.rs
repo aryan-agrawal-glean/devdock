@@ -79,8 +79,7 @@ pub struct TempProfile {
 }
 
 /// DNS kubectl enabled projects
-const DNS_KUBECTL_ENABLED_PROJECTS: &[&str] =
-    &["dev-sandbox-334901", "salessavvy-test", "scio-test-273415"];
+const DNS_KUBECTL_ENABLED_PROJECTS: &[&str] = &[]; // Configurable via DEVDOCK_DNS_KUBECTL env var
 
 /// Google Cloud Platform implementation
 #[allow(dead_code)]
@@ -138,11 +137,12 @@ impl GooglePlatform {
     }
 
     fn should_use_dns_kubectl_with_env(project: &str, env_value: Option<&str>) -> bool {
-        let env_flag = env_value
-            .map(|v| !matches!(v.to_lowercase().as_str(), "false" | "0" | "no"))
-            .unwrap_or(true); // Default to true (opt-out model)
-        let project_supported = DNS_KUBECTL_ENABLED_PROJECTS.contains(&project);
-        env_flag && project_supported
+        match env_value {
+            // Explicit env var takes precedence
+            Some(v) => matches!(v.to_lowercase().as_str(), "true" | "1" | "yes"),
+            // No env var: check project whitelist
+            None => DNS_KUBECTL_ENABLED_PROJECTS.contains(&project),
+        }
     }
 
     async fn get_project_number(project: &str) -> Result<String> {
@@ -188,10 +188,10 @@ impl Platform for GooglePlatform {
         let cluster = if self.project.contains("apps") || self.project.contains("canary") {
             "apps"
         } else {
-            "glean-cluster"
+            &std::env::var("DEVDOCK_CLUSTER_NAME").unwrap_or_else(|_| "default-cluster".to_string())
         };
 
-        if self.project != "scio-engineering" {
+        if !self.project.is_empty() {
             let mut args =
                 vec!["container", "clusters", "get-credentials", cluster, "--zone", &self.zone];
 
@@ -421,7 +421,15 @@ impl Platform for AWSPlatform {
     async fn authenticate(&self) -> Result<()> {
         // Update kubeconfig for EKS
         let status = Command::new("aws")
-            .args(["eks", "update-kubeconfig", "--name", "glean-cluster", "--region", &self.region])
+            .args([
+                "eks",
+                "update-kubeconfig",
+                "--name",
+                &std::env::var("DEVDOCK_CLUSTER_NAME")
+                    .unwrap_or_else(|_| "default-cluster".to_string()),
+                "--region",
+                &self.region,
+            ])
             .status()
             .await?;
 
@@ -498,9 +506,11 @@ impl Platform for AzurePlatform {
                 "aks",
                 "get-credentials",
                 "--resource-group",
-                "glean-rg",
+                &std::env::var("DEVDOCK_RESOURCE_GROUP")
+                    .unwrap_or_else(|_| "default-rg".to_string()),
                 "--name",
-                "glean-cluster",
+                &std::env::var("DEVDOCK_CLUSTER_NAME")
+                    .unwrap_or_else(|_| "default-cluster".to_string()),
             ])
             .status()
             .await?;
@@ -618,63 +628,37 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_dns_kubectl_enabled_by_default() {
-        // DNS kubectl should be enabled by default for whitelisted projects (opt-out model)
+    fn test_dns_kubectl_disabled_by_default() {
+        // DNS kubectl is disabled by default (no hardcoded project list)
         assert!(
-            GooglePlatform::should_use_dns_kubectl_with_env("salessavvy-test", None),
-            "DNS kubectl should be enabled by default for salessavvy-test"
-        );
-    }
-
-    #[test]
-    fn test_dns_kubectl_explicit_disable() {
-        // Should be disabled when explicitly set to false
-        assert!(
-            !GooglePlatform::should_use_dns_kubectl_with_env("salessavvy-test", Some("false")),
-            "DNS kubectl should be disabled when ENABLE_DNS_KUBECTL=false"
-        );
-        assert!(
-            !GooglePlatform::should_use_dns_kubectl_with_env("salessavvy-test", Some("0")),
-            "DNS kubectl should be disabled when ENABLE_DNS_KUBECTL=0"
-        );
-        assert!(
-            !GooglePlatform::should_use_dns_kubectl_with_env("salessavvy-test", Some("no")),
-            "DNS kubectl should be disabled when ENABLE_DNS_KUBECTL=no"
+            !GooglePlatform::should_use_dns_kubectl_with_env("any-project", None),
+            "DNS kubectl should be disabled by default"
         );
     }
 
     #[test]
     fn test_dns_kubectl_explicit_enable() {
-        // Should be enabled when explicitly set to true
+        // Should be enabled when explicitly set via env var
         assert!(
-            GooglePlatform::should_use_dns_kubectl_with_env("salessavvy-test", Some("true")),
+            GooglePlatform::should_use_dns_kubectl_with_env("any-project", Some("true")),
             "DNS kubectl should be enabled when ENABLE_DNS_KUBECTL=true"
         );
         assert!(
-            GooglePlatform::should_use_dns_kubectl_with_env("salessavvy-test", Some("1")),
+            GooglePlatform::should_use_dns_kubectl_with_env("any-project", Some("1")),
             "DNS kubectl should be enabled when ENABLE_DNS_KUBECTL=1"
         );
-        assert!(
-            GooglePlatform::should_use_dns_kubectl_with_env("salessavvy-test", Some("yes")),
-            "DNS kubectl should be enabled when ENABLE_DNS_KUBECTL=yes"
-        );
     }
 
     #[test]
-    fn test_dns_kubectl_not_supported_project() {
-        // Should be disabled for projects not in the whitelist
+    fn test_dns_kubectl_explicit_disable() {
         assert!(
-            !GooglePlatform::should_use_dns_kubectl_with_env("unsupported-project", None),
-            "DNS kubectl should be disabled for non-whitelisted projects"
+            !GooglePlatform::should_use_dns_kubectl_with_env("any-project", Some("false")),
+            "DNS kubectl should be disabled when ENABLE_DNS_KUBECTL=false"
         );
-    }
-
-    #[test]
-    fn test_dns_kubectl_all_whitelisted_projects() {
-        // Verify all whitelisted projects are supported
-        assert!(GooglePlatform::should_use_dns_kubectl_with_env("dev-sandbox-334901", None));
-        assert!(GooglePlatform::should_use_dns_kubectl_with_env("salessavvy-test", None));
-        assert!(GooglePlatform::should_use_dns_kubectl_with_env("scio-test-273415", None));
+        assert!(
+            !GooglePlatform::should_use_dns_kubectl_with_env("any-project", Some("0")),
+            "DNS kubectl should be disabled when ENABLE_DNS_KUBECTL=0"
+        );
     }
 
     #[test]
@@ -683,7 +667,7 @@ mod tests {
         // It's stored in temp_profile.yaml, not in devdock.ini
         let aws_platform = AWSPlatform {
             account_id: "202180081037".to_string(),
-            gcp_connector_project: "aws-glean-salessavvy-test".to_string(),
+            gcp_connector_project: "aws-test-project".to_string(),
             region: "us-east-1".to_string(),
             zone: String::new(),
         };

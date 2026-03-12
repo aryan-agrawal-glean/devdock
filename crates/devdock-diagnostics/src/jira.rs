@@ -9,9 +9,9 @@ use std::path::Path;
 use std::process::Command;
 use tracing::{info, warn};
 
-const JIRA_URL: &str = "https://askscio.atlassian.net";
+const JIRA_URL: &str = "";
 const PARENT_ISSUE: &str = "EN-404402";
-const JIRA_EMAIL: &str = "oncall_user@askscio.com";
+const JIRA_EMAIL: &str = "";
 
 #[derive(Debug, Serialize)]
 struct JiraIssueFields {
@@ -103,7 +103,7 @@ pub fn get_jira_token() -> Result<String> {
     let output = Command::new("gcloud")
         .args([
             "--project",
-            "dev-sandbox-334901",
+            &std::env::var("DEVDOCK_GCP_PROJECT").unwrap_or_default(),
             "secrets",
             "versions",
             "access",

@@ -181,7 +181,7 @@ mod tests {
 
         [cloud]
         platform = "google"
-        project = "salessavvy-test"
+        project = "test-gcp-project"
 
         [telemetry]
         enabled = true

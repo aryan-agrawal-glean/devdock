@@ -225,12 +225,7 @@ impl SqlUtils {
             .unwrap_or(true);
 
         // Special case: Public IP instances in test projects don't use IAM
-        let use_iam_auth =
-            if use_public_ip && !matches!(project, "glean-apps-canary" | "scio-engineering") {
-                false
-            } else {
-                use_iam_auth
-            };
+        let use_iam_auth = if use_public_ip { false } else { use_iam_auth };
 
         Ok(SqlRemoteMetadata {
             instances,
