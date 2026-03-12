@@ -233,7 +233,7 @@ impl ConfigGenerator {
             );
         }
 
-        // 6. Handle multi-project (glean-apps-canary) if present
+        // 6. Handle multi-project if present
         if let Some(ref multi_config) = profile.multi_project {
             self.generate_multi_project_configs(
                 profile,
@@ -247,7 +247,7 @@ impl ConfigGenerator {
         Ok(())
     }
 
-    /// Generate multi-project configurations (scio_apps.ini and nested temp_profile)
+    /// Generate multi-project configurations (multi_project.ini and nested temp_profile)
     async fn generate_multi_project_configs(
         &self,
         primary_profile: &Profile,
@@ -255,16 +255,15 @@ impl ConfigGenerator {
         _primary_ini: &str,
         dynamic_ini: Option<&ParsedIniConfig>,
     ) -> Result<()> {
-        println!("⏩ Generating multi-project (glean-apps-canary) configs...");
+        println!("⏩ Generating multi-project ({}) configs...", multi_config.project);
         let step_start = std::time::Instant::now();
 
-        // The multi-project is always glean-apps-canary for now
-        let multi_project_name = "glean-apps-canary";
+        let multi_project_name = &multi_config.project;
 
         // 1. Create platform for multi-project
         let multi_platform = crate::platform::create_platform_with_multi_project(
             "google", // Multi-project is always GCP for now
-            multi_project_name.to_string(),
+            multi_project_name.clone(),
             dynamic_ini,
             true, // multi_project flag
         )
@@ -272,7 +271,7 @@ impl ConfigGenerator {
 
         // 2. Build dependency graph for multi-project services/infra
         let mut multi_profile = Profile {
-            project: multi_project_name.to_string(),
+            project: multi_project_name.clone(),
             platform: primary_profile.platform,
             infra: multi_config.infra.clone(),
             services: multi_config.services.clone(),
@@ -288,7 +287,7 @@ impl ConfigGenerator {
         // 3. Auto-inject SQL if not present (matches Python behavior)
         let has_sql = multi_config.infra.contains_key("sql");
         if has_sql {
-            // Generate scio_apps.ini without auto-injecting SQL
+            // Generate multi_project.ini without auto-injecting SQL
             self.generate_multi_project_ini(
                 &multi_profile,
                 multi_platform.as_ref(),
@@ -308,7 +307,7 @@ impl ConfigGenerator {
             // Rebuild graph with SQL included
             let multi_graph = DependencyGraph::build(&multi_profile, &self.workspace_root).await?;
 
-            // Generate scio_apps.ini with SQL
+            // Generate multi_project.ini with SQL
             self.generate_multi_project_ini(
                 &multi_profile,
                 multi_platform.as_ref(),
@@ -325,7 +324,7 @@ impl ConfigGenerator {
         Ok(())
     }
 
-    /// Generate scio_apps.ini for multi-project
+    /// Generate multi_project.ini for multi-project
     async fn generate_multi_project_ini(
         &self,
         profile: &Profile,
@@ -389,12 +388,12 @@ impl ConfigGenerator {
             }
         }
 
-        let scio_apps_ini = generator.generate();
+        let multi_project_ini = generator.generate();
 
-        // Write scio_apps.ini
-        let scio_apps_path = self.workspace_root.join("devdock/scio_apps.ini");
-        tokio::fs::write(&scio_apps_path, &scio_apps_ini).await?;
-        println!("   └─ scio_apps.ini written");
+        // Write multi_project.ini
+        let multi_project_path = self.workspace_root.join("devdock/multi_project.ini");
+        tokio::fs::write(&multi_project_path, &multi_project_ini).await?;
+        println!("   └─ multi_project.ini written");
 
         Ok(())
     }
@@ -631,7 +630,7 @@ impl ConfigGenerator {
 
         // Handle multi-project if present
         if let Some(ref multi_config) = profile.multi_project {
-            // 1. Add nested glean_apps_canary section (only platform + SQL)
+            // 1. Add nested multi_project section (only platform + SQL)
             let multi_profile_data = self
                 .generate_multi_project_profile(profile, multi_config, dynamic_ini.as_ref())
                 .await?;
@@ -658,11 +657,11 @@ impl ConfigGenerator {
     ) -> Result<()> {
         use crate::profile_generator::ServiceProfileEntry;
 
-        let multi_project_name = "glean-apps-canary";
+        let multi_project_name = &multi_config.project;
 
         // Build profile for multi-project to get dependency graph
         let multi_profile = Profile {
-            project: multi_project_name.to_string(),
+            project: multi_project_name.clone(),
             platform: devdock_core::types::Platform::Google,
             infra: multi_config.infra.clone(),
             services: multi_config.services.clone(),
@@ -744,18 +743,18 @@ impl ConfigGenerator {
     ) -> Result<crate::profile_generator::MultiProjectProfile> {
         use crate::profile_generator::{InfraProfileEntry, MultiProjectProfile};
 
-        let multi_project_name = "glean-apps-canary";
+        let multi_project_name = &multi_config.project;
 
         // Create platform for multi-project
         let multi_platform = crate::platform::create_platform_with_multi_project(
             "google",
-            multi_project_name.to_string(),
+            multi_project_name.clone(),
             dynamic_ini,
             true,
         )
         .await?;
 
-        // Only nest SQL infra under glean_apps_canary (matches Python behavior)
+        // Only nest SQL infra under multi_project (matches Python behavior)
         let mut infra = HashMap::new();
         if let Some(sql_config) = multi_config.infra.get("sql") {
             let infra_type = match sql_config.deployment_type {

@@ -65,12 +65,12 @@ pub struct TempProfileData {
     pub test_suite: Option<HashMap<String, serde_json::Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub env: Option<HashMap<String, String>>,
-    /// Multi-project configuration (e.g., glean-apps-canary)
-    #[serde(rename = "glean_apps_canary", skip_serializing_if = "Option::is_none")]
+    /// Multi-project configuration (e.g., multi-project)
+    #[serde(rename = "multi_project", skip_serializing_if = "Option::is_none")]
     pub multi_project: Option<MultiProjectProfile>,
 }
 
-/// Nested configuration for multi-project (glean-apps-canary)
+/// Nested configuration for multi-project (multi-project)
 #[derive(Debug, Clone, Serialize)]
 pub struct MultiProjectProfile {
     pub project: String,
@@ -731,7 +731,7 @@ impl TempProfileGenerator {
         self.profile.services.insert(hook_name.to_string(), entry);
     }
 
-    /// Set the multi-project configuration (glean-apps-canary)
+    /// Set the multi-project configuration (multi-project)
     pub fn set_multi_project(&mut self, multi_project: MultiProjectProfile) {
         self.profile.multi_project = Some(multi_project);
     }
@@ -751,7 +751,7 @@ impl TempProfileGenerator {
 
         let platform = self.profile.platform.as_str();
 
-        // Check if this is multi-project (nested under glean_apps_canary)
+        // Check if this is multi-project (nested under multi_project)
         let is_multi_project = self.profile.multi_project.is_some();
 
         match platform {
@@ -904,8 +904,8 @@ impl TempProfileGenerator {
                     }
                 }
 
-                // Special handling for glean-apps-canary and scio-apps
-                if matches!(metadata.project.as_str(), "glean-apps-canary" | "scio-apps") {
+                // Special handling for multi-project
+                if self.profile.multi_project.is_some() {
                     // These projects use simplified config
                     // The actual db.host is already set in devdock.ini
                 }

@@ -9,7 +9,7 @@ use devdock_core::profile::Profile;
 /// Context for INI generation that affects how configs are generated
 #[derive(Debug, Default)]
 pub struct IniGeneratorContext {
-    /// Whether this is a multi-project setup (e.g., glean-apps-canary)
+    /// Whether this is a multi-project setup (e.g., multi-project)
     pub multi_project: bool,
     /// Whether quality_pipelines are enabled (uses localhost instead of host.docker.internal)
     pub has_quality_pipelines: bool,
@@ -29,7 +29,7 @@ impl IniGeneratorContext {
     pub fn from_profile(profile: &Profile) -> Self {
         let has_quality_pipelines = profile.pipelines.contains_key("quality_pipelines");
         // Don't set multi_project flag just because profile has multi_project section
-        // This flag should only be true when generating scio_apps.ini itself
+        // This flag should only be true when generating multi_project.ini itself
         let multi_project = false;
 
         // Extract opensearch namespace from profile if present
@@ -241,11 +241,9 @@ impl IniGenerator {
             self.config.set("sql", "useCloudSqlConnectorInQe", "false");
 
             // Instance list depends on project type (matches Python sql_service_dependency.py special cases)
-            // - glean-apps-canary/scio-apps: use internal + frontendInstance
+            // - multi_project: use internal + frontendInstance
             // - Standard: use frontendInstance + backendInstance
-            let instances: Vec<&str> = if self.context.project == "glean-apps-canary"
-                || self.context.project == "scio-apps"
-            {
+            let instances: Vec<&str> = if self.context.multi_project {
                 vec!["internal", "frontendInstance"]
             } else {
                 vec!["frontendInstance", "backendInstance"]
@@ -260,7 +258,7 @@ impl IniGenerator {
             }
 
             // Set googlecloud.instanceName for each instance type
-            if self.context.project == "glean-apps-canary" || self.context.project == "scio-apps" {
+            if self.context.multi_project {
                 self.config.set("sql", "internal.googlecloud.instanceName", "");
                 self.config.set("sql", "frontendInstance.googlecloud.instanceName", "");
                 self.config.set("sql", "googlecloud.instanceName", "");
@@ -297,7 +295,7 @@ impl IniGenerator {
                 self.context.sql_metadata.as_ref().map(|m| m.use_public_ip).unwrap_or(false);
 
             // Set auth configuration based on public IP
-            if use_public_ip && !matches!(self.context.project.as_str(), "glean-apps-canary") {
+            if use_public_ip && !self.context.multi_project {
                 // Public IP in test projects: use glean_local user, no IAM
                 self.config.set("sql", "useDbIAMAuth", "false");
                 self.config.set("sql", "useCloudSqlConnectorInQe", "false");
@@ -310,9 +308,7 @@ impl IniGenerator {
 
             // Set host for remote SQL (goes through cloud-sql-proxy or bastion)
             // Instance list depends on project type (matches Python sql_service_dependency.py special cases)
-            let instances: &[&str] = if self.context.project == "glean-apps-canary"
-                || self.context.project == "scio-apps"
-            {
+            let instances: &[&str] = if self.context.multi_project {
                 &["internal", "frontendInstance"]
             } else {
                 &["frontendInstance", "backendInstance"]
@@ -328,13 +324,13 @@ impl IniGenerator {
                 self.config.set("sql", &format!("{}.googlecloud.instanceName", instance), "");
 
                 // Set db.user for public IP instances
-                if use_public_ip && !matches!(self.context.project.as_str(), "glean-apps-canary") {
+                if use_public_ip && !self.context.multi_project {
                     self.config.set("sql", &format!("{}.db.user", instance), "glean_local");
                 }
             }
 
-            // Special handling for glean-apps-canary and scio-apps
-            if self.context.project == "glean-apps-canary" || self.context.project == "scio-apps" {
+            // Special handling for multi-project
+            if self.context.multi_project {
                 self.config.set(
                     "sql",
                     "db.host",
@@ -621,9 +617,11 @@ mod tests {
     }
 
     #[test]
-    fn test_local_sql_config_glean_apps_canary() {
-        // glean-apps-canary should use internal and frontendInstance (NOT backendInstance)
-        let context = create_test_context("glean-apps-canary");
+    fn test_local_sql_config_multi_project() {
+        // multi-project should use internal and frontendInstance (NOT backendInstance)
+        let mut context = create_test_context("secondary-project");
+        context.multi_project = true;
+        let context = context;
         let mut generator = IniGenerator::with_context(context);
         let node = create_local_sql_node();
         generator.apply_dependency(&node);
@@ -633,38 +631,39 @@ mod tests {
         // Should have internal and frontendInstance
         assert!(
             ini_output.contains("internal.db.host"),
-            "glean-apps-canary should have internal instance"
+            "multi-project should have internal instance"
         );
         assert!(
             ini_output.contains("frontendInstance.db.host"),
-            "glean-apps-canary should have frontendInstance"
+            "multi-project should have frontendInstance"
         );
         assert!(
             ini_output.contains("internal.googlecloud.instanceName"),
-            "glean-apps-canary should have internal.googlecloud.instanceName"
+            "multi-project should have internal.googlecloud.instanceName"
         );
         assert!(
             ini_output.contains("frontendInstance.googlecloud.instanceName"),
-            "glean-apps-canary should have frontendInstance.googlecloud.instanceName"
+            "multi-project should have frontendInstance.googlecloud.instanceName"
         );
         // Should also have unprefixed googlecloud.instanceName
         assert!(
             ini_output.contains("\ngooglecloud.instanceName")
                 || ini_output.starts_with("googlecloud.instanceName"),
-            "glean-apps-canary should have unprefixed googlecloud.instanceName"
+            "multi-project should have unprefixed googlecloud.instanceName"
         );
 
         // Should NOT have backendInstance
         assert!(
             !ini_output.contains("backendInstance.db.host"),
-            "glean-apps-canary should NOT have backendInstance"
+            "multi-project should NOT have backendInstance"
         );
     }
 
     #[test]
-    fn test_local_sql_config_scio_apps() {
-        // scio-apps should use internal and frontendInstance (same as glean-apps-canary)
-        let context = create_test_context("scio-apps");
+    fn test_local_sql_config_multi_project_variant() {
+        let mut context = create_test_context("another-project");
+        context.multi_project = true;
+        let context = context;
         let mut generator = IniGenerator::with_context(context);
         let node = create_local_sql_node();
         generator.apply_dependency(&node);
@@ -672,23 +671,28 @@ mod tests {
         let ini_output = generator.generate();
 
         // Should have internal and frontendInstance
-        assert!(ini_output.contains("internal.db.host"), "scio-apps should have internal instance");
+        assert!(
+            ini_output.contains("internal.db.host"),
+            "multi-project should have internal instance"
+        );
         assert!(
             ini_output.contains("frontendInstance.db.host"),
-            "scio-apps should have frontendInstance"
+            "multi-project should have frontendInstance"
         );
 
         // Should NOT have backendInstance
         assert!(
             !ini_output.contains("backendInstance.db.host"),
-            "scio-apps should NOT have backendInstance"
+            "multi-project should NOT have backendInstance"
         );
     }
 
     #[test]
-    fn test_remote_sql_config_glean_apps_canary() {
-        // Remote SQL for glean-apps-canary should also use internal + frontendInstance
-        let context = create_test_context("glean-apps-canary");
+    fn test_remote_sql_config_multi_project() {
+        // Remote SQL for multi-project should also use internal + frontendInstance
+        let mut context = create_test_context("secondary-project");
+        context.multi_project = true;
+        let context = context;
         let mut generator = IniGenerator::with_context(context);
         let node = create_remote_sql_node();
         generator.apply_dependency(&node);
@@ -698,17 +702,17 @@ mod tests {
         // Should have internal and frontendInstance
         assert!(
             ini_output.contains("internal.db.host"),
-            "Remote glean-apps-canary should have internal instance"
+            "Remote multi-project should have internal instance"
         );
         assert!(
             ini_output.contains("frontendInstance.db.host"),
-            "Remote glean-apps-canary should have frontendInstance"
+            "Remote multi-project should have frontendInstance"
         );
 
         // Should NOT have backendInstance
         assert!(
             !ini_output.contains("backendInstance.db.host"),
-            "Remote glean-apps-canary should NOT have backendInstance"
+            "Remote multi-project should NOT have backendInstance"
         );
     }
 

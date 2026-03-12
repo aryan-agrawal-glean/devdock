@@ -38,8 +38,8 @@ pub struct Profile {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ini_overrides: Vec<IniOverride>,
 
-    /// Multi-project config (e.g., glean-apps-canary).
-    #[serde(rename = "glean-apps-canary", default, skip_serializing_if = "Option::is_none")]
+    /// Multi-project config — additional project with its own services/infra.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub multi_project: Option<MultiProjectConfig>,
 }
 
@@ -135,9 +135,13 @@ fn default_test_type() -> String {
     "test".to_string()
 }
 
-/// Multi-project configuration (for glean-apps-canary pattern).
+/// Multi-project configuration — run services from an additional project
+/// alongside the main project.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MultiProjectConfig {
+    /// The secondary project name (e.g., "my-other-project")
+    pub project: String,
+
     #[serde(default)]
     pub infra: HashMap<ComponentName, InfraConfig>,
 
@@ -352,7 +356,8 @@ infra:
 services:
   qe:
     type: local
-glean-apps-canary:
+multi_project:
+  project: secondary-project
   infra:
     sql:
       type: local
