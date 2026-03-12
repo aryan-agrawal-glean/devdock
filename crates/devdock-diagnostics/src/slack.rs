@@ -96,7 +96,12 @@ pub async fn post_to_slack(jira_key: &str, summary: &str, reporter_email: &str) 
         }
     };
 
-    let jira_url = jira_key.to_string();
+    let jira_base = std::env::var("DEVDOCK_JIRA_URL").unwrap_or_default();
+    let jira_url = if jira_base.is_empty() {
+        jira_key.to_string()
+    } else {
+        format!("{}/browse/{}", jira_base, jira_key)
+    };
     let reporter_name = reporter_email.split('@').next().unwrap_or(reporter_email);
 
     let message = SlackMessage {
