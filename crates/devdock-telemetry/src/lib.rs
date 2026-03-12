@@ -1,25 +1,19 @@
-//! DevDock Telemetry Plugin
+//! DevDock Telemetry — Collection + Local Emission
 //!
-//! Captures comprehensive observability data for DevDock sessions and emits
-//! to BigQuery for analytics and monitoring.
+//! Captures observability data for DevDock sessions.
+//! Telemetry SYNC to external services (BigQuery, Datadog, etc.)
+//! is handled by external plugins.
 //!
-//! ## Data Captured
-//!
-//! - **Session metrics**: Start/end times, duration, status
-//! - **Resource metrics**: Per-resource health, bootup time, status transitions
-//! - **Host metrics**: CPU, memory, disk usage
-//! - **Docker metrics**: Per-container resource usage
-//! - **Build metrics**: Bazel build times, success/failure
-//! - **Failure logs**: Log dumps for persistently failing resources
+//! Built-in emitters:
+//! - `FileEmitter` — writes to local JSON file
+//! - `NoopEmitter` — discards (for testing)
 
-mod bigquery;
 mod collector;
 mod emitter;
 mod error;
 mod models;
 
-pub use bigquery::{BigQueryConfig, BigQueryEmitter};
 pub use collector::{TelemetryCollector, TelemetryCollectorConfig};
-pub use emitter::TelemetryEmitter;
+pub use emitter::{FileEmitter, TelemetryEmitter};
 pub use error::{Result, TelemetryError};
 pub use models::*;

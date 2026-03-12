@@ -25,51 +25,6 @@ pub async fn execute(
 
     output::info("Starting DevDock...");
 
-    // Initialize backend registry (config-driven — selects backends from devdock.toml)
-    let workspace_root_for_config = find_workspace_root().ok();
-    let backend_registry = if let Some(ref ws) = workspace_root_for_config {
-        let config_path = ws.join(".devdock/devdock.toml");
-        if config_path.exists() {
-            match devdock_core::ProjectConfig::load(&config_path) {
-                Ok(project_config) => {
-                    match devdock_core::BackendRegistry::from_config(&project_config) {
-                        Ok(registry) => {
-                            // Register GCP backends if configured
-                            crate::backends::register_gcp_backends(&registry, &project_config)
-                                .await;
-                            tracing::debug!("Backend registry initialized from devdock.toml");
-                            Some(registry)
-                        }
-                        Err(e) => {
-                            tracing::warn!("Failed to initialize backend registry: {e}");
-                            None
-                        }
-                    }
-                }
-                Err(e) => {
-                    tracing::debug!("No devdock.toml: {e}");
-                    None
-                }
-            }
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-
-    // Emit session start via backend registry
-    if let Some(ref registry) = backend_registry {
-        use devdock_core::plugin::TelemetryEvent;
-        let _ = registry
-            .emit_telemetry(&TelemetryEvent::SessionStart {
-                session_id: "pending".to_string(),
-                profile: profile_name.to_string(),
-                mode: "local".to_string(),
-            })
-            .await;
-    }
-
     // Step 1: Load and validate profile
     output::info(&format!("Loading profile: {profile_name}"));
     let loader = ProfileLoader::new();
@@ -980,114 +935,22 @@ async fn emit_telemetry(
     failed_count: usize,
     profile: &str,
     command_start_time: chrono::DateTime<chrono::Utc>,
-    tilt_up_time: chrono::DateTime<chrono::Utc>,
-    watch_start_time: chrono::DateTime<chrono::Utc>,
+    _tilt_up_time: chrono::DateTime<chrono::Utc>,
+    _watch_start_time: chrono::DateTime<chrono::Utc>,
 ) {
-    use chrono::Utc;
-    use devdock_telemetry::{
-        BigQueryConfig, BigQueryEmitter, SessionMetrics, TelemetryEmitter, TelemetrySnapshot,
-    };
-
-    let machine_id = get_machine_id();
-    let now = Utc::now();
-
-    // Calculate timing metrics
-    let tilt_bootstrap_secs = (tilt_up_time - command_start_time).num_seconds() as f64;
+    let now = chrono::Utc::now();
     let total_startup_secs = (now - command_start_time).num_seconds() as f64;
 
-    // Also emit via backend registry (config-driven telemetry sync)
-    // This is the OSS-compatible path that uses devdock.toml config
-    {
-        use devdock_core::plugin::TelemetryEvent;
-        let event = TelemetryEvent::SessionEnd {
-            session_id: devdock_id.to_string(),
-            duration_secs: total_startup_secs as u64,
-            success: status == "success",
-        };
-        // Try to emit via registry (will use stdout for OSS, BigQuery for Glean)
-        let registry = devdock_core::BackendRegistry::with_defaults();
-        if let Err(e) = registry.emit_telemetry(&event).await {
-            tracing::debug!("Backend telemetry: {e}");
-        }
-    }
-
-    // Legacy BigQuery emission (direct, for backward compatibility)
-    let session = SessionMetrics {
-        devdock_id: devdock_id.to_string(),
-        machine_id: machine_id.clone(),
-        architecture: std::env::consts::OS.to_string(),
-        platform: std::env::consts::OS.to_string(),
-        project: "scio".to_string(),
-        profile: profile.to_string(),
-        branch: get_git_branch().ok(),
-        binary_type: "rust".to_string(),
-        binary_version: env!("CARGO_PKG_VERSION").to_string(),
-        command_start_time,
-        tilt_up_time: Some(tilt_up_time),
-        watch_start_time: Some(watch_start_time),
-        startup_complete_time: Some(now),
-        tilt_bootstrap_seconds: Some(tilt_bootstrap_secs),
-        total_startup_seconds: Some(total_startup_secs),
-        startup_status: status.to_string(),
-        total_resources: (healthy_count + failed_count) as i32,
-        healthy_resources: healthy_count as i32,
-        failed_resources: failed_count as i32,
-        timestamp: now,
-    };
-
-    let snapshot = TelemetrySnapshot { session: Some(session), ..Default::default() };
-
-    let config = BigQueryConfig {
-        project_id: "dev-sandbox-334901".to_string(),
-        dataset: "devdock".to_string(),
-        use_adc: true,
-        ..Default::default()
-    };
-
-    match BigQueryEmitter::new(config) {
-        Ok(emitter) => match emitter.emit(&snapshot).await {
-            Ok(result) => {
-                if result.is_success() {
-                    tracing::info!("Telemetry emitted to BigQuery: status={}", status);
-                } else {
-                    tracing::warn!("Partial telemetry emission: {} errors", result.failure_count);
-                }
-            }
-            Err(e) => {
-                tracing::warn!("Failed to emit telemetry to BigQuery: {}", e);
-            }
-        },
-        Err(e) => {
-            tracing::debug!(
-                "BigQuery telemetry not available: {} (this is normal for local dev)",
-                e
-            );
-        }
-    }
-}
-
-/// Emit telemetry when Tilt fails early (before monitor runs)
-async fn emit_tilt_failure_telemetry(
-    devdock_id: &str,
-    profile: &str,
-    failure_type: &str,
-    command_start_time: chrono::DateTime<chrono::Utc>,
-) {
-    use chrono::Utc;
-    use devdock_telemetry::{
-        BigQueryConfig, BigQueryEmitter, SessionMetrics, TelemetryEmitter, TelemetrySnapshot,
-    };
-
-    let machine_id = get_machine_id();
-    let now = Utc::now();
-    let total_startup_secs = (now - command_start_time).num_seconds() as f64;
+    // Telemetry sync is handled by external plugins (e.g., devdock-plugin-bigquery-sync).
+    // The devdock binary only collects and logs to file.
+    use devdock_telemetry::{SessionMetrics, TelemetryEmitter, TelemetrySnapshot};
 
     let session = SessionMetrics {
         devdock_id: devdock_id.to_string(),
-        machine_id: machine_id.clone(),
+        machine_id: get_machine_id(),
         architecture: std::env::consts::OS.to_string(),
         platform: std::env::consts::OS.to_string(),
-        project: "scio".to_string(),
+        project: std::env::var("DEVDOCK_PROJECT").unwrap_or_default(),
         profile: profile.to_string(),
         branch: get_git_branch().ok(),
         binary_type: "rust".to_string(),
@@ -1098,39 +961,41 @@ async fn emit_tilt_failure_telemetry(
         startup_complete_time: Some(now),
         tilt_bootstrap_seconds: None,
         total_startup_seconds: Some(total_startup_secs),
-        startup_status: failure_type.to_string(),
-        total_resources: 0,
-        healthy_resources: 0,
-        failed_resources: 0,
+        startup_status: status.to_string(),
+        total_resources: (healthy_count + failed_count) as i32,
+        healthy_resources: healthy_count as i32,
+        failed_resources: failed_count as i32,
         timestamp: now,
     };
 
     let snapshot = TelemetrySnapshot { session: Some(session), ..Default::default() };
 
-    // Configure BigQuery emitter
-    let config = BigQueryConfig {
-        project_id: "dev-sandbox-334901".to_string(),
-        dataset: "devdock".to_string(),
-        use_adc: true,
-        ..Default::default()
-    };
-
-    // Try to emit to BigQuery
-    match BigQueryEmitter::new(config) {
-        Ok(emitter) => match emitter.emit(&snapshot).await {
-            Ok(result) => {
-                if result.is_success() {
-                    tracing::info!("Tilt failure telemetry emitted: {}", failure_type);
-                }
-            }
-            Err(e) => {
-                tracing::debug!("Failed to emit failure telemetry: {}", e);
-            }
-        },
-        Err(e) => {
-            tracing::debug!("BigQuery not available: {}", e);
-        }
+    // Emit to file (built-in, always available)
+    let emitter = devdock_telemetry::FileEmitter::new("~/.devdock/telemetry");
+    if let Err(e) = emitter.emit(&snapshot).await {
+        tracing::debug!("File telemetry: {e}");
     }
+}
+
+/// Emit telemetry when Tilt fails early (before monitor runs)
+async fn emit_tilt_failure_telemetry(
+    devdock_id: &str,
+    profile: &str,
+    failure_type: &str,
+    command_start_time: chrono::DateTime<chrono::Utc>,
+) {
+    // Emit failure via file telemetry (BigQuery sync via external plugin)
+    emit_telemetry(
+        devdock_id,
+        failure_type,
+        0,
+        0,
+        profile,
+        command_start_time,
+        chrono::Utc::now(),
+        chrono::Utc::now(),
+    )
+    .await;
 }
 
 /// Get a stable machine identifier

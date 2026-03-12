@@ -192,8 +192,8 @@ async fn emit_telemetry_with_resources(
     use chrono::Utc;
     use devdock_monitor::TiltClient;
     use devdock_telemetry::{
-        BigQueryConfig, BigQueryEmitter, ResourceStartupMetrics, ResourceStatusMetrics,
-        SessionMetrics, TelemetryEmitter, TelemetrySnapshot,
+        FileEmitter, ResourceStartupMetrics, ResourceStatusMetrics, SessionMetrics,
+        TelemetryEmitter, TelemetrySnapshot,
     };
 
     let machine_id = get_machine_id();
@@ -208,7 +208,7 @@ async fn emit_telemetry_with_resources(
         machine_id: machine_id.clone(),
         architecture: std::env::consts::OS.to_string(),
         platform: std::env::consts::OS.to_string(),
-        project: "scio".to_string(),
+        project: std::env::var("DEVDOCK_PROJECT").unwrap_or_default(),
         profile: profile.to_string(),
         branch: get_git_branch().ok(),
         binary_type: "rust".to_string(),
@@ -270,38 +270,12 @@ async fn emit_telemetry_with_resources(
         ..Default::default()
     };
 
-    // Configure BigQuery emitter
-    let config = BigQueryConfig {
-        project_id: "dev-sandbox-334901".to_string(),
-        dataset: "devdock".to_string(),
-        use_adc: true,
-        ..Default::default()
-    };
-
-    // Try to emit to BigQuery
-    match BigQueryEmitter::new(config) {
-        Ok(emitter) => match emitter.emit(&snapshot).await {
-            Ok(result) => {
-                if result.is_success() {
-                    tracing::info!(
-                        "Telemetry emitted to BigQuery: status={}, {} total metrics",
-                        status,
-                        result.success_count
-                    );
-                } else {
-                    tracing::warn!("Partial telemetry emission: {} errors", result.failure_count);
-                }
-            }
-            Err(e) => {
-                tracing::warn!("Failed to emit telemetry to BigQuery: {}", e);
-            }
-        },
-        Err(e) => {
-            tracing::debug!(
-                "BigQuery telemetry not available: {} (this is normal for local dev)",
-                e
-            );
-        }
+    // Emit to local file (BigQuery sync handled by external plugin)
+    let emitter = FileEmitter::new("~/.devdock/telemetry");
+    if let Err(e) = emitter.emit(&snapshot).await {
+        tracing::debug!("Telemetry file emission: {e}");
+    } else {
+        tracing::info!("Telemetry emitted: status={status}");
     }
 }
 
