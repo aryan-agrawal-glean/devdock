@@ -6,17 +6,85 @@
 
 A fast, extensible CLI for managing local and remote development environments. Works with any Bazel-managed monorepo.
 
-## What DevDock Does
+## Why DevDock?
 
-DevDock takes your service definitions (`devdock_config.json`) and profiles (`*.yaml`) and spins up a complete development environment with:
+Setting up a dev environment for a monorepo with dozens of services typically involves:
+- Running multiple shell scripts and Python setup tools
+- Manually configuring databases, caches, and search indexes
+- Waiting 2+ minutes for everything to start
 
-- Docker containers for your services (built via Bazel)
-- Infrastructure (MySQL, Redis, OpenSearch, etc.)
-- File watching and hot reload
-- Remote development via SSH or Coder
+DevDock replaces all of this with a single command:
 
-**Before DevDock**: 2+ minutes of Python scripts, shell commands, and manual configuration.
-**With DevDock**: Sub-60 second startup from a single command.
+```bash
+devdock start <profile>
+```
+
+Sub-60 second startup. No scripts. No manual configuration.
+
+## Architecture
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│                        devdock start <profile>                       │
+│                                                                      │
+│  ┌─────────────┐   ┌──────────────┐   ┌─────────────────────────┐  │
+│  │ Profile YAML │──→│  Dependency  │──→│  Runtime Generation     │  │
+│  │ (what to     │   │  Resolver    │   │  • devdock.ini          │  │
+│  │  run)        │   │  (DFS)       │   │  • temp_profile.yaml    │  │
+│  └─────────────┘   └──────────────┘   │  • Tiltfile             │  │
+│                                        │  • watch_file_*.yaml    │  │
+│  ┌─────────────┐   ┌──────────────┐   └────────────┬────────────┘  │
+│  │ devdock.toml│──→│  Platform    │                 │               │
+│  │ (project    │   │  Auth        │                 ▼               │
+│  │  config)    │   │  (GCP/AWS)   │   ┌─────────────────────────┐  │
+│  └─────────────┘   └──────────────┘   │  Tilt                   │  │
+│                                        │  ┌───────────────────┐  │  │
+│  ┌─────────────┐                      │  │ Shipped Starlark  │  │  │
+│  │ devdock_    │                      │  │ Libraries         │  │  │
+│  │ config.json │                      │  │ • service.Tiltfile│  │  │
+│  │ (per-service│                      │  │ • docker.Tiltfile │  │  │
+│  │  metadata)  │                      │  │ • bazel.Tiltfile  │  │  │
+│  └─────────────┘                      │  └───────────────────┘  │  │
+│                                        │           │              │  │
+│                                        │           ▼              │  │
+│                                        │  ┌─── Docker ────────┐  │  │
+│                                        │  │ Bazel builds      │  │  │
+│                                        │  │ Dockerfile gen    │  │  │
+│                                        │  │ Compose gen       │  │  │
+│                                        │  │ Container mgmt   │  │  │
+│                                        │  └──────────────────┘  │  │
+│                                        └─────────────────────────┘  │
+│                                                                      │
+│  ┌──────────── External Plugins (JSON stdin/stdout) ─────────────┐  │
+│  │ bigquery-sync │ jira-reporter │ slack-notifier │ gcs-storage  │  │
+│  └───────────────────────────────────────────────────────────────┘  │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+### How It Works
+
+1. **You define** services (`devdock_config.json`) and profiles (`*.yaml`)
+2. **DevDock generates** all runtime configs (INI, Tiltfile, watch patterns)
+3. **Tilt orchestrates** Docker containers using shipped Starlark libraries
+4. **Bazel builds** on host, binaries volume-mounted into containers
+5. **External plugins** handle telemetry sync, bug reporting, notifications
+
+### What's in Your Repo vs What DevDock Ships
+
+```
+YOUR REPO (committed):                  DEVDOCK BINARY (shipped):
+├── .devdock/devdock.toml               ├── Starlark libraries
+├── devdock/config/services/            │   ├── service.Tiltfile
+│   ├── api/devdock_config.json         │   ├── docker.Tiltfile
+│   └── worker/devdock_config.json      │   ├── bazel.Tiltfile
+├── devdock/config/infra/               │   └── templates/*.tpl
+│   ├── sql/docker-compose.yaml         ├── Default infra compose
+│   └── redis/docker-compose.yaml       │   ├── sql, redis, opensearch
+├── devdock/profiles/                   │   ├── memcached, pubsub
+│   ├── default.yaml                    │   └── nginx
+│   └── minimal.yaml                    └── Plugin SDK
+└── source code (anywhere)
+```
 
 ## Quick Start
 
@@ -30,10 +98,9 @@ DevDock takes your service definitions (`devdock_config.json`) and profiles (`*.
 
 ```bash
 # From source
+git clone https://github.com/askscio/devdock.git
+cd devdock
 cargo install --path crates/devdock-cli
-
-# With GCP features (BigQuery telemetry, GCS config, Coder)
-cargo install --path crates/devdock-cli --features gcp
 ```
 
 ### Initialize Your Repo
@@ -41,55 +108,16 @@ cargo install --path crates/devdock-cli --features gcp
 ```bash
 cd my-monorepo
 devdock init
-# Creates .devdock/devdock.toml
-# Edit with your project settings
+# Edit .devdock/devdock.toml with your project settings
 ```
 
-### Start
+### Create a Service Definition
 
 ```bash
-devdock start <profile>
-# Generates configs, starts Tilt, services come up
+mkdir -p devdock/config/services/api
 ```
 
-## How It Works
-
-### What You Commit to Your Repo
-
-```
-my-repo/
-├── .devdock/
-│   └── devdock.toml                    # Project config
-├── devdock/
-│   ├── config/
-│   │   ├── services/                   # One dir per service
-│   │   │   ├── api/devdock_config.json
-│   │   │   └── worker/devdock_config.json
-│   │   └── infra/                      # Infrastructure compose files
-│   │       ├── sql/docker-compose.yaml
-│   │       └── redis/docker-compose.yaml
-│   └── profiles/
-│       ├── default.yaml
-│       └── minimal.yaml
-```
-
-### What DevDock Generates at Runtime
-
-```
-devdock start <profile>
-├─ Loads devdock.toml + profile
-├─ Resolves transitive dependencies (DFS)
-├─ Generates: devdock.ini, temp_profile.yaml, watch files, Tiltfile
-├─ Extracts shipped Starlark libs
-└─ Starts Tilt with generated Tiltfile
-```
-
-Everything in `devdock/runtime_generated/` is generated fresh each start.
-
-### Service Definition (`devdock_config.json`)
-
-Each service needs a JSON file describing how to build and run it:
-
+`devdock/config/services/api/devdock_config.json`:
 ```json
 {
   "type": "python",
@@ -97,19 +125,16 @@ Each service needs a JSON file describing how to build and run it:
   "binary_mount": "services/api",
   "port": "8080",
   "dependencies": ["sql", "redis"],
-  "env": {
-    "PORT": "8080"
-  },
+  "env": { "PORT": "8080" },
   "healthcheck": {
     "test": ["CMD", "curl", "-f", "http://localhost:8080/health"]
   }
 }
 ```
 
-### Profile (`*.yaml`)
+### Create a Profile
 
-Profiles define which services and infrastructure to run:
-
+`devdock/profiles/default.yaml`:
 ```yaml
 project: my-project
 infra:
@@ -120,9 +145,19 @@ infra:
 services:
   api:
     type: local
-  worker:
-    type: local
 ```
+
+### Start
+
+```bash
+devdock start default
+# → Generates configs
+# → Builds with Bazel
+# → Starts Docker containers
+# → Tilt UI at http://localhost:10350
+```
+
+## Configuration
 
 ### Project Config (`devdock.toml`)
 
@@ -130,75 +165,143 @@ services:
 [project]
 name = "my-project"
 domain = "localhost"
+services_dir = "devdock/config/services"    # where service configs live
+infra_dir = "devdock/config/infra"          # where infra compose files live
 
 [cloud]
-platform = "google"
+platform = "google"           # google, aws, azure, none
 project = "my-gcp-project"
+region = "us-central1"
 
 [telemetry]
 enabled = true
-backend = "bigquery"    # or "stdout", "datadog"
+backend = "stdout"            # stdout, bigquery, datadog, external
 
 [remote]
-provider = "coder"      # or "ssh"
+provider = "ssh"              # ssh, coder
 
 [diagnostics]
-reporter = "jira"       # or "stdout", "github-issues"
+reporter = "stdout"           # stdout, jira
+jira_url = "https://your-org.atlassian.net"
+jira_email = "bot@your-org.com"
+jira_project = "ENG"
+secret_project = "your-gcp-project"
 ```
 
-## Configuration-Driven Backends
+### Service Config (`devdock_config.json`)
 
-DevDock uses config-driven backends, not code-driven plugins. Select backends in `devdock.toml`:
+| Field | Required | Description |
+|-------|----------|-------------|
+| `type` | No | `python`, `go`, `java`, `custom` (default: `custom`) |
+| `bazel_target` | No | Bazel build target (e.g., `//services/api:api`) |
+| `binary_mount` | No | Path to built binary relative to repo root |
+| `port` | No | Service port |
+| `dependencies` | No | Other services/infra this service needs |
+| `env` | No | Environment variables |
+| `healthcheck` | No | Docker healthcheck config |
+| `requirements` | No | Python requirements paths (linux, darwin, wheels) |
 
-| Capability | Backends | Default |
-|------------|----------|---------|
-| **Telemetry** | `stdout`, `bigquery`, `datadog`, `external` | `stdout` |
-| **Config Storage** | `local`, `gcs`, `s3` | `local` |
-| **Remote Dev** | `ssh`, `coder` | `ssh` |
-| **Diagnostics** | `stdout`, `jira`, `github-issues` | `stdout` |
+### Profile (`*.yaml`)
 
-Cloud backends require feature flags at build time:
+```yaml
+project: my-project
 
-```bash
-cargo install devdock                    # OSS: stdout, local, ssh
-cargo install devdock --features gcp     # + BigQuery, GCS, Coder
-cargo install devdock --features aws     # + S3, CloudWatch
+infra:
+  sql:
+    type: local              # local: Docker container, remote: kubectl port-forward
+  redis:
+    type: local
+
+services:
+  api:
+    type: local              # local: Bazel build + Docker, remote: port-forward
+    env:
+      DEBUG_MODE: "true"
+    hot_reload: enable
+  worker:
+    type: local
+
+# Optional: multi-project support
+multi_project:
+  project: secondary-project
+  services:
+    internal_admin:
+      type: remote
 ```
 
 ## External Plugins
 
-For custom backends, write a plugin in any language. DevDock communicates via JSON over stdin/stdout:
+DevDock uses external plugins for cloud integrations. Plugins are standalone executables that communicate via JSON over stdin/stdout.
+
+### Available Plugins
+
+| Plugin | Location | What it does |
+|--------|----------|-------------|
+| `bigquery-sync` | `plugins/common/` | Sync telemetry to BigQuery |
+| `jira-reporter` | `plugins/common/` | Create Jira tickets for bug reports |
+| `slack-notifier` | `plugins/common/` | Send Slack notifications |
+| `gcs-storage` | `plugins/glean/` | Read config from GCS buckets |
+| `s3-storage` | `plugins/glean/` | Read config from S3 buckets |
+
+### Install a Plugin
 
 ```bash
-# Create a plugin from template
-devdock plugin create my-prometheus --type telemetry --language python
-
-# Configure in devdock.toml
-# [telemetry]
-# backend = "external"
-# plugin = "~/.devdock/plugins/my-prometheus/plugin.py"
+cargo install --path plugins/common/bigquery-sync
 ```
 
-The generated plugin has all protocol boilerplate — just implement `handle_emit()`.
+### Create Your Own Plugin
+
+```bash
+devdock plugin create my-metrics --type telemetry --language python
+# Generates ~/.devdock/plugins/my-metrics/ with boilerplate
+```
+
+Plugin templates available for **Python**, **Go**, and **Bash**.
+
+### Plugin Protocol
+
+```
+devdock binary                    plugin executable
+    │                                  │
+    ├─ {"method":"initialize",         │
+    │   "config":{...}} ──────────────→│
+    │   ←────────────────────────────── {"status":"ok"}
+    │                                  │
+    ├─ {"method":"emit",               │
+    │   "event":{...}} ───────────────→│
+    │   ←────────────────────────────── {"status":"ok"}
+    │                                  │
+    ├─ {"method":"shutdown"} ─────────→│
+    │   ←────────────────────────────── {"status":"ok"}
+```
 
 ## Infrastructure
 
-DevDock ships default compose files for common infra (MySQL, Redis, OpenSearch, Memcached, PubSub, Nginx). Override them by adding custom compose files to `devdock/config/infra/`.
+DevDock ships default compose files for common infrastructure:
 
-Resolution order:
-1. **Repo override**: `devdock/config/infra/{name}/docker-compose.yaml`
-2. **Built-in default**: shipped with devdock binary
+| Component | Image | Port |
+|-----------|-------|------|
+| MySQL | `mysql:8.0` | 3306 |
+| Redis | `redis:7-alpine` | 6379 |
+| OpenSearch | `opensearch:2.11` | 9200 |
+| Memcached | `memcached:1.6` | 11211 |
+| PubSub | GCP emulator | 8085 |
+| Nginx | `nginx:alpine` | 8321 |
+
+Override any component by adding a custom `docker-compose.yaml` to `devdock/config/infra/{name}/`.
 
 ## Commands
 
 ```bash
-devdock init                    # Initialize project
-devdock start <profile>         # Start development environment
-devdock start <profile> -s svc  # Start specific services only
-devdock stop                    # Stop everything
-devdock status                  # Check service health
-devdock list                    # List running instances
-devdock cleanup                 # Clean containers and files
+# Core
+devdock init                        # Initialize project
+devdock start <profile>             # Start development environment
+devdock start <profile> -s svc      # Start specific services only
+devdock stop                        # Stop everything
+devdock status                      # Check service health
+devdock list                        # List all instances
+devdock cleanup                     # Clean containers and files
+devdock validate <profile>          # Validate profile config
 
 # Remote development
 devdock start <profile> -m remote   # Start on remote workspace
@@ -210,34 +313,52 @@ devdock infra sql setup             # Hydrate local SQL
 devdock infra opensearch copy       # Copy search indexes
 
 # Plugins
-devdock plugin list                 # Show available backends
+devdock plugin list                 # Show backends + installed plugins
 devdock plugin create <name>        # Create external plugin
 
 # Diagnostics
-devdock report                      # Generate bug report
-devdock validate <profile>          # Validate profile
+devdock report                      # Generate and submit bug report
+devdock docker check                # Check Docker status
+devdock profile list                # List available profiles
+
+# Logging
+devdock logs enable                 # Set up logging (via plugin)
+devdock logs status                 # Check logging status
 ```
 
-## Architecture
+## Repo Structure
 
 ```
 devdock/
-├── crates/
-│   ├── devdock-cli/          # CLI commands
-│   ├── devdock-core/         # Core types, plugin traits, generators
-│   ├── devdock-config/       # Config generation (devdock.ini, profiles)
-│   ├── devdock-remote/       # Remote dev (SSH, Coder)
-│   ├── devdock-sync/         # File sync daemon
-│   ├── devdock-monitor/      # Startup monitoring
-│   ├── devdock-state/        # SQLite state management
-│   ├── devdock-telemetry/    # Telemetry collection + sync
-│   └── devdock-diagnostics/  # Bug reporting
-├── lib/                      # Shipped Starlark libraries
-│   ├── service.Tiltfile      # Service orchestration
-│   ├── docker.Tiltfile       # Dockerfile/compose generation
-│   ├── bazel.Tiltfile        # Bazel build helpers
-│   └── templates/            # Dockerfile templates
-└── tests/fixtures/           # Test repos
+├── crates/                     # Rust source (zero cloud-specific code)
+│   ├── devdock-cli/            #   CLI commands, entry point
+│   ├── devdock-core/           #   Core types, Tiltfile generator, plugin traits
+│   ├── devdock-config/         #   Config generation (devdock.ini, profiles)
+│   ├── devdock-remote/         #   Remote dev (SSH, Coder)
+│   ├── devdock-sync/           #   File sync daemon
+│   ├── devdock-monitor/        #   Startup health monitoring
+│   ├── devdock-state/          #   SQLite state management
+│   ├── devdock-telemetry/      #   Telemetry collection (sync via plugins)
+│   ├── devdock-diagnostics/    #   Bug reporting
+│   └── devdock-codegen/        #   Config codegen
+├── lib/                        # Shipped Starlark libraries
+│   ├── service.Tiltfile        #   Service orchestration
+│   ├── docker.Tiltfile         #   Dockerfile/compose generation
+│   ├── bazel.Tiltfile          #   Bazel build helpers
+│   └── templates/              #   Dockerfile templates (Python, Go, Java)
+├── infra/                      # Default infra compose files
+├── plugins/
+│   ├── sdk/                    #   Plugin SDK (Rust crate)
+│   ├── common/                 #   Community plugins (BigQuery, Jira, Slack)
+│   ├── glean/                  #   Glean-specific plugins (GCS, S3)
+│   ├── templates/              #   Plugin scaffolding (Python, Go, Bash)
+│   └── examples/               #   Example plugins (Prometheus, Slack)
+├── tests/fixtures/             # Test repos
+├── docs/                       # Documentation
+├── CLAUDE.md                   # Claude Code development guide
+├── CONTRIBUTING.md
+├── LICENSE-MIT
+└── LICENSE-APACHE
 ```
 
 ## Development
@@ -247,39 +368,34 @@ devdock/
 DevDock is a Claude-friendly repo with built-in skills for agentic development:
 
 ```bash
-# Build and test everything
-/build-and-test
-
-# Test a specific profile against scio
-/test-profile qe
-
-# Check running Tilt resource status
-/check-tilt-status
-
-# Set up scio for testing
-/setup-scio-test
+/build-and-test              # Build, clippy, test, install
+/test-profile qe             # E2E test a profile against scio
+/check-tilt-status           # Check running Tilt resources
+/setup-scio-test             # Set up scio repo for testing
 ```
 
-See `CLAUDE.md` for the full development guide and `.claude/skills/` for available skills.
+See `CLAUDE.md` for the full development guide.
 
 ### Manual
 
 ```bash
-# Build
-cargo build
-
-# Test
-cargo test
-
-# Lint
-cargo clippy --workspace
-
-# Install dev build
-cargo install --path crates/devdock-cli --debug --force
-
-# Run CI locally
-cargo fmt --check && cargo clippy -- -D warnings && cargo test
+cargo build                  # Build all crates
+cargo test                   # Run tests (141 tests)
+cargo clippy --workspace     # Lint (0 warnings required)
+cargo install --path crates/devdock-cli --debug --force  # Install dev build
 ```
+
+### Building Plugins
+
+```bash
+cd plugins/common/bigquery-sync
+cargo build
+cargo install --path .
+```
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, code style, and how to add new backends.
 
 ## License
 

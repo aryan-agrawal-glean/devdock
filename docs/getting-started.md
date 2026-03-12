@@ -2,10 +2,10 @@
 
 ## Prerequisites
 
-- [Docker](https://docs.docker.com/get-docker/)
-- [Tilt](https://docs.tilt.dev/install.html)
-- [Bazel](https://bazel.build/) (for Bazel-managed repos)
-- [Rust 1.74+](https://rustup.rs/) (to build from source)
+- [Docker](https://docs.docker.com/get-docker/) — container runtime
+- [Tilt](https://docs.tilt.dev/install.html) — container orchestration
+- [Bazel](https://bazel.build/) — build system (for Bazel-managed repos)
+- [Rust 1.74+](https://rustup.rs/) — to build from source
 
 ## Installation
 
@@ -15,14 +15,14 @@ cd devdock
 cargo install --path crates/devdock-cli
 ```
 
-With cloud features:
+Verify:
 ```bash
-cargo install --path crates/devdock-cli --features gcp   # BigQuery, GCS, Coder
+devdock --version
 ```
 
 ## Setting Up Your Repo
 
-### 1. Initialize
+### Step 1: Initialize
 
 ```bash
 cd my-monorepo
@@ -34,15 +34,21 @@ This creates `.devdock/devdock.toml`. Edit it:
 ```toml
 [project]
 name = "my-project"
+domain = "localhost"
 
 [cloud]
-platform = "none"
+platform = "none"    # or "google", "aws", "azure"
 ```
 
-### 2. Add Service Definitions
+### Step 2: Add Service Definitions
 
-For each service, create `devdock/config/services/{name}/devdock_config.json`:
+For each service in your monorepo, create a `devdock_config.json`:
 
+```bash
+mkdir -p devdock/config/services/api
+```
+
+`devdock/config/services/api/devdock_config.json`:
 ```json
 {
   "type": "python",
@@ -50,15 +56,31 @@ For each service, create `devdock/config/services/{name}/devdock_config.json`:
   "binary_mount": "services/api",
   "port": "8080",
   "dependencies": ["sql"],
-  "env": { "PORT": "8080" },
-  "healthcheck": { "test": ["CMD", "curl", "-f", "http://localhost:8080/health"] }
+  "env": {
+    "PORT": "8080"
+  },
+  "healthcheck": {
+    "test": ["CMD", "curl", "-f", "http://localhost:8080/health"]
+  }
 }
 ```
 
-### 3. Create a Profile
+**Fields:**
+- `type` — `python`, `go`, `java`, or `custom` (default: `custom`)
+- `bazel_target` — Bazel build target. If omitted, service is skipped during build.
+- `binary_mount` — where bazel output goes (relative to repo root)
+- `dependencies` — other services or infra this service needs
+- `port` — service port
+- `healthcheck` — Docker healthcheck (optional)
+- `requirements` — Python-specific: paths to requirements.txt and wheels
 
-Create `devdock/profiles/default.yaml`:
+### Step 3: Create a Profile
 
+```bash
+mkdir -p devdock/profiles
+```
+
+`devdock/profiles/default.yaml`:
 ```yaml
 project: my-project
 infra:
@@ -69,55 +91,139 @@ services:
     type: local
 ```
 
-### 4. Start
+**Service types:**
+- `local` — Bazel builds on host, runs in Docker container
+- `remote` — kubectl port-forward to remote service (for transitive deps)
+
+### Step 4: Start
 
 ```bash
 devdock start default
 ```
 
-DevDock will resolve dependencies, build with Bazel, start Docker containers, and open the Tilt UI at http://localhost:10350.
+DevDock will:
+1. Resolve dependencies (api → sql)
+2. Generate runtime configs (devdock.ini, temp_profile.yaml, Tiltfile)
+3. Build your service with Bazel
+4. Start MySQL in Docker
+5. Start your service in Docker
+6. Open Tilt UI at http://localhost:10350
 
-### 5. Check and Stop
+### Step 5: Check and Stop
 
 ```bash
-devdock status          # Check service health
-devdock stop            # Stop everything
+devdock status    # See running services
+devdock stop      # Stop everything
+devdock cleanup   # Remove containers and files
 ```
 
-## Configuration Reference
+## Adding Infrastructure
 
-### devdock.toml
+DevDock ships default compose files for: MySQL, Redis, OpenSearch, Memcached, PubSub, Nginx.
 
-| Section | Field | Default | Description |
-|---------|-------|---------|-------------|
-| `project` | `name` | (required) | Project name |
-| `project` | `domain` | `localhost` | Local dev domain |
-| `project` | `services_dir` | `devdock/config/services` | Path to service configs |
-| `project` | `infra_dir` | `devdock/config/infra` | Path to infra overrides |
-| `cloud` | `platform` | `none` | `none`, `google`, `aws`, `azure` |
-| `cloud` | `project` | — | Cloud project/account ID |
-| `telemetry` | `enabled` | `false` | Enable telemetry |
-| `telemetry` | `backend` | `stdout` | `stdout`, `bigquery`, `datadog` |
-| `remote` | `provider` | `ssh` | `ssh`, `coder` |
-| `diagnostics` | `reporter` | `stdout` | `stdout`, `jira` |
+Just add them to your profile:
+```yaml
+infra:
+  sql:
+    type: local
+  redis:
+    type: local
+  opensearch:
+    type: local
+```
 
-### devdock_config.json
+To use custom compose files (e.g., specific MySQL version or flags), add them to your repo:
+```bash
+mkdir -p devdock/config/infra/sql
+# Add docker-compose.yaml with your custom config
+```
 
-| Field | Required | Description |
-|-------|----------|-------------|
-| `type` | No (default: `custom`) | `python`, `go`, `java`, `custom` |
-| `bazel_target` | No | Bazel build target |
-| `binary_mount` | No | Path to built binary |
-| `port` | No | Service port |
-| `dependencies` | No | Other services/infra needed |
-| `env` | No | Environment variables |
-| `healthcheck` | No | Docker healthcheck config |
-| `base_image` | No | Docker base image |
-| `entrypoint` | No | Service entrypoint |
+## Multiple Profiles
+
+Create different profiles for different workflows:
+
+```yaml
+# devdock/profiles/minimal.yaml — just the API
+services:
+  api:
+    type: local
+
+# devdock/profiles/full.yaml — everything
+infra:
+  sql: { type: local }
+  redis: { type: local }
+  opensearch: { type: local }
+services:
+  api: { type: local }
+  worker: { type: local }
+  frontend: { type: local }
+```
+
+```bash
+devdock start minimal    # Fast startup, single service
+devdock start full       # Full environment
+```
+
+## Remote Development
+
+Start services on a remote workspace (via SSH or Coder):
+
+```bash
+devdock start default -m remote
+```
+
+This will:
+1. Create/connect to a remote workspace
+2. Sync your code via rsync
+3. Start services remotely
+4. Port-forward services to your local machine
+
+Configure the remote provider in `devdock.toml`:
+```toml
+[remote]
+provider = "ssh"        # or "coder"
+template = "my-template"  # for Coder
+```
+
+## Bug Reports
+
+Generate a diagnostic report with system info, logs, and Tilt status:
+
+```bash
+devdock report
+```
+
+Configure Jira integration for automatic ticket creation:
+```toml
+[diagnostics]
+reporter = "jira"
+jira_url = "https://your-org.atlassian.net"
+jira_email = "bot@your-org.com"
+jira_project = "ENG"
+secret_project = "your-gcp-project"
+```
+
+## External Plugins
+
+Create custom backends for telemetry, diagnostics, or storage:
+
+```bash
+devdock plugin create my-datadog --type telemetry --language python
+# Edit ~/.devdock/plugins/my-datadog/plugin.py
+```
+
+Configure in devdock.toml:
+```toml
+[telemetry]
+backend = "external"
+plugin = "~/.devdock/plugins/my-datadog/plugin.py"
+```
+
+See [docs/plugins.md](plugins.md) for the full plugin development guide.
 
 ## Next Steps
 
-- **Multiple profiles**: Create different profiles for different workflows
-- **Custom infra**: Override default compose files in `devdock/config/infra/`
-- **Remote dev**: Use `devdock start <profile> -m remote` for cloud workspaces
-- **Plugins**: Run `devdock plugin create` to build custom backends
+- [Architecture](architecture.md) — system design and data flow
+- [Plugins](plugins.md) — plugin development guide
+- [CONTRIBUTING.md](../CONTRIBUTING.md) — how to contribute
+- [CLAUDE.md](../CLAUDE.md) — development guide for Claude Code
