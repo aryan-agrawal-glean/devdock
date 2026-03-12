@@ -64,6 +64,7 @@ def setup_service(name, config, auto_init=True):
     bazel_target = config.get("bazel_target", "")
     if not bazel_target:
         # Service without bazel target (e.g., fe) — skip build
+        binary = ""
         binary_mount = ""
     else:
         binary = bazel_build(name, bazel_target, config.get("watch_dirs", []), config.get("type", ""), config.get("target_is_directory", "True"), profile.get('services', {}).get(name, {}).get('hot_reload', 'enable'), config.get("copy_runfiles", False))
