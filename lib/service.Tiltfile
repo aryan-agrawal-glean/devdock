@@ -60,9 +60,14 @@ def setup_service(name, config, auto_init=True):
 
     profile = read_yaml('{}/devdock/runtime_generated/temp_profile.yaml'.format(os.getenv('DEVDOCK_ROOT')))
 
-    # Build the service using Bazel
-    binary = bazel_build(name, config["bazel_target"], config.get("watch_dirs", []), config.get("type", ""), config.get("target_is_directory", "True"), profile.get('services', {}).get(name, {}).get('hot_reload', 'enable'), config.get("copy_runfiles", False))
-    binary_mount = "{}:{}".format(binary, config.get("binary_mount", ""))
+    # Build the service using Bazel (skip if no bazel_target)
+    bazel_target = config.get("bazel_target", "")
+    if not bazel_target:
+        # Service without bazel target (e.g., fe) — skip build
+        binary_mount = ""
+    else:
+        binary = bazel_build(name, bazel_target, config.get("watch_dirs", []), config.get("type", ""), config.get("target_is_directory", "True"), profile.get('services', {}).get(name, {}).get('hot_reload', 'enable'), config.get("copy_runfiles", False))
+        binary_mount = "{}:{}".format(binary, config.get("binary_mount", ""))
 
     # Get port configuration
     port = config.get("env", {}).get("PORT", "8080")
