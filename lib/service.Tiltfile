@@ -176,7 +176,7 @@ def setup_service(name, config, auto_init=True):
         if not entrypoint_config:
             debug_env = 'ENV MAVEN_OPTS="-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=0.0.0.0:{}"\n'.format(debug_port) if debug_port else ""
             entrypoint_cmd = debug_env + 'ENTRYPOINT mvn jetty:deploy-war -Djetty.http.port={} -Djetty.scanner.scanIntervalSeconds=3 --no-transfer-progress'.format(
-                config['env']['PORT']
+                config.get('env', {}).get('PORT', '8080')
             )
 
     # Initialize healthcheck with empty string
