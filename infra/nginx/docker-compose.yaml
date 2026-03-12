@@ -1,0 +1,22 @@
+services:
+  nginx:
+    image: nginx:alpine
+    container_name: devdock-nginx
+    ports:
+      - "8321:80"
+    networks:
+      devdock_network:
+        aliases:
+          - nginx.devdock.local
+      devdock_infra:
+        aliases:
+          - nginx.infra.local
+    labels:
+      devdock.service: "nginx"
+      devdock.type: "infra"
+
+networks:
+  devdock_network:
+    external: true
+  devdock_infra:
+    external: true

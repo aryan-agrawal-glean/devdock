@@ -1,0 +1,27 @@
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: devdock-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      devdock_network:
+        aliases:
+          - redis.devdock.local
+      devdock_infra:
+        aliases:
+          - redis.infra.local
+    labels:
+      devdock.service: "redis"
+      devdock.type: "infra"
+
+networks:
+  devdock_network:
+    external: true
+  devdock_infra:
+    external: true

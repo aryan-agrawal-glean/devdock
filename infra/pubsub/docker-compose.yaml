@@ -1,0 +1,28 @@
+services:
+  pubsub:
+    image: gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators
+    container_name: devdock-pubsub
+    command: gcloud beta emulators pubsub start --host-port=0.0.0.0:8085
+    ports:
+      - "8085:8085"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "localhost:8085"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      devdock_network:
+        aliases:
+          - pubsub.devdock.local
+      devdock_infra:
+        aliases:
+          - pubsub.infra.local
+    labels:
+      devdock.service: "pubsub"
+      devdock.type: "infra"
+
+networks:
+  devdock_network:
+    external: true
+  devdock_infra:
+    external: true
