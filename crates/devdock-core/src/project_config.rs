@@ -32,6 +32,8 @@ pub struct ProjectSection {
     pub services_dir: String,
     #[serde(default = "default_infra_dir")]
     pub infra_dir: String,
+    #[serde(default = "default_hooks_dir")]
+    pub hooks_dir: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -91,10 +93,13 @@ fn default_domain() -> String {
     "localhost".into()
 }
 fn default_services_dir() -> String {
-    "devdock/config/services".into()
+    "devdock/services".into()
 }
 fn default_infra_dir() -> String {
-    "devdock/config/infra".into()
+    "devdock/infra".into()
+}
+fn default_hooks_dir() -> String {
+    "devdock/hooks".into()
 }
 fn default_registry() -> String {
     "docker.io/library".into()
@@ -217,8 +222,8 @@ mod tests {
         let c = ProjectConfig::parse("[project]\nname = \"test\"").unwrap();
         assert_eq!(c.project.name, "test");
         assert_eq!(c.project.domain, "localhost");
-        assert_eq!(c.project.services_dir, "devdock/config/services");
-        assert_eq!(c.project.infra_dir, "devdock/config/infra");
+        assert_eq!(c.project.services_dir, "devdock/services");
+        assert_eq!(c.project.infra_dir, "devdock/infra");
         assert_eq!(c.remote.provider, "ssh");
         assert!(!c.telemetry.enabled);
         assert_eq!(c.cloud.platform, "none");
@@ -230,8 +235,8 @@ mod tests {
         [project]
         name = "scio"
         domain = "local.glean.com"
-        services_dir = "devdock/config/services"
-        infra_dir = "devdock/config/infra"
+        services_dir = "devdock/services"
+        infra_dir = "devdock/infra"
 
         [cloud]
         platform = "google"

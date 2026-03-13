@@ -66,25 +66,35 @@ pub fn generate_tiltfile(
     // Helper resources
     out.push_str("# ─── Helper Resources ───────────────────────────────────────\n\n");
 
-    // Load repo-specific helpers if they exist (auth, misc, profile_update)
-    // These provide init-gcloud-auth, gcloud-auth, misc_helper, etc.
-    let helpers_dir = project_root.join("devdock/config/helpers");
-    if helpers_dir.join("auth/Tiltfile").exists() {
-        out.push_str("load_dynamic('../../devdock/config/helpers/auth/Tiltfile')\n");
+    // Load repo-specific hooks if they exist
+    let hooks_dir_path = project_root.join(&config.project.hooks_dir);
+    let hooks_rel = format!("../../{}", config.project.hooks_dir);
+
+    // Check for hooks as either {name}/Tiltfile (nested) or {name}.Tiltfile (flat)
+    let load_hook = |name: &str| -> Option<String> {
+        if hooks_dir_path.join(format!("{name}/Tiltfile")).exists() {
+            Some(format!("load_dynamic('{hooks_rel}/{name}/Tiltfile')\n"))
+        } else if hooks_dir_path.join(format!("{name}.Tiltfile")).exists() {
+            Some(format!("load_dynamic('{hooks_rel}/{name}.Tiltfile')\n"))
+        } else {
+            None
+        }
+    };
+
+    if let Some(hook) = load_hook("auth") {
+        out.push_str(&hook);
     } else {
-        // No repo auth helper — provide built-in gcloud auth
         out.push_str(GCLOUD_AUTH_RESOURCE);
     }
-    if helpers_dir.join("misc/Tiltfile").exists() {
-        out.push_str("load_dynamic('../../devdock/config/helpers/misc/Tiltfile')\n");
+    if let Some(hook) = load_hook("misc") {
+        out.push_str(&hook);
     }
-    if helpers_dir.join("profile_update/Tiltfile").exists() {
-        out.push_str("load_dynamic('../../devdock/config/helpers/profile_update/Tiltfile')\n");
+    if let Some(hook) = load_hook("profile_update") {
+        out.push_str(&hook);
     }
-    if helpers_dir.join("observability/Tiltfile").exists() {
-        out.push_str("load_dynamic('../../devdock/config/helpers/observability/Tiltfile')\n");
+    if let Some(hook) = load_hook("observability") {
+        out.push_str(&hook);
     } else {
-        // No repo observability — provide built-in startup monitor
         out.push_str(STARTUP_MONITOR_RESOURCE);
     }
     out.push('\n');
