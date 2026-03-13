@@ -103,7 +103,9 @@ pub fn generate_tiltfile(
     out.push_str("load('./core/lib/central_bazel.Tiltfile', 'setup_central_bazel_build')\n");
     out.push_str("setup_central_bazel_build(profile)\n\n");
 
-    // Infrastructure — load Tiltfiles if available (includes hydrators), fall back to compose
+    // Infrastructure — load Tiltfiles if available (includes hydrators), fall back to compose.
+    // Supports both traditional infra (by well-known name) and unified infra components
+    // (kind: infra in devdock_config.json).
     if !resolved.infra.is_empty() {
         out.push_str("# ─── Infrastructure ─────────────────────────────────────────\n\n");
         let mut infra_sorted: Vec<_> = resolved.infra.iter().collect();
@@ -115,10 +117,32 @@ pub fn generate_tiltfile(
                 let tiltfile_path = format!("../../{infra_dir}/{name}/Tiltfile");
                 out.push_str(&format!("load_dynamic('{tiltfile_path}')\n\n"));
             } else {
-                // Fall back to compose file
-                let compose_path = resolve_infra_compose(name, infra_dir, project_root);
-                out.push_str(&format!("docker_compose('{compose_path}')\n"));
-                out.push_str(&format!("dc_resource('{name}', labels=['infra'])\n\n"));
+                // Check if we have a devdock_config.json with kind:infra that can generate compose
+                let compose_from_config = services.get(name.as_str()).and_then(|svc| {
+                    if svc.is_infra() {
+                        svc.generate_compose(name)
+                    } else {
+                        None
+                    }
+                });
+
+                if let Some(generated_compose) = compose_from_config {
+                    // Write generated compose to runtime_generated/infra/{name}/
+                    let gen_infra_dir =
+                        project_root.join(format!("devdock/runtime_generated/infra/{name}"));
+                    let _ = std::fs::create_dir_all(&gen_infra_dir);
+                    let compose_file = gen_infra_dir.join("docker-compose.yaml");
+                    let _ = std::fs::write(&compose_file, &generated_compose);
+                    out.push_str(&format!(
+                        "docker_compose('./infra/{name}/docker-compose.yaml')\n"
+                    ));
+                    out.push_str(&format!("dc_resource('{name}', labels=['infra'])\n\n"));
+                } else {
+                    // Fall back to shipped or repo compose file
+                    let compose_path = resolve_infra_compose(name, infra_dir, project_root);
+                    out.push_str(&format!("docker_compose('{compose_path}')\n"));
+                    out.push_str(&format!("dc_resource('{name}', labels=['infra'])\n\n"));
+                }
             }
         }
     }

@@ -4,7 +4,9 @@ mod commands;
 mod logging;
 mod output;
 
-use clap::{ArgAction, Parser, Subcommand};
+#[cfg(feature = "cloud")]
+use clap::ArgAction;
+use clap::{Parser, Subcommand};
 use colored::Colorize;
 use std::process;
 
@@ -192,7 +194,8 @@ enum Commands {
         command: PluginCommands,
     },
 
-    /// Infrastructure setup (SQL, OpenSearch, etc.)
+    /// Infrastructure setup (SQL, OpenSearch, etc.) — requires cloud feature
+    #[cfg(feature = "cloud")]
     Infra {
         #[command(subcommand)]
         command: InfraCommands,
@@ -415,6 +418,7 @@ enum SyncCommands {
     },
 }
 
+#[cfg(feature = "cloud")]
 #[derive(Subcommand)]
 enum InfraCommands {
     /// SQL infrastructure management
@@ -430,6 +434,7 @@ enum InfraCommands {
     },
 }
 
+#[cfg(feature = "cloud")]
 #[derive(Subcommand)]
 enum InfraSqlCommands {
     /// Full SQL setup (replaces sql_hydrator.sh + util.py)
@@ -499,6 +504,7 @@ enum InfraSqlCommands {
     },
 }
 
+#[cfg(feature = "cloud")]
 #[derive(Subcommand)]
 enum InfraOpenSearchCommands {
     /// Copy indexes from remote OpenSearch to local
@@ -720,6 +726,7 @@ async fn main() {
             }
         },
 
+        #[cfg(feature = "cloud")]
         Commands::Infra { command } => match command {
             InfraCommands::Sql { command } => match command {
                 InfraSqlCommands::Setup {

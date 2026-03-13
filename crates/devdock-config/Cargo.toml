@@ -10,6 +10,20 @@ repository.workspace = true
 [lints]
 workspace = true
 
+[features]
+default = ["cloud"]
+cloud = [
+    "dep:google-cloud-storage",
+    "dep:google-cloud-gax",
+    "dep:zstd",
+    "dep:flate2",
+    "dep:tar",
+    "dep:rust-ini",
+    "dep:reqwest",
+    "dep:openssl",
+    "dep:chrono",
+]
+
 [dependencies]
 devdock-core = { path = "../devdock-core" }
 anyhow.workspace = true
@@ -22,20 +36,18 @@ tokio.workspace = true
 async-trait.workspace = true
 futures.workspace = true
 regex.workspace = true
-rust-ini = { workspace = true }
 tracing = { workspace = true }
-reqwest = { workspace = true }
-openssl = { workspace = true, features = ["vendored"] }
-chrono = { workspace = true }
 
-# GCS native client (replaces gcloud CLI subprocess calls)
-google-cloud-storage = "1.8.0"
-google-cloud-gax = "1.7.0"
-
-# Compression libraries for seed/full-instance modes
-zstd = "0.13"      # Zstandard decompression for .tar.zst
-flate2 = "1.0"     # Gzip decompression for .sql.gz
-tar = "0.4"        # Tar extraction
+# Cloud-only dependencies (behind "cloud" feature)
+rust-ini = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
+openssl = { workspace = true, features = ["vendored"], optional = true }
+chrono = { workspace = true, optional = true }
+google-cloud-storage = { version = "1.8.0", optional = true }
+google-cloud-gax = { version = "1.7.0", optional = true }
+zstd = { version = "0.13", optional = true }
+flate2 = { version = "1.0", optional = true }
+tar = { version = "0.4", optional = true }
 
 [dev-dependencies]
 tempfile.workspace = true

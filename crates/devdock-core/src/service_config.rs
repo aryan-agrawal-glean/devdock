@@ -4,10 +4,40 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 
+/// Component kind — service (default) or infra.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ComponentKind {
+    Service,
+    Infra,
+}
+
+impl Default for ComponentKind {
+    fn default() -> Self {
+        Self::Service
+    }
+}
+
+impl std::fmt::Display for ComponentKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Service => write!(f, "service"),
+            Self::Infra => write!(f, "infra"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DevdockServiceConfig {
+    /// Component kind: "service" (default) or "infra".
+    /// Infra components without a docker-compose.yaml get one generated.
+    #[serde(default)]
+    pub kind: ComponentKind,
     #[serde(rename = "type", default = "default_service_type")]
     pub service_type: String,
+    /// Container image for infra components (e.g., "mysql:8.0").
+    #[serde(default)]
+    pub image: Option<String>,
     #[serde(default)]
     pub port: Option<String>,
     #[serde(default)]
@@ -84,6 +114,71 @@ impl DevdockServiceConfig {
     pub fn uses_bazel(&self) -> bool {
         self.bazel_target.is_some()
     }
+
+    /// Returns true if this component is of kind "infra".
+    pub fn is_infra(&self) -> bool {
+        self.kind == ComponentKind::Infra
+    }
+
+    /// Generate a docker-compose.yaml for an infra component that has an image
+    /// but no existing compose file.
+    pub fn generate_compose(&self, name: &str) -> Option<String> {
+        let image = self.image.as_deref()?;
+        let port = self.port.as_deref().unwrap_or("8080");
+
+        let mut compose = format!(
+            "services:\n  {name}:\n    image: {image}\n    container_name: devdock-{name}\n"
+        );
+
+        // Ports
+        compose.push_str(&format!("    ports:\n      - \"{port}:{port}\"\n"));
+
+        // Environment
+        if !self.env.is_empty() {
+            compose.push_str("    environment:\n");
+            let mut keys: Vec<_> = self.env.keys().collect();
+            keys.sort();
+            for key in keys {
+                let val = &self.env[key];
+                compose.push_str(&format!("      {key}: \"{val}\"\n"));
+            }
+        }
+
+        // Healthcheck
+        if let Some(hc) = &self.healthcheck {
+            if let Some(test) = hc.get("test") {
+                if let Some(arr) = test.as_array() {
+                    let parts: Vec<String> =
+                        arr.iter().filter_map(|v| v.as_str().map(|s| format!("\"{s}\""))).collect();
+                    compose.push_str("    healthcheck:\n");
+                    compose.push_str(&format!("      test: [{}]\n", parts.join(", ")));
+                    compose.push_str("      interval: 5s\n      timeout: 5s\n      retries: 10\n");
+                }
+            }
+        }
+
+        // Networks
+        compose.push_str(&format!(
+            "    networks:\n\
+             \x20     devdock_network:\n\
+             \x20       aliases:\n\
+             \x20         - {name}.devdock.local\n\
+             \x20     devdock_infra:\n\
+             \x20       aliases:\n\
+             \x20         - {name}.infra.local\n\
+             \x20   labels:\n\
+             \x20     devdock.service: \"{name}\"\n\
+             \x20     devdock.type: \"infra\"\n\
+             \n\
+             networks:\n\
+             \x20 devdock_network:\n\
+             \x20   external: true\n\
+             \x20 devdock_infra:\n\
+             \x20   external: true\n"
+        ));
+
+        Some(compose)
+    }
 }
 
 /// Discover all service configs in a directory.
@@ -150,6 +245,40 @@ mod tests {
         )
         .unwrap();
         assert_eq!(c.service_type, "python");
+    }
+
+    #[test]
+    fn default_kind_is_service() {
+        let c = DevdockServiceConfig::parse(r#"{"type":"python"}"#).unwrap();
+        assert_eq!(c.kind, ComponentKind::Service);
+        assert!(!c.is_infra());
+    }
+
+    #[test]
+    fn parse_infra_kind() {
+        let c = DevdockServiceConfig::parse(
+            r#"{"kind":"infra","image":"mysql:8.0","port":"3306","env":{"MYSQL_ALLOW_EMPTY_PASSWORD":"yes"},"healthcheck":{"test":["CMD","mysqladmin","ping"]}}"#,
+        )
+        .unwrap();
+        assert_eq!(c.kind, ComponentKind::Infra);
+        assert!(c.is_infra());
+        assert_eq!(c.image.as_deref(), Some("mysql:8.0"));
+    }
+
+    #[test]
+    fn generate_compose_for_infra() {
+        let c = DevdockServiceConfig::parse(r#"{"kind":"infra","image":"redis:7","port":"6379"}"#)
+            .unwrap();
+        let compose = c.generate_compose("redis").unwrap();
+        assert!(compose.contains("image: redis:7"));
+        assert!(compose.contains("6379:6379"));
+        assert!(compose.contains("devdock-redis"));
+    }
+
+    #[test]
+    fn generate_compose_returns_none_without_image() {
+        let c = DevdockServiceConfig::parse(r#"{"kind":"infra","port":"3306"}"#).unwrap();
+        assert!(c.generate_compose("sql").is_none());
     }
 
     #[test]

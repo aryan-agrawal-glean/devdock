@@ -4,6 +4,7 @@ pub mod cleanup;
 pub mod docker;
 pub mod exec;
 pub mod generate;
+#[cfg(feature = "cloud")]
 pub mod infra;
 pub mod init;
 pub mod list;

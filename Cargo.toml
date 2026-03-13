@@ -20,6 +20,7 @@ exclude = [
     "plugins/common/opensearch-reindex",
     "plugins/glean/gcs-storage",
     "plugins/glean/s3-storage",
+    "plugins/glean/config-generator",
 ]
 resolver = "2"
 

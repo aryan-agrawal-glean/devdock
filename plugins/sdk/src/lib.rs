@@ -27,6 +27,16 @@ use serde_json::Value;
 use std::io::{self, BufRead, Write};
 
 /// Trait that all DevDock plugins implement.
+///
+/// Plugins receive lifecycle hooks as method calls:
+/// - `"pre_start"` — before anything (auth, infra provisioning)
+/// - `"pre_tilt"` — after config gen, before Tilt (enrich configs)
+/// - `"post_start"` — after Tilt starts (telemetry, notifications)
+/// - `"on_report"` — when `devdock report` runs
+/// - `"on_stop"` — when `devdock stop` runs (cleanup, final telemetry)
+///
+/// Plugins only need to handle hooks they care about — unhandled hooks
+/// are dispatched to `handle()` which should return `ok()` by default.
 pub trait Plugin: Default {
     /// Plugin name (for logging).
     fn name(&self) -> &str;
@@ -34,7 +44,16 @@ pub trait Plugin: Default {
     /// Called once with config from devdock.toml.
     fn initialize(&mut self, config: Value);
 
-    /// Handle a method call. Common methods:
+    /// Handle a method call. Called for lifecycle hooks and custom methods.
+    ///
+    /// Common lifecycle hooks:
+    /// - `"pre_start"` — params has `"profile"`, `"config"`
+    /// - `"pre_tilt"` — params has `"profile"`, `"services"`, `"runtime_dir"`
+    /// - `"post_start"` — params has `"session_id"`
+    /// - `"on_report"` — params has `"ticket_key"`
+    /// - `"on_stop"` — params has `"session_id"`, `"duration_secs"`
+    ///
+    /// Legacy telemetry methods:
     /// - `"emit"` — telemetry event (params has `"event"` field)
     /// - `"fetch"` — config storage request (params has `"key"` field)
     /// - `"report"` — bug report (params has `"title"`, `"body"` fields)

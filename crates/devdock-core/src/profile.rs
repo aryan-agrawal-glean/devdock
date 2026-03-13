@@ -305,7 +305,7 @@ services:
 ini_overrides:
   - section: manifest
     key: llm_key_sku
-    val: LKS_GLEAN_KEY_UNIVERSAL
+    val: LKS_APP_KEY_UNIVERSAL
 ";
         let profile: Profile = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(profile.ini_overrides.len(), 1);

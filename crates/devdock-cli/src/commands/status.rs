@@ -97,7 +97,7 @@ async fn print_instance_status(
     println!("\n{}", "Quick Access".bold());
     println!("{}", "─".repeat(50));
     println!("  Tilt UI:    {}", format!("http://localhost:{}", instance.port_base + 10350).cyan());
-    println!("  Services:   {}", format!("https://local.glean.com:{}", instance.port_base).cyan());
+    println!("  Services:   {}", format!("https://localhost:{}", instance.port_base).cyan());
 
     // Show port mappings for remote instances
     if instance.mode == "remote" {

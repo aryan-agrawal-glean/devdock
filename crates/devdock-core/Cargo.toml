@@ -21,6 +21,7 @@ async-trait.workspace = true
 tokio.workspace = true
 dirs.workspace = true
 tracing.workspace = true
+which.workspace = true
 
 [features]
 default = []

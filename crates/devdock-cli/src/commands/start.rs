@@ -4,6 +4,7 @@ use crate::output;
 use anyhow::{Context, Result};
 use colored::Colorize;
 use devdock_config::{DependencyResolver, ProfileLoader, ProfileValidator};
+use devdock_core::PluginManager;
 use devdock_state::{Instance, InstanceStatus, PortAllocator, SessionOrigin, StateManager};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -110,23 +111,83 @@ pub async fn execute(
         std::env::set_var("DEVDOCK_ID", &instance_id);
     }
 
-    // Step 6: Generate configuration files (Rust - parallel)
+    // Step 6: Load devdock.toml and initialize plugins
     let workspace_root = find_workspace_root()?;
-    let profile_path_str = profile_path.to_string_lossy();
-    generate_configs_rust(&workspace_root, &profile, services, Some(&profile_path_str), dry_run)
-        .await?;
-
-    // Step 6b: Generate OSS Tiltfile (requires .devdock/devdock.toml)
     let devdock_toml_path = workspace_root.join(".devdock/devdock.toml");
     if !devdock_toml_path.exists() {
         anyhow::bail!(
             "Missing .devdock/devdock.toml — run `devdock init` to initialize your project"
         );
     }
-    // Export diagnostics config as env vars (for jira.rs/slack.rs)
-    if let Ok(project_config) = devdock_core::ProjectConfig::load(&devdock_toml_path) {
-        project_config.export_diagnostics_env();
+    let project_config = devdock_core::ProjectConfig::load(&devdock_toml_path)
+        .context("Failed to load .devdock/devdock.toml")?;
+    project_config.export_diagnostics_env();
+
+    // Initialize PluginManager with lifecycle hooks from devdock.toml
+    let mut plugin_manager = PluginManager::new(project_config.plugins.hooks.clone());
+    if plugin_manager.has_plugins() {
+        output::info("Initializing plugins...");
+        let plugin_config = serde_json::json!({
+            "project": project_config.project.name,
+            "workspace_root": workspace_root.to_string_lossy(),
+            "platform": project_config.cloud.platform,
+            "profile": profile_name,
+        });
+        plugin_manager.initialize_all(&plugin_config)?;
+        output::success("Plugins initialized");
     }
+
+    // HOOK: pre_start — auth, custom infra provisioning
+    if plugin_manager.has_plugins() {
+        let pre_start_ctx = serde_json::json!({
+            "profile": serde_json::to_value(&profile).unwrap_or_default(),
+            "config": {
+                "project": project_config.project.name,
+                "platform": project_config.cloud.platform,
+            },
+        });
+        let results = plugin_manager.run_hook("pre_start", &pre_start_ctx);
+        log_hook_results("pre_start", &results);
+    }
+
+    // Step 6b: Generate configuration files
+    // If pre_tilt plugins are configured, they handle config generation (devdock.ini etc.).
+    // Otherwise, use the built-in ConfigGenerator (requires "cloud" feature).
+    let has_pre_tilt_plugins = !project_config.plugins.hooks.pre_tilt.is_empty();
+
+    if !has_pre_tilt_plugins {
+        // No pre_tilt plugin → use built-in config generator
+        let profile_path_str = profile_path.to_string_lossy();
+        generate_configs_rust(
+            &workspace_root,
+            &profile,
+            services,
+            Some(&profile_path_str),
+            dry_run,
+        )
+        .await?;
+    } else {
+        // pre_tilt plugins will generate configs
+        output::info("Config generation delegated to pre_tilt plugins");
+        // Ensure runtime_generated directory exists for the generated Tiltfile
+        let runtime_dir = workspace_root.join("devdock/runtime_generated");
+        std::fs::create_dir_all(&runtime_dir)?;
+    }
+
+    // HOOK: pre_tilt — enrich/generate configs before Tilt
+    if plugin_manager.has_plugins() {
+        let runtime_dir = workspace_root.join("devdock/runtime_generated");
+        let pre_tilt_ctx = serde_json::json!({
+            "profile": serde_json::to_value(&profile).unwrap_or_default(),
+            "services": {},
+            "runtime_dir": runtime_dir.to_string_lossy(),
+            "workspace_root": workspace_root.to_string_lossy(),
+        });
+        let results = plugin_manager.run_hook("pre_tilt", &pre_tilt_ctx);
+        log_hook_results("pre_tilt", &results);
+    }
+
+    // Step 6c: Generate OSS Tiltfile
     generate_oss_tiltfile(&workspace_root, &profile)?;
 
     // Step 7: Clean old logs and startup state files
@@ -175,6 +236,16 @@ pub async fn execute(
     println!("  {} {}", "Logs:   ".cyan().bold(), gcp_logs_url.underline());
     println!("  {}", "──────────────────────────────────────────────────────────".cyan());
 
+    // HOOK: post_start — telemetry, notifications
+    if plugin_manager.has_plugins() {
+        let post_start_ctx = serde_json::json!({
+            "session_id": instance_id,
+            "profile": profile_name,
+        });
+        let results = plugin_manager.run_hook("post_start", &post_start_ctx);
+        log_hook_results("post_start", &results);
+    }
+
     if run_monitor {
         println!("\nResource monitor enabled (timeout: {}s)...\n", monitor_timeout.unwrap_or(1200));
     } else {
@@ -193,6 +264,7 @@ pub async fn execute(
         profile_name,
         command_start_time,
         tilt_up_time,
+        &mut plugin_manager,
     )
     .await?;
 
@@ -282,7 +354,11 @@ fn get_git_branch() -> Result<String> {
     }
 }
 
-/// Generate configurations using Rust (parallel)
+/// Generate configurations using Rust (parallel).
+///
+/// Requires the `cloud` feature on `devdock-config`. When compiled without it,
+/// config generation must be handled by a pre_tilt plugin.
+#[cfg(feature = "cloud")]
 async fn generate_configs_rust(
     workspace_root: &Path,
     profile: &devdock_core::profile::Profile,
@@ -306,6 +382,22 @@ async fn generate_configs_rust(
     generator.generate(profile, services, profile_path).await?;
 
     Ok(())
+}
+
+/// Fallback when cloud feature is not available.
+#[cfg(not(feature = "cloud"))]
+async fn generate_configs_rust(
+    _workspace_root: &Path,
+    _profile: &devdock_core::profile::Profile,
+    _services: Option<&str>,
+    _profile_path: Option<&str>,
+    _dry_run: bool,
+) -> Result<()> {
+    anyhow::bail!(
+        "Built-in config generation requires the 'cloud' feature.\n\
+         Either install a pre_tilt plugin (e.g., devdock-plugin-config-generator)\n\
+         or rebuild devdock with: cargo install --features cloud"
+    )
 }
 
 /// Generate Tiltfile for OSS pipeline.
@@ -486,6 +578,7 @@ async fn wait_for_tilt(
     profile_name: &str,
     command_start_time: chrono::DateTime<chrono::Utc>,
     tilt_up_time: chrono::DateTime<chrono::Utc>,
+    plugin_manager: &mut PluginManager,
 ) -> Result<()> {
     use devdock_monitor::{StartupMonitor, StartupMonitorConfig, StartupResult};
     let instance_id = instance_id.to_string();
@@ -641,6 +734,18 @@ async fn wait_for_tilt(
                     }
                 }
             }
+
+            // HOOK: on_stop — cleanup, final telemetry
+            if plugin_manager.has_plugins() {
+                let duration = (chrono::Utc::now() - command_start_time).num_seconds();
+                let on_stop_ctx = serde_json::json!({
+                    "session_id": instance_id,
+                    "duration_secs": duration,
+                });
+                let results = plugin_manager.run_hook("on_stop", &on_stop_ctx);
+                log_hook_results("on_stop", &results);
+            }
+            plugin_manager.shutdown_all();
 
             // Perform cleanup
             perform_cleanup(&instance_id, &workspace_root).await?;
@@ -1021,6 +1126,27 @@ fn get_machine_id() -> String {
 
     // Fallback to USER env var
     std::env::var("USER").unwrap_or_else(|_| "unknown".to_string())
+}
+
+/// Log plugin hook results (info for success, warn for errors).
+fn log_hook_results(hook: &str, results: &[(String, Result<serde_json::Value, String>)]) {
+    for (plugin_name, result) in results {
+        match result {
+            Ok(response) => {
+                let status = response.get("status").and_then(|s| s.as_str()).unwrap_or("unknown");
+                if status == "ok" {
+                    output::info(&format!("[{hook}] {plugin_name}: ok"));
+                } else {
+                    let msg =
+                        response.get("message").and_then(|m| m.as_str()).unwrap_or("unknown error");
+                    output::warn(&format!("[{hook}] {plugin_name}: {status} — {msg}"));
+                }
+            }
+            Err(e) => {
+                output::warn(&format!("[{hook}] {plugin_name}: error — {e}"));
+            }
+        }
+    }
 }
 
 /// Write current profile name to state file for telemetry

@@ -20,6 +20,8 @@ pub struct ProjectConfig {
     pub cloud: CloudSection,
     #[serde(default)]
     pub diagnostics: DiagnosticsSection,
+    #[serde(default)]
+    pub plugins: PluginsSection,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -87,6 +89,76 @@ pub struct DiagnosticsSection {
     pub slack_secret: Option<String>,
     /// Jira parent issue key (tickets created under this epic)
     pub jira_parent_issue: Option<String>,
+}
+
+/// Plugin configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PluginsSection {
+    /// Lifecycle hooks — maps hook names to ordered lists of plugin executables.
+    #[serde(default)]
+    pub hooks: PluginHooks,
+}
+
+/// Lifecycle hook definitions.
+///
+/// Each hook maps to an ordered list of plugin executable names.
+/// Plugins are spawned as child processes and communicate via JSON-lines.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PluginHooks {
+    /// Runs before anything — auth, custom infra provisioning.
+    #[serde(default)]
+    pub pre_start: Vec<String>,
+    /// Runs after generic config gen, before Tilt — enrich configs, generate devdock.ini.
+    #[serde(default)]
+    pub pre_tilt: Vec<String>,
+    /// Runs after Tilt starts — telemetry, notifications.
+    #[serde(default)]
+    pub post_start: Vec<String>,
+    /// Runs when `devdock report` is invoked.
+    #[serde(default)]
+    pub on_report: Vec<String>,
+    /// Runs when `devdock stop` is invoked — cleanup, final telemetry.
+    #[serde(default)]
+    pub on_stop: Vec<String>,
+}
+
+impl PluginHooks {
+    /// Returns all unique plugin names referenced across all hooks.
+    pub fn all_plugins(&self) -> Vec<String> {
+        let mut seen = std::collections::HashSet::new();
+        let mut plugins = Vec::new();
+        for list in
+            [&self.pre_start, &self.pre_tilt, &self.post_start, &self.on_report, &self.on_stop]
+        {
+            for name in list {
+                if seen.insert(name.clone()) {
+                    plugins.push(name.clone());
+                }
+            }
+        }
+        plugins
+    }
+
+    /// Returns the plugin names for a given hook.
+    pub fn get_hook(&self, hook: &str) -> &[String] {
+        match hook {
+            "pre_start" => &self.pre_start,
+            "pre_tilt" => &self.pre_tilt,
+            "post_start" => &self.post_start,
+            "on_report" => &self.on_report,
+            "on_stop" => &self.on_stop,
+            _ => &[],
+        }
+    }
+
+    /// Returns true if any hooks are configured.
+    pub fn has_any(&self) -> bool {
+        !self.pre_start.is_empty()
+            || !self.pre_tilt.is_empty()
+            || !self.post_start.is_empty()
+            || !self.on_report.is_empty()
+            || !self.on_stop.is_empty()
+    }
 }
 
 fn default_domain() -> String {
@@ -234,7 +306,7 @@ mod tests {
         let toml = r#"
         [project]
         name = "scio"
-        domain = "local.glean.com"
+        domain = "local.myapp.com"
         services_dir = "devdock/services"
         infra_dir = "devdock/infra"
 
@@ -248,7 +320,7 @@ mod tests {
 
         [remote]
         provider = "coder"
-        template = "devdock-glean"
+        template = "devdock-remote-template"
 
         [diagnostics]
         reporter = "jira"
@@ -259,6 +331,36 @@ mod tests {
         assert_eq!(c.telemetry.backend, "bigquery");
         assert_eq!(c.remote.provider, "coder");
         assert_eq!(c.diagnostics.reporter, "jira");
+    }
+
+    #[test]
+    fn parse_with_plugin_hooks() {
+        let toml = r#"
+        [project]
+        name = "test"
+
+        [plugins.hooks]
+        pre_start = ["devdock-plugin-gcloud-auth"]
+        pre_tilt = ["devdock-plugin-config-gen"]
+        post_start = ["devdock-plugin-bigquery-sync"]
+        on_report = ["devdock-plugin-jira-reporter", "devdock-plugin-slack-notifier"]
+        on_stop = ["devdock-plugin-bigquery-sync"]
+        "#;
+        let c = ProjectConfig::parse(toml).unwrap();
+        assert_eq!(c.plugins.hooks.pre_start, vec!["devdock-plugin-gcloud-auth"]);
+        assert_eq!(c.plugins.hooks.pre_tilt, vec!["devdock-plugin-config-gen"]);
+        assert_eq!(c.plugins.hooks.on_report.len(), 2);
+        assert!(c.plugins.hooks.has_any());
+        // all_plugins deduplicates bigquery-sync (in post_start and on_stop)
+        let all = c.plugins.hooks.all_plugins();
+        assert_eq!(all.iter().filter(|p| *p == "devdock-plugin-bigquery-sync").count(), 1);
+    }
+
+    #[test]
+    fn parse_no_plugins_defaults_empty() {
+        let c = ProjectConfig::parse("[project]\nname = \"test\"").unwrap();
+        assert!(!c.plugins.hooks.has_any());
+        assert!(c.plugins.hooks.all_plugins().is_empty());
     }
 
     #[test]

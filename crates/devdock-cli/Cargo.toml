@@ -14,9 +14,13 @@ workspace = true
 name = "devdock"
 path = "src/main.rs"
 
+[features]
+default = ["cloud"]
+cloud = ["devdock-config/cloud"]
+
 [dependencies]
 devdock-core = { path = "../devdock-core" }
-devdock-config = { path = "../devdock-config" }
+devdock-config = { path = "../devdock-config", default-features = false }
 devdock-state = { path = "../devdock-state" }
 devdock-codegen = { path = "../devdock-codegen" }
 devdock-remote = { path = "../devdock-remote" }

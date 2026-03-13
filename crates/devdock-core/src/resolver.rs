@@ -1,6 +1,10 @@
 //! Dependency resolver — DFS traversal of service dependencies.
+//!
+//! Supports unified components: a component is classified as infra if:
+//! 1. Its name matches the well-known infra list (backward compat), OR
+//! 2. Its `devdock_config.json` has `"kind": "infra"`
 
-use crate::service_config::DevdockServiceConfig;
+use crate::service_config::{ComponentKind, DevdockServiceConfig};
 use std::collections::{HashMap, HashSet};
 
 const INFRA_COMPONENTS: &[&str] = &[
@@ -23,8 +27,21 @@ pub struct ResolvedDeps {
     pub infra: Vec<String>,
 }
 
+/// Check if a component is infra — either by well-known name or by config kind.
 pub fn is_infra(name: &str) -> bool {
     INFRA_COMPONENTS.contains(&name)
+}
+
+/// Check if a component should be treated as infra, considering both
+/// the well-known name list and the config's `kind` field.
+fn is_infra_with_config(name: &str, configs: &HashMap<String, DevdockServiceConfig>) -> bool {
+    if INFRA_COMPONENTS.contains(&name) {
+        return true;
+    }
+    if let Some(config) = configs.get(name) {
+        return config.kind == ComponentKind::Infra;
+    }
+    false
 }
 
 pub fn resolve(
@@ -37,7 +54,7 @@ pub fn resolve(
     let mut infra = HashSet::new();
 
     for name in requested {
-        if is_infra(name) {
+        if is_infra_with_config(name, configs) {
             infra.insert(name.clone());
         } else {
             dfs(name, configs, &mut visited, &mut visiting, &mut order, &mut infra)?;
@@ -61,7 +78,7 @@ fn dfs(
     if visiting.contains(name) {
         return Err(crate::Error::DependencyCycle(format!("Circular dependency: '{name}'")));
     }
-    if is_infra(name) {
+    if is_infra_with_config(name, configs) {
         infra.insert(name.to_string());
         return Ok(());
     }
@@ -129,6 +146,21 @@ mod tests {
         let r = resolve(&["w".into()], &c).unwrap();
         assert_eq!(r.infra.iter().filter(|s| *s == "sql").count(), 1);
         assert_eq!(r.services.iter().filter(|s| *s == "api").count(), 1);
+    }
+
+    #[test]
+    fn kind_infra_resolved_as_infra() {
+        let mut configs = HashMap::new();
+        configs.insert(
+            "my-db".to_string(),
+            DevdockServiceConfig::parse(r#"{"kind":"infra","image":"mysql:8.0","port":"3306"}"#)
+                .unwrap(),
+        );
+        configs.insert("api".to_string(), svc(&["my-db"]));
+
+        let r = resolve(&["api".into()], &configs).unwrap();
+        assert_eq!(r.services, vec!["api"]);
+        assert!(r.infra.contains(&"my-db".into()));
     }
 
     #[test]
