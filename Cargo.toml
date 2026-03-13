@@ -104,7 +104,6 @@ uuid = { version = "1.6", features = ["v4"] }
 dirs = "5.0"
 futures = "0.3"
 regex = "1.10"
-rust-ini = "0.21"
 chrono = { version = "0.4", features = ["serde"] }
 
 # Database - pinned to 0.7.3 due to home crate compatibility issue in newer versions

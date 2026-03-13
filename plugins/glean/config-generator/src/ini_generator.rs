@@ -1,9 +1,9 @@
 //! DevDock INI configuration generator.
 
-use crate::dependency_graph::ServiceNode;
+use devdock_config::dependency_graph::ServiceNode;
 use crate::ini_parser::ParsedIniConfig;
 use crate::platform::{IniConfig, Platform};
-use crate::service_config::ServiceConfig;
+use devdock_config::service_config::ServiceConfig;
 use devdock_core::profile::Profile;
 
 /// Context for INI generation that affects how configs are generated
@@ -555,7 +555,7 @@ impl Default for IniGenerator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dependency_graph::ComponentType;
+    use devdock_config::dependency_graph::ComponentType;
 
     /// Create a test SQL service node with local deployment
     fn create_local_sql_node() -> ServiceNode {

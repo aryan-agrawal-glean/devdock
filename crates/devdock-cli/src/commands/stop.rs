@@ -307,7 +307,6 @@ fn cleanup_temp_files(workspace_path: &str) -> Result<()> {
         workspace.join("devdock/devdock.ini"),
         workspace.join("config/devdock.ini"),
         workspace.join("config/run_local.ini"),
-        workspace.join("devdock/scio_apps.ini"),
     ];
 
     for config_file in config_files {

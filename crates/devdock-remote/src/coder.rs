@@ -8,7 +8,7 @@ use tracing::{debug, info, warn};
 /// Configuration for creating a Coder workspace.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CoderWorkspaceConfig {
-    /// Coder template name (always "devdock-glean")
+    /// Coder template name (configured via devdock.toml remote.template)
     pub template: String,
     /// Workspace name (user-provided or branch name)
     pub workspace_name: String,

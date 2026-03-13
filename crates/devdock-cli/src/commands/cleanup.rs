@@ -136,7 +136,6 @@ fn clean_generated_files(devdock_root: &str, devdock_dir: &Path) -> Result<()> {
         devdock_dir.join("sql/scripts"),
         devdock_dir.join("sql/util"),
         PathBuf::from(devdock_root).join("devdock/devdock.ini"),
-        PathBuf::from(devdock_root).join("devdock/scio_apps.ini"),
         PathBuf::from(devdock_root).join("devdock/runtime_generated"),
         PathBuf::from(devdock_root).join("config/devdock.ini"),
         PathBuf::from(devdock_root).join("config/run_local.ini"),

@@ -111,6 +111,17 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
     let loader = ProfileLoader::new();
     let loaded_profile = loader.load_from_path(&profile_path)?;
 
+    // Load devdock.toml for remote template configuration
+    let devdock_toml_path = std::path::Path::new(&worktree).join(".devdock/devdock.toml");
+    let coder_template = if devdock_toml_path.exists() {
+        match devdock_core::ProjectConfig::load(&devdock_toml_path) {
+            Ok(pc) => pc.remote.template.unwrap_or_else(|| "devdock".to_string()),
+            Err(_) => "devdock".to_string(),
+        }
+    } else {
+        "devdock".to_string()
+    };
+
     // Register instance in database
     let state = StateManager::new().await?;
     let instance_id = Instance::generate_id(SessionOrigin::Dev);
@@ -163,7 +174,7 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
         println!("  {}: {}", "Local Branch".cyan(), current_branch);
         println!("  {}: {}", "Target Branch".cyan(), branch_for_workspace);
         println!("  {}: {}", "Workspace".cyan(), workspace_name.green());
-        println!("  {}: devdock-glean", "Template".cyan());
+        println!("  {}: {}", "Template".cyan(), coder_template);
         println!("  {}: {}", "Region".cyan(), region);
         println!("  {}: {}", "DevDock ID".cyan(), Instance::display_id(&instance_id));
         println!("  {}: {}", "Port Base".cyan(), offset);
@@ -286,14 +297,14 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
 
                         // Create new workspace
                         logger.log_section("Creating Workspace")?;
-                        logger.log("Template: devdock-glean")?;
+                        logger.log(&format!("Template: {coder_template}"))?;
                         logger.log(&format!("Workspace name: {workspace_name}"))?;
                         logger.log(&format!("Region: {region}"))?;
 
                         let spinner =
                             output::create_spinner("Creating Coder workspace (1-2 minutes)...");
                         let config = CoderWorkspaceConfig {
-                            template: "devdock-glean".to_string(),
+                            template: coder_template.clone(),
                             workspace_name: workspace_name.clone(),
                             region: region.clone(),
                             port_base: Some(offset),
@@ -321,14 +332,14 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
             } else {
                 // Workspace doesn't exist, create it
                 logger.log_section("Creating Workspace")?;
-                logger.log("Template: devdock-glean")?;
+                logger.log(&format!("Template: {coder_template}"))?;
                 logger.log(&format!("Workspace name: {workspace_name}"))?;
                 logger.log(&format!("Region: {region}"))?;
 
                 // Create workspace with spinner
                 let spinner = output::create_spinner("Creating Coder workspace (1-2 minutes)...");
                 let config = CoderWorkspaceConfig {
-                    template: "devdock-glean".to_string(),
+                    template: coder_template.clone(),
                     workspace_name: workspace_name.clone(),
                     region: region.clone(),
                     port_base: Some(offset),

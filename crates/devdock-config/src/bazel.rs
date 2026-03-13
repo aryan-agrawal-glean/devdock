@@ -162,14 +162,21 @@ impl BazelQueryEngine {
 
     /// Compress file paths to stay under macOS fsevents limit (4047 files)
     fn compress_file_paths(&self, files: &[String]) -> Result<Vec<String>> {
-        // Get all non-code directories
-        let exclude_dirs: HashSet<&str> = ["go", "java", "python_scio"].into_iter().collect();
+        // Auto-detect code directories: any top-level dir containing BUILD or BUILD.bazel
+        let code_dirs: HashSet<String> = std::fs::read_dir(&self.workspace_root)?
+            .filter_map(std::result::Result::ok)
+            .filter(|e| {
+                let p = e.path();
+                p.is_dir() && (p.join("BUILD").exists() || p.join("BUILD.bazel").exists())
+            })
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
 
         let all_dirs: HashSet<String> = std::fs::read_dir(&self.workspace_root)?
             .filter_map(std::result::Result::ok)
             .filter(|e| e.path().is_dir())
             .map(|e| e.file_name().to_string_lossy().to_string())
-            .filter(|d| !exclude_dirs.contains(d.as_str()))
+            .filter(|d| !code_dirs.contains(d))
             .collect();
 
         let mut compressed = HashSet::new();

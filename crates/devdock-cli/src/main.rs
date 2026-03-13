@@ -4,8 +4,6 @@ mod commands;
 mod logging;
 mod output;
 
-#[cfg(feature = "cloud")]
-use clap::ArgAction;
 use clap::{Parser, Subcommand};
 use colored::Colorize;
 use std::process;
@@ -192,13 +190,6 @@ enum Commands {
     Plugin {
         #[command(subcommand)]
         command: PluginCommands,
-    },
-
-    /// Infrastructure setup (SQL, OpenSearch, etc.) — requires cloud feature
-    #[cfg(feature = "cloud")]
-    Infra {
-        #[command(subcommand)]
-        command: InfraCommands,
     },
 
     /// Rich logging management (Grafana/Loki stack)
@@ -418,118 +409,6 @@ enum SyncCommands {
     },
 }
 
-#[cfg(feature = "cloud")]
-#[derive(Subcommand)]
-enum InfraCommands {
-    /// SQL infrastructure management
-    Sql {
-        #[command(subcommand)]
-        command: InfraSqlCommands,
-    },
-
-    /// OpenSearch infrastructure management
-    Opensearch {
-        #[command(subcommand)]
-        command: InfraOpenSearchCommands,
-    },
-}
-
-#[cfg(feature = "cloud")]
-#[derive(Subcommand)]
-enum InfraSqlCommands {
-    /// Full SQL setup (replaces sql_hydrator.sh + util.py)
-    Setup {
-        /// Project name
-        #[arg(long)]
-        project: String,
-
-        /// Platform (google, aws, azure)
-        #[arg(long, default_value = "google")]
-        platform: String,
-
-        /// Region
-        #[arg(long, default_value = "us-central1")]
-        region: String,
-
-        /// Database/tables list (format: db:tables:query;db2:tables2)
-        #[arg(long, default_value = "")]
-        db_tables: String,
-
-        /// Mode: fast (hourly snapshot) or latest
-        #[arg(long, default_value = "fast")]
-        mode: String,
-
-        /// Force copy even if tables match
-        #[arg(long)]
-        force_copy: bool,
-
-        /// Full cleanup before setup
-        #[arg(long)]
-        full_cleanup: bool,
-
-        /// Copy keyval table (default: true)
-        #[arg(long, default_value_t = true, action = ArgAction::Set)]
-        copy_keyval: bool,
-
-        /// Use pre-seeded MySQL data directory (fastest startup)
-        #[arg(long)]
-        use_mysql_seed: bool,
-
-        /// Use full instance dump instead of table-by-table
-        #[arg(long)]
-        use_full_instance: bool,
-
-        /// Use GAC container (devdock-mysql-gac) for secondary GAC project setup
-        #[arg(long)]
-        use_gac_container: bool,
-    },
-
-    /// Clean SQL databases/tables
-    Clean {
-        /// Project name
-        #[arg(long)]
-        project: String,
-
-        /// Platform (google, aws, azure)
-        #[arg(long, default_value = "google")]
-        platform: String,
-
-        /// Region
-        #[arg(long, default_value = "us-central1")]
-        region: String,
-
-        /// Database/tables to clean (empty = all non-system DBs)
-        #[arg(long, default_value = "")]
-        db_tables: String,
-    },
-}
-
-#[cfg(feature = "cloud")]
-#[derive(Subcommand)]
-enum InfraOpenSearchCommands {
-    /// Copy indexes from remote OpenSearch to local
-    Copy {
-        /// Project name
-        #[arg(long)]
-        project: String,
-
-        /// Indexes to copy (comma-separated)
-        #[arg(long)]
-        indexes: String,
-
-        /// Query to filter documents
-        #[arg(long, default_value = "{\"match_all\": {}}")]
-        query: String,
-
-        /// Maximum documents per index (0 = unlimited)
-        #[arg(long, default_value = "0")]
-        max_docs: usize,
-    },
-
-    /// Check local OpenSearch health
-    Health,
-}
-
 #[tokio::main]
 async fn main() {
     // Check if we're being called as the sync daemon (hidden internal command)
@@ -724,50 +603,6 @@ async fn main() {
             PluginCommands::Create { name, r#type, language } => {
                 commands::plugin::create(&name, &r#type, &language).await
             }
-        },
-
-        #[cfg(feature = "cloud")]
-        Commands::Infra { command } => match command {
-            InfraCommands::Sql { command } => match command {
-                InfraSqlCommands::Setup {
-                    project,
-                    platform,
-                    region,
-                    db_tables,
-                    mode,
-                    force_copy,
-                    full_cleanup,
-                    copy_keyval,
-                    use_mysql_seed,
-                    use_full_instance,
-                    use_gac_container,
-                } => {
-                    commands::infra::sql_setup(
-                        &project,
-                        &platform,
-                        &region,
-                        &db_tables,
-                        &mode,
-                        force_copy,
-                        full_cleanup,
-                        copy_keyval,
-                        use_mysql_seed,
-                        use_full_instance,
-                        use_gac_container,
-                    )
-                    .await
-                }
-                InfraSqlCommands::Clean { project, platform, region, db_tables } => {
-                    commands::infra::sql_clean(&project, &platform, &region, &db_tables).await
-                }
-            },
-
-            InfraCommands::Opensearch { command } => match command {
-                InfraOpenSearchCommands::Copy { project, indexes, query, max_docs } => {
-                    commands::infra::opensearch_copy(&project, &indexes, &query, max_docs).await
-                }
-                InfraOpenSearchCommands::Health => commands::infra::opensearch_health().await,
-            },
         },
     };
 

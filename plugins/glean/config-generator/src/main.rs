@@ -38,6 +38,19 @@
 //! pre_tilt = ["devdock-plugin-config-generator"]
 //! ```
 
+mod constants;
+mod gcs_storage;
+mod generator;
+mod ini_generator;
+mod ini_parser;
+mod opensearch;
+mod opensearch_import;
+mod platform;
+mod profile_generator;
+mod s3_storage;
+mod sql;
+mod sql_import;
+
 use devdock_plugin_sdk::{error, ok, ok_with_data, Plugin};
 use serde_json::Value;
 use std::path::PathBuf;
@@ -101,9 +114,9 @@ impl ConfigGeneratorPlugin {
             Err(e) => return error(&format!("Failed to create runtime: {e}")),
         };
 
-        // Run the config generator
+        // Run the config generator (now local to this plugin crate)
         let result = rt.block_on(async {
-            use devdock_config::{ConfigGenerator, WatchStrategy};
+            use crate::generator::{ConfigGenerator, WatchStrategy};
 
             let generator = ConfigGenerator::new(workspace_root)
                 .with_watch_strategy(WatchStrategy::Static);

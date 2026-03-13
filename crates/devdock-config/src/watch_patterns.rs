@@ -8,7 +8,7 @@
 //! Instead of querying bazel for exact source file dependencies (expensive),
 //! we use heuristic glob patterns that cover the likely source files:
 //!
-//! 1. **Service-type based patterns**: Go services watch `go/`, Python watch `python_scio/`
+//! 1. **Service-type based patterns**: Loaded from `watch_patterns.json` in the repo
 //! 2. **Target-location patterns**: Extract the package path from the bazel target
 //! 3. **Common deps**: Always watch `config/`, `data/`, `openapi/` for data changes
 //! 4. **Cached cquery results**: Fall back to cached results if available
@@ -17,16 +17,16 @@
 //!
 //! Watch patterns are loaded from JSON files in the following order:
 //!
-//! 1. `$DEVDOCK_WATCH_PATTERNS` env var (for pointing to scio repo or custom location)
+//! 1. `$DEVDOCK_WATCH_PATTERNS` env var (for pointing to a custom location)
 //! 2. `<workspace>/watch_patterns.json` (default location)
 //! 3. `<workspace>/devdock/config/watch_patterns.json`
 //! 4. `<workspace>/.devdock/watch_patterns.json`
 //! 5. YAML files (backward compatibility)
-//! 6. Hardcoded defaults (fallback)
+//! 6. Empty defaults (fallback)
 //!
-//! This allows maintaining patterns in the scio repository:
+//! This allows maintaining patterns in the project repository:
 //! ```bash
-//! export DEVDOCK_WATCH_PATTERNS=/path/to/scio/watch_patterns.json
+//! export DEVDOCK_WATCH_PATTERNS=/path/to/repo/watch_patterns.json
 //! ```
 //!
 //! ## Trade-offs
@@ -107,49 +107,15 @@ impl Default for WatchPatternConfig {
 }
 
 impl WatchPatternConfig {
+    /// Returns an empty default; type patterns are loaded from watch_patterns.json in the repo.
     fn default_type_patterns() -> HashMap<String, Vec<String>> {
-        let mut map = HashMap::new();
-
-        map.insert(
-            "go".to_string(),
-            vec![
-                "go/core/".to_string(),
-                "go/platform/".to_string(),
-                "go/query_endpoint/".to_string(),
-                "go/tracer/".to_string(),
-                "go/auth/".to_string(),
-            ],
-        );
-
-        map.insert(
-            "python".to_string(),
-            vec![
-                "python_scio/core/".to_string(),
-                "python_scio/platform/".to_string(),
-                "python_scio/quality/".to_string(),
-                "python_scio/deployment/".to_string(),
-                "python_scio/agents/".to_string(),
-            ],
-        );
-
-        map.insert("java".to_string(), vec!["java/".to_string()]);
-
-        map.insert(
-            "frontend".to_string(),
-            vec![
-                "typescript/web/".to_string(),
-                "typescript/core/".to_string(),
-                "typescript/elements/".to_string(),
-            ],
-        );
-
-        map
+        HashMap::new()
     }
 
     /// Load config from JSON or YAML file, with defaults as fallback
     ///
     /// Search order:
-    /// 1. Environment variable DEVDOCK_WATCH_PATTERNS (for scio repo)
+    /// 1. Environment variable DEVDOCK_WATCH_PATTERNS (for custom location)
     /// 2. workspace_root/watch_patterns.json (default location)
     /// 3. workspace_root/devdock/config/watch_patterns.json
     /// 4. workspace_root/.devdock/watch_patterns.json
@@ -157,7 +123,7 @@ impl WatchPatternConfig {
     /// 6. workspace_root/.devdock/watch_patterns.yaml (backward compat)
     /// 7. Hardcoded defaults
     pub fn load(workspace_root: &Path) -> Result<Self> {
-        // 1. Check environment variable first (allows pointing to scio repo)
+        // 1. Check environment variable first (allows pointing to custom location)
         if let Ok(env_path) = std::env::var("DEVDOCK_WATCH_PATTERNS") {
             let path = PathBuf::from(env_path);
             if path.exists() {
@@ -484,11 +450,10 @@ mod tests {
             Some("//go/platform/gcp/query_endpoint:query_endpoint_binary"),
         );
 
-        // The patterns are compressed, so we should have go/ directories (not the specific subdirectory)
-        // because go/platform/ already covers go/platform/gcp/query_endpoint/
+        // With empty default type_patterns, patterns come from target extraction + common patterns
         assert!(
             patterns.iter().any(|p| p.starts_with("go/")),
-            "Should have go patterns: {patterns:?}"
+            "Should have go pattern from target extraction: {patterns:?}"
         );
         assert!(patterns.contains(&"config/".to_string()), "Should have config/: {patterns:?}");
     }
@@ -503,6 +468,7 @@ mod tests {
             Some("//python_scio/platform/google/app/query_parser"),
         );
 
+        // Pattern comes from target extraction (not hardcoded type patterns)
         assert!(patterns.iter().any(|p| p.starts_with("python_scio/")));
     }
 

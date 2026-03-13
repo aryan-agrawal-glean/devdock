@@ -1,13 +1,13 @@
 //! Main configuration generator orchestrator.
 
-use crate::bazel::BazelQueryEngine;
-use crate::dependency_graph::DependencyGraph;
+use devdock_config::bazel::BazelQueryEngine;
+use devdock_config::dependency_graph::DependencyGraph;
 use crate::gcs_storage::DynamicIniLoader;
 use crate::ini_generator::IniGenerator;
 use crate::ini_parser::ParsedIniConfig;
 use crate::platform::{create_platform, Platform};
 use crate::profile_generator::TempProfileGenerator;
-use crate::watch_patterns::{ServiceType as WatchServiceType, WatchPatternGenerator};
+use devdock_config::watch_patterns::{ServiceType as WatchServiceType, WatchPatternGenerator};
 use anyhow::{Context, Result};
 use devdock_core::profile::Profile;
 use std::collections::HashMap;
@@ -677,7 +677,7 @@ impl ConfigGenerator {
         // Add each service to TOP-LEVEL services dict
         // Only add services explicitly defined in multi_config, not auto-expanded dependencies
         for node in multi_graph.nodes() {
-            if node.component_type == crate::dependency_graph::ComponentType::Service
+            if node.component_type == devdock_config::dependency_graph::ComponentType::Service
                 && multi_config.services.contains_key(&node.name)
             {
                 let profile_service = multi_profile.services.get(&node.name);
@@ -809,8 +809,8 @@ impl ConfigGenerator {
 
     /// Generate watch files using static glob patterns (instant, no bazel)
     async fn generate_watch_files_static(&self, graph: &DependencyGraph) -> Result<()> {
-        use crate::dependency_graph::ComponentType;
-        use crate::service_config::ServiceType as ConfigServiceType;
+        use devdock_config::dependency_graph::ComponentType;
+        use devdock_config::service_config::ServiceType as ConfigServiceType;
 
         let generator = WatchPatternGenerator::new(self.workspace_root.clone())?;
 
@@ -858,7 +858,7 @@ impl ConfigGenerator {
 
     /// Generate watch files using bazel cquery (accurate but slow)
     async fn generate_watch_files_cquery(&self, graph: &DependencyGraph) -> Result<()> {
-        use crate::dependency_graph::ComponentType;
+        use devdock_config::dependency_graph::ComponentType;
 
         // Filter: Only local services with bazel targets
         let services_with_targets: HashMap<String, String> = graph
@@ -890,7 +890,7 @@ impl ConfigGenerator {
     ///
     /// Logs are written to ~/.devdock/background-cquery.log to avoid cluttering Tilt UI.
     async fn spawn_background_cquery_refinement(&self, graph: &DependencyGraph) {
-        use crate::dependency_graph::ComponentType;
+        use devdock_config::dependency_graph::ComponentType;
         use std::io::Write;
 
         // Filter: Only local services with bazel targets

@@ -29,7 +29,7 @@ pub async fn execute(
     // Step 1: Load and validate profile
     output::info(&format!("Loading profile: {profile_name}"));
     let loader = ProfileLoader::new();
-    let (profile, profile_path) = loader.load_with_path(profile_name)?;
+    let (profile, _profile_path) = loader.load_with_path(profile_name)?;
 
     let validator = ProfileValidator::new();
     validator.validate(&profile)?;
@@ -156,18 +156,10 @@ pub async fn execute(
     let has_pre_tilt_plugins = !project_config.plugins.hooks.pre_tilt.is_empty();
 
     if !has_pre_tilt_plugins {
-        // No pre_tilt plugin → use built-in config generator
-        let profile_path_str = profile_path.to_string_lossy();
-        generate_configs_rust(
-            &workspace_root,
-            &profile,
-            services,
-            Some(&profile_path_str),
-            dry_run,
-        )
-        .await?;
+        // No pre_tilt plugin → generate a minimal temp_profile.yaml
+        generate_minimal_temp_profile(&workspace_root, &profile, services, dry_run).await?;
     } else {
-        // pre_tilt plugins will generate configs
+        // pre_tilt plugins will generate full configs (INI, platform auth, etc.)
         output::info("Config generation delegated to pre_tilt plugins");
         // Ensure runtime_generated directory exists for the generated Tiltfile
         let runtime_dir = workspace_root.join("devdock/runtime_generated");
@@ -354,50 +346,69 @@ fn get_git_branch() -> Result<String> {
     }
 }
 
-/// Generate configurations using Rust (parallel).
+/// Generate a minimal temp_profile.yaml with service names, types, and env vars.
 ///
-/// Requires the `cloud` feature on `devdock-config`. When compiled without it,
-/// config generation must be handled by a pre_tilt plugin.
-#[cfg(feature = "cloud")]
-async fn generate_configs_rust(
+/// Full config generation (INI files, platform auth, etc.) is handled by external
+/// plugins (e.g., devdock-plugin-config-generator) via the pre_tilt hook.
+async fn generate_minimal_temp_profile(
     workspace_root: &Path,
     profile: &devdock_core::profile::Profile,
     services: Option<&str>,
-    profile_path: Option<&str>,
-    dry_run: bool,
-) -> Result<()> {
-    use devdock_config::{ConfigGenerator, WatchStrategy};
-
-    let mut generator = ConfigGenerator::new(workspace_root.to_path_buf())
-        .with_watch_strategy(WatchStrategy::Static);
-
-    // Skip platform initialization and file writes in dry-run mode (for benchmarking)
-    if dry_run {
-        generator = generator
-            .with_skip_platform_init(true)
-            .with_skip_file_writes(true)
-            .with_dynamic_config(false);
-    }
-
-    generator.generate(profile, services, profile_path).await?;
-
-    Ok(())
-}
-
-/// Fallback when cloud feature is not available.
-#[cfg(not(feature = "cloud"))]
-async fn generate_configs_rust(
-    _workspace_root: &Path,
-    _profile: &devdock_core::profile::Profile,
-    _services: Option<&str>,
-    _profile_path: Option<&str>,
     _dry_run: bool,
 ) -> Result<()> {
-    anyhow::bail!(
-        "Built-in config generation requires the 'cloud' feature.\n\
-         Either install a pre_tilt plugin (e.g., devdock-plugin-config-generator)\n\
-         or rebuild devdock with: cargo install --features cloud"
-    )
+    let runtime_dir = workspace_root.join("devdock/runtime_generated");
+    std::fs::create_dir_all(&runtime_dir)?;
+
+    // Build a minimal profile YAML with service entries and basic env vars
+    let mut profile_map = serde_yaml::Mapping::new();
+
+    let devdock_id = std::env::var("DEVDOCK_ID").unwrap_or_default();
+
+    // Filter services if specific ones were requested
+    let service_filter: Option<Vec<&str>> = services.map(|s| s.split(',').map(str::trim).collect());
+
+    let mut services_map = serde_yaml::Mapping::new();
+    for (name, svc) in &profile.services {
+        if let Some(ref filter) = service_filter {
+            if !filter.contains(&name.as_str()) {
+                continue;
+            }
+        }
+
+        let mut svc_entry = serde_yaml::Mapping::new();
+        svc_entry.insert(
+            serde_yaml::Value::String("type".into()),
+            serde_yaml::Value::String(format!("{:?}", svc.deployment_type)),
+        );
+
+        // Add basic env vars
+        let mut env_map = serde_yaml::Mapping::new();
+        env_map.insert(
+            serde_yaml::Value::String("DEVDOCK_ID".into()),
+            serde_yaml::Value::String(devdock_id.clone()),
+        );
+        env_map.insert(
+            serde_yaml::Value::String("IS_DEVDOCK".into()),
+            serde_yaml::Value::String("true".into()),
+        );
+
+        svc_entry
+            .insert(serde_yaml::Value::String("env".into()), serde_yaml::Value::Mapping(env_map));
+
+        services_map
+            .insert(serde_yaml::Value::String(name.clone()), serde_yaml::Value::Mapping(svc_entry));
+    }
+
+    profile_map.insert(
+        serde_yaml::Value::String("services".into()),
+        serde_yaml::Value::Mapping(services_map),
+    );
+
+    let yaml = serde_yaml::to_string(&profile_map)?;
+    std::fs::write(runtime_dir.join("temp_profile.yaml"), &yaml)?;
+
+    output::success("Generated minimal temp_profile.yaml");
+    Ok(())
 }
 
 /// Generate Tiltfile for OSS pipeline.
@@ -559,7 +570,7 @@ fn find_workspace_root_from(start: &Path) -> Result<PathBuf> {
         if !current.pop() {
             anyhow::bail!(
                 "Could not find workspace root (directory with devdock/).\n\
-                 Are you running this from the Scio monorepo?"
+                 Are you running this from inside a project with a devdock/ directory?"
             );
         }
     }
@@ -1023,7 +1034,6 @@ fn cleanup_temp_files(workspace_root: &Path) -> Result<()> {
         workspace_root.join("devdock/devdock.ini"),
         workspace_root.join("config/devdock.ini"),
         workspace_root.join("config/run_local.ini"),
-        workspace_root.join("devdock/scio_apps.ini"),
     ];
 
     for config_file in config_files {

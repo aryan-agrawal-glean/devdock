@@ -19,3 +19,19 @@ serde_yaml = "0.9"
 tokio = { version = "1.35", features = ["full"] }
 anyhow = "1.0"
 tracing = "0.1"
+
+# Cloud-specific dependencies (moved from devdock-config)
+google-cloud-storage = "1.8.0"
+google-cloud-gax = "1.7.0"
+rust-ini = "0.21"
+reqwest = { version = "0.11", features = ["blocking", "json"] }
+openssl = { version = "0.10", features = ["vendored"] }
+chrono = { version = "0.4", features = ["serde"] }
+zstd = "0.13"
+flate2 = "1.0"
+tar = "0.4"
+async-trait = "0.1"
+futures = "0.3"
+thiserror = "1.0"
+regex = "1.10"
+walkdir = "2.4"

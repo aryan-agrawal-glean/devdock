@@ -1,6 +1,6 @@
 //! Temporary profile generator for Tilt.
 
-use crate::dependency_graph::{ComponentType, DependencyGraph};
+use devdock_config::dependency_graph::{ComponentType, DependencyGraph};
 use crate::ini_parser::ParsedIniConfig;
 use crate::opensearch::get_elastic_namespace;
 use crate::platform::{Platform, TempProfile};
