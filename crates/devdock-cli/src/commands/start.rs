@@ -378,7 +378,8 @@ async fn generate_minimal_temp_profile(
         let mut svc_entry = serde_yaml::Mapping::new();
         svc_entry.insert(
             serde_yaml::Value::String("type".into()),
-            serde_yaml::Value::String(format!("{:?}", svc.deployment_type)),
+            serde_yaml::to_value(svc.deployment_type)
+                .unwrap_or(serde_yaml::Value::String("local".into())),
         );
 
         // Add basic env vars
