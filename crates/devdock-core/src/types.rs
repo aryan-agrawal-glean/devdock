@@ -24,7 +24,9 @@ pub enum DeploymentType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum Platform {
+    /// No cloud platform (pure OSS / local-only)
     #[default]
+    None,
     Google,
     Aws,
     Azure,
@@ -33,6 +35,7 @@ pub enum Platform {
 impl Platform {
     pub fn as_str(&self) -> &'static str {
         match self {
+            Self::None => "none",
             Self::Google => "google",
             Self::Aws => "aws",
             Self::Azure => "azure",
