@@ -96,8 +96,10 @@ impl Plugin for BigQuerySync {
     }
 
     fn initialize(&mut self, config: Value) {
-        self.project_id = config["project"]
+        // Use cloud_project (GCP project ID) for BigQuery, not project (app name)
+        self.project_id = config["cloud_project"]
             .as_str()
+            .or_else(|| config["project"].as_str())
             .unwrap_or("")
             .to_string();
         self.dataset = config["dataset"]

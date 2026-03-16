@@ -149,10 +149,7 @@ fn extract_libs_creates_all_files() {
     assert!(dir.path().join("devdock/runtime_generated/core/templates/compose.yaml.tpl").exists());
 
     // Service hooks stub
-    assert!(dir
-        .path()
-        .join("devdock/runtime_generated/config/services/service_hooks/Tiltfile")
-        .exists());
+    assert!(dir.path().join("devdock/runtime_generated/services/service_hooks/Tiltfile").exists());
 
     // Default infra
     assert!(dir.path().join("devdock/runtime_generated/infra/sql/docker-compose.yaml").exists());

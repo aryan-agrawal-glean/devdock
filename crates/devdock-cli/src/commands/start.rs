@@ -115,9 +115,12 @@ pub async fn execute(
         output::info("Initializing plugins...");
         let plugin_config = serde_json::json!({
             "project": project_config.project.name,
+            "cloud_project": project_config.cloud.project,
             "workspace_root": workspace_root.to_string_lossy(),
             "platform": project_config.cloud.platform,
+            "region": project_config.cloud.region,
             "profile": profile_name,
+            "dataset": project_config.telemetry.dataset,
         });
         machine.plugin_manager_mut().initialize_all(&plugin_config)?;
         output::success("Plugins initialized");

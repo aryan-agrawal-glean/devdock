@@ -317,9 +317,11 @@ pub fn extract_shipped_libs_to(workspace_root: &Path) -> std::io::Result<()> {
     }
 
     // Create service_hooks stub (or symlink to repo if exists)
-    let hooks_dir = runtime_dir.join("config/services/service_hooks");
+    let services_dir_name =
+        std::env::var("DEVDOCK_SERVICES_DIR").unwrap_or_else(|_| "devdock/services".into());
+    let hooks_dir = runtime_dir.join("services/service_hooks");
     std::fs::create_dir_all(&hooks_dir)?;
-    let repo_hooks = workspace_root.join("devdock/config/services/service_hooks/Tiltfile");
+    let repo_hooks = workspace_root.join(format!("{}/service_hooks/Tiltfile", services_dir_name));
     let stub_hooks = hooks_dir.join("Tiltfile");
     if repo_hooks.exists() {
         // Symlink to repo's actual hooks
@@ -662,7 +664,7 @@ mod tests {
             .exists());
         assert!(dir
             .path()
-            .join("devdock/runtime_generated/config/services/service_hooks/Tiltfile")
+            .join("devdock/runtime_generated/services/service_hooks/Tiltfile")
             .exists());
     }
 }
