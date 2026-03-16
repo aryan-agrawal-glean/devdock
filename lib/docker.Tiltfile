@@ -22,7 +22,9 @@ def generate_dockerfile(template_path, context, type = 'services'):
         lines.append(line)
 
     rendered = '\n'.join(lines)
-    local('cat > %s/devdock/config/%s/%s/Dockerfile << EOL\n%s\nEOL' % (os.getenv('DEVDOCK_ROOT'), type, context['service'], rendered))
+    dir_env = 'DEVDOCK_SERVICES_DIR' if type == 'services' else 'DEVDOCK_INFRA_DIR'
+    base_dir = os.getenv(dir_env, 'devdock/' + type)
+    local('cat > %s/%s/%s/Dockerfile << EOL\n%s\nEOL' % (os.getenv('DEVDOCK_ROOT'), base_dir, context['service'], rendered))
     return rendered
 
 def generate_compose(template_path, context, type = 'services'):
@@ -49,7 +51,9 @@ def generate_compose(template_path, context, type = 'services'):
         lines.insert(ports_index + 1, "      - \"{}:8081\"".format(context.get('metrics_port')))
 
     rendered = '\n'.join(lines)
-    local('cat > %s/devdock/config/%s/%s/docker-compose.yaml << EOL\n%s\nEOL' % (os.getenv('DEVDOCK_ROOT'),type, context['service'], rendered))
+    dir_env = 'DEVDOCK_SERVICES_DIR' if type == 'services' else 'DEVDOCK_INFRA_DIR'
+    base_dir = os.getenv(dir_env, 'devdock/' + type)
+    local('cat > %s/%s/%s/docker-compose.yaml << EOL\n%s\nEOL' % (os.getenv('DEVDOCK_ROOT'), base_dir, context['service'], rendered))
     return rendered
 
 def setup_docker_build(context, dockerfile = None, compose_file = None):

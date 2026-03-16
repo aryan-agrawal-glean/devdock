@@ -135,6 +135,12 @@ enum Commands {
     /// Initialize DevDock for the current project
     Init {},
 
+    /// Infrastructure management (sql, opensearch, etc.)
+    Infra {
+        #[command(subcommand)]
+        command: InfraCommands,
+    },
+
     /// Full cleanup of containers, networks, and files
     #[command(alias = "-c")]
     Cleanup {
@@ -386,6 +392,60 @@ enum LogsCommands {
 }
 
 #[derive(Subcommand)]
+enum InfraCommands {
+    /// SQL infrastructure management
+    Sql {
+        #[command(subcommand)]
+        command: SqlCommands,
+    },
+    /// OpenSearch infrastructure management
+    Opensearch {
+        #[command(subcommand)]
+        command: OpensearchCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum SqlCommands {
+    /// Hydrate local SQL database from remote
+    Setup {
+        /// GCP/AWS project ID
+        #[arg(long)]
+        project: String,
+        /// Cloud platform (google, aws, azure)
+        #[arg(long, default_value = "google")]
+        platform: String,
+        /// Cloud region
+        #[arg(long, default_value = "us-central1")]
+        region: String,
+        /// Database tables to copy (format: "db:Table1,Table2;db2:Table3")
+        #[arg(long)]
+        db_tables: String,
+        /// Copy mode: fast or latest
+        #[arg(long, default_value = "fast")]
+        mode: String,
+        /// Full cleanup before hydration
+        #[arg(long)]
+        full_cleanup: bool,
+        /// Copy KeyVal table (default: true)
+        #[arg(long, default_value = "true")]
+        copy_keyval: String,
+        /// Use full instance export
+        #[arg(long)]
+        use_full_instance: bool,
+        /// Use MySQL seed instead of remote copy
+        #[arg(long)]
+        use_mysql_seed: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum OpensearchCommands {
+    /// Copy OpenSearch indexes from remote
+    Copy,
+}
+
+#[derive(Subcommand)]
 enum McpCommands {
     /// Start MCP server (stdin/stdout)
     Serve,
@@ -534,6 +594,39 @@ async fn main() {
         }
 
         Commands::Init {} => commands::init::execute().await,
+
+        Commands::Infra { command } => match command {
+            InfraCommands::Sql { command } => match command {
+                SqlCommands::Setup {
+                    project,
+                    platform,
+                    region,
+                    db_tables,
+                    mode,
+                    full_cleanup,
+                    copy_keyval,
+                    use_full_instance,
+                    use_mysql_seed,
+                } => {
+                    let copy_keyval_bool = copy_keyval != "false";
+                    commands::infra::sql_setup(
+                        &project,
+                        &platform,
+                        &region,
+                        &db_tables,
+                        &mode,
+                        full_cleanup,
+                        copy_keyval_bool,
+                        use_full_instance,
+                        use_mysql_seed,
+                    )
+                    .await
+                }
+            },
+            InfraCommands::Opensearch { command } => match command {
+                OpensearchCommands::Copy => commands::infra::opensearch_copy().await,
+            },
+        },
 
         Commands::Cleanup { soft, logs, no_local } => {
             commands::cleanup::execute(soft, logs, !no_local).await

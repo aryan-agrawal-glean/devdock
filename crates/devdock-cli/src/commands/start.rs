@@ -59,10 +59,6 @@ pub async fn execute(
     }
     output::success("Profile validated");
 
-    // Set CLOUD_PLATFORM environment variable based on profile platform
-    let platform_str = profile.platform.to_string().to_uppercase();
-    std::env::set_var("CLOUD_PLATFORM", &platform_str);
-
     // Step 2: Resolve dependencies
     let resolver = DependencyResolver::new();
     let resolved_components = resolver.resolve(&profile)?;
@@ -81,6 +77,12 @@ pub async fn execute(
     let project_config = devdock_core::ProjectConfig::load(&devdock_toml_path)
         .context("Failed to load .devdock/devdock.toml")?;
     project_config.export_diagnostics_env();
+
+    // Set environment variables from devdock.toml for use by Starlark libs and infra Tiltfiles
+    let platform_str = project_config.cloud.platform.to_uppercase();
+    std::env::set_var("CLOUD_PLATFORM", &platform_str);
+    std::env::set_var("DEVDOCK_SERVICES_DIR", &project_config.project.services_dir);
+    std::env::set_var("DEVDOCK_INFRA_DIR", &project_config.project.infra_dir);
 
     // Initialize PluginManager with lifecycle hooks + resource hooks
     let plugin_manager = PluginManager::with_resource_hooks(
@@ -193,15 +195,9 @@ pub async fn execute(
     machine.fire_before_config_generated();
 
     // Step 6b: Generate configuration files
-    let has_config_plugins = !project_config.plugins.hooks.after_config_generated.is_empty();
-
-    if !has_config_plugins {
-        generate_minimal_temp_profile(&workspace_root, &profile, services, dry_run).await?;
-    } else {
-        output::info("Config generation delegated to plugins");
-        let runtime_dir = workspace_root.join("devdock/runtime_generated");
-        std::fs::create_dir_all(&runtime_dir)?;
-    }
+    // Always generate minimal temp_profile.yaml as baseline.
+    // Plugins can enrich it via after_config_generated hook.
+    generate_minimal_temp_profile(&workspace_root, &profile, services, dry_run).await?;
 
     // ── State: ConfigReady ───────────────────────────────────────────────
     machine.advance()?; // InfraReady -> ConfigReady
@@ -386,21 +382,46 @@ async fn generate_minimal_temp_profile(
     let mut profile_map = serde_yaml::Mapping::new();
     let devdock_id = std::env::var("DEVDOCK_ID").unwrap_or_default();
 
+    // Include top-level fields expected by infra Tiltfiles
+    profile_map.insert(
+        serde_yaml::Value::String("project".into()),
+        serde_yaml::Value::String(profile.project.clone()),
+    );
+    // Platform and region come from CLOUD_PLATFORM env var (set earlier in startup)
+    // and the project config's cloud section
+    let platform_str =
+        std::env::var("CLOUD_PLATFORM").unwrap_or_else(|_| "none".into()).to_lowercase();
+    profile_map.insert(
+        serde_yaml::Value::String("platform".into()),
+        serde_yaml::Value::String(platform_str),
+    );
+    // Region from env var or project config or default
+    let region = std::env::var("GOOGLE_CLOUD_REGION")
+        .or_else(|_| std::env::var("AWS_REGION"))
+        .unwrap_or_else(|_| "us-central1".into());
+    profile_map
+        .insert(serde_yaml::Value::String("region".into()), serde_yaml::Value::String(region));
+
     let service_filter: Option<Vec<&str>> = services.map(|s| s.split(',').map(str::trim).collect());
 
+    // Build services section with env vars and active flag
     let mut services_map = serde_yaml::Mapping::new();
     for (name, svc) in &profile.services {
-        if let Some(ref filter) = service_filter {
-            if !filter.contains(&name.as_str()) {
-                continue;
-            }
-        }
+        let is_active = if let Some(ref filter) = service_filter {
+            filter.contains(&name.as_str())
+        } else {
+            true
+        };
 
         let mut svc_entry = serde_yaml::Mapping::new();
         svc_entry.insert(
             serde_yaml::Value::String("type".into()),
             serde_yaml::to_value(svc.deployment_type)
                 .unwrap_or(serde_yaml::Value::String("local".into())),
+        );
+        svc_entry.insert(
+            serde_yaml::Value::String("active".into()),
+            serde_yaml::Value::String(is_active.to_string()),
         );
 
         let mut env_map = serde_yaml::Mapping::new();
@@ -413,6 +434,12 @@ async fn generate_minimal_temp_profile(
             serde_yaml::Value::String("true".into()),
         );
 
+        // Merge env vars from profile
+        for (k, v) in &svc.env {
+            env_map
+                .insert(serde_yaml::Value::String(k.clone()), serde_yaml::Value::String(v.clone()));
+        }
+
         svc_entry
             .insert(serde_yaml::Value::String("env".into()), serde_yaml::Value::Mapping(env_map));
 
@@ -424,6 +451,17 @@ async fn generate_minimal_temp_profile(
         serde_yaml::Value::String("services".into()),
         serde_yaml::Value::Mapping(services_map),
     );
+
+    // Build infra section from profile
+    let mut infra_map = serde_yaml::Mapping::new();
+    for (name, infra) in &profile.infra {
+        let infra_value = serde_yaml::to_value(infra)
+            .unwrap_or(serde_yaml::Value::Mapping(serde_yaml::Mapping::new()));
+        infra_map.insert(serde_yaml::Value::String(name.clone()), infra_value);
+    }
+
+    profile_map
+        .insert(serde_yaml::Value::String("infra".into()), serde_yaml::Value::Mapping(infra_map));
 
     let yaml = serde_yaml::to_string(&profile_map)?;
     std::fs::write(runtime_dir.join("temp_profile.yaml"), &yaml)?;

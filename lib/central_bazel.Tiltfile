@@ -82,7 +82,7 @@ def setup_central_bazel_build(profile):
 
 def _load_service_config(devdock_root, service_name, platform):
     """Load a service's devdock_config.json file."""
-    service_path = '{}/devdock/config/services/{}'.format(devdock_root, service_name)
+    service_path = '{}/{}/{}'.format(devdock_root, os.getenv('DEVDOCK_SERVICES_DIR', 'devdock/services'), service_name)
 
     # Try platform-specific config first
     conf_path = '{}/devdock_config_{}.json'.format(service_path, platform)

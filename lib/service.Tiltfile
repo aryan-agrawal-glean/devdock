@@ -280,7 +280,7 @@ def setup_service(name, config, auto_init=True):
     # For Python services, copy requirements and wheels if configured
     if service_type == "python":
         architecture = profile.get('architecture', 'unknown')
-        service_path = "{}/devdock/config/services/{}".format(devdock_root, name)
+        service_path = "{}/{}/{}".format(devdock_root, os.getenv('DEVDOCK_SERVICES_DIR', 'devdock/services'), name)
 
         # Requirements path from devdock_config.json
         requirements_config = config.get("requirements", {})
@@ -328,7 +328,7 @@ def setup_service(name, config, auto_init=True):
     docker_config = setup_docker_build(context, dockerfile=dockerfile_template)
 
     # Set up docker-compose
-    service_compose = "{}/devdock/config/services/{}/docker-compose.yaml".format(devdock_root, name)
+    service_compose = "{}/{}/{}/docker-compose.yaml".format(devdock_root, os.getenv('DEVDOCK_SERVICES_DIR', 'devdock/services'), name)
     docker_compose(service_compose)
 
     # Enable log streaming for the resource
