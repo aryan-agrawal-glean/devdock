@@ -310,11 +310,7 @@ fn cleanup_temp_files(workspace_path: &str) -> Result<()> {
     }
 
     // Clean up devdock.ini files
-    let config_files = vec![
-        workspace.join("devdock/devdock.ini"),
-        workspace.join("config/devdock.ini"),
-        workspace.join("config/run_local.ini"),
-    ];
+    let config_files = vec![workspace.join("devdock/devdock.ini")];
 
     for config_file in config_files {
         if config_file.exists() && std::fs::remove_file(&config_file).is_ok() {
