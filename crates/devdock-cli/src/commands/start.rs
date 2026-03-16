@@ -1033,10 +1033,7 @@ fn cleanup_temp_files(workspace_root: &Path) -> Result<()> {
     output::info(&format!("Workspace root: {}", workspace_root.display()));
 
     let runtime_gen = workspace_root.join("devdock/runtime_generated");
-    output::info(&format!("Looking for runtime_generated at: {}", runtime_gen.display()));
-
     if runtime_gen.exists() {
-        output::info("Removing runtime_generated directory...");
         match std::fs::remove_dir_all(&runtime_gen) {
             Ok(()) => {
                 output::success("Removed runtime_generated directory");
@@ -1046,8 +1043,15 @@ fn cleanup_temp_files(workspace_root: &Path) -> Result<()> {
                 output::warn(&format!("Failed to remove runtime_generated: {e}"));
             }
         }
-    } else {
-        output::info("runtime_generated directory not found (may already be clean)");
+    }
+
+    // Clean up devdock/core/lib and devdock/core/templates symlinks
+    for link in &["devdock/core/lib", "devdock/core/templates"] {
+        let path = workspace_root.join(link);
+        if path.is_symlink() || path.exists() {
+            let _ = std::fs::remove_file(&path).or_else(|_| std::fs::remove_dir_all(&path));
+            cleaned_count += 1;
+        }
     }
 
     let config_files = vec![
