@@ -1045,7 +1045,7 @@ fn cleanup_temp_files(workspace_root: &Path) -> Result<()> {
         }
     }
 
-    // Clean up devdock/core/lib and devdock/core/templates symlinks
+    // Clean up devdock/core/ (symlinks + empty parent dir)
     for link in &["devdock/core/lib", "devdock/core/templates"] {
         let path = workspace_root.join(link);
         if path.is_symlink() || path.exists() {
@@ -1053,12 +1053,33 @@ fn cleanup_temp_files(workspace_root: &Path) -> Result<()> {
             cleaned_count += 1;
         }
     }
+    let core_dir = workspace_root.join("devdock/core");
+    if core_dir.exists() {
+        let _ = std::fs::remove_dir(&core_dir);
+    }
 
-    let config_files = vec![workspace_root.join("devdock/devdock.ini")];
+    // Clean up devdock/devdock.ini
+    let ini_path = workspace_root.join("devdock/devdock.ini");
+    if ini_path.exists() && std::fs::remove_file(&ini_path).is_ok() {
+        cleaned_count += 1;
+    }
 
-    for config_file in config_files {
-        if config_file.exists() && std::fs::remove_file(&config_file).is_ok() {
-            cleaned_count += 1;
+    // Clean up generated Dockerfiles and docker-compose.yaml from service directories
+    let services_dir =
+        std::env::var("DEVDOCK_SERVICES_DIR").unwrap_or_else(|_| "devdock/services".into());
+    let services_path = workspace_root.join(&services_dir);
+    if services_path.exists() {
+        if let Ok(entries) = std::fs::read_dir(&services_path) {
+            for entry in entries.flatten() {
+                if entry.path().is_dir() {
+                    for file in &["Dockerfile", "docker-compose.yaml"] {
+                        let generated = entry.path().join(file);
+                        if generated.exists() && std::fs::remove_file(&generated).is_ok() {
+                            cleaned_count += 1;
+                        }
+                    }
+                }
+            }
         }
     }
 
