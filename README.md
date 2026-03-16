@@ -331,7 +331,20 @@ devdock binary                    plugin executable
 
 ## Infrastructure
 
-DevDock ships default compose files for common infrastructure:
+DevDock is bring-your-own-infra. You define infrastructure components in your profile YAML and provide either a `devdock_config.json` or a `docker-compose.yaml` for each one.
+
+### How infra is resolved
+
+For each infra component in your profile, DevDock checks (in order):
+
+1. **Custom Tiltfile** — `devdock/infra/{name}/Tiltfile` (full control)
+2. **Custom compose** — `devdock/infra/{name}/docker-compose.yaml` (your own image/config)
+3. **Config-generated** — auto-generated from `devdock_config.json` with `"kind": "infra"`
+4. **Built-in default** — shipped with the devdock binary (extracted at runtime)
+
+### Built-in defaults
+
+DevDock ships default compose files for common infrastructure. These are compiled into the binary and used as a fallback when you don't provide your own:
 
 | Component | Image | Port |
 |-----------|-------|------|
@@ -342,7 +355,7 @@ DevDock ships default compose files for common infrastructure:
 | PubSub | GCP emulator | 8085 |
 | Nginx | `nginx:alpine` | 8321 |
 
-Override any component by adding a custom `docker-compose.yaml` to `devdock/config/infra/{name}/`.
+To override a default, add your own `docker-compose.yaml` to `devdock/infra/{name}/` in your repo. The infra directory location is configurable via `infra_dir` in `devdock.toml`.
 
 ## Commands
 
