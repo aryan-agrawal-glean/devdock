@@ -296,15 +296,7 @@ DevDock uses external plugins for cloud integrations. Plugins are standalone exe
 | `slack-notifier` | `plugins/notifications/` | `after_ready`, `on_error` |
 | `jira-reporter` | `plugins/diagnostics/` | `on_error`, `on_report` |
 
-Glean-specific plugins (in `plugins/glean/`):
-
-| Plugin | Hook |
-|--------|------|
-| `platform-auth` | `before_infra_ready` |
-| `config-fetcher` | `before_config_generated` |
-| `config-writer` | `after_config_generated` |
-| `sql-hydrator` | `after_resource_start("sql")` |
-| `opensearch-hydrator` | `after_resource_start("opensearch")` |
+Organization-specific plugins live in separate repos. For example, Glean's plugins are at [devdock-glean-plugins](https://github.com/aryan-agrawal-glean/devdock-glean-plugins) (private).
 
 ### Install a Plugin
 
@@ -409,12 +401,6 @@ devdock/
 │   │   └── slack-notifier/         #   Slack notifications
 │   ├── diagnostics/
 │   │   └── jira-reporter/          #   Jira bug reports
-│   ├── glean/                      #   Glean-specific plugins
-│   │   ├── platform-auth/          #   Cloud authentication
-│   │   ├── config-fetcher/         #   Fetch configs from GCS/S3
-│   │   ├── config-writer/          #   Generate devdock.ini
-│   │   ├── sql-hydrator/           #   Hydrate SQL databases
-│   │   └── opensearch-hydrator/    #   Reindex OpenSearch
 │   ├── templates/                  #   Plugin scaffolding (Rust, Python, Go, Bash)
 │   └── examples/                   #   Example plugins (Prometheus, Slack)
 ├── skills/                         #   Claude Code skills
@@ -464,7 +450,6 @@ cargo install --path crates/devdock-cli --debug --force  # Install dev build
 
 ```bash
 cd plugins/telemetry/bigquery-sync && cargo build
-cd plugins/glean/platform-auth && cargo build
 ```
 
 ## Deployment

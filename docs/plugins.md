@@ -146,12 +146,8 @@ plugins/
 │   └── slack-notifier/         # after_ready, on_error
 ├── diagnostics/
 │   └── jira-reporter/          # on_error, on_report
-├── glean/                      # Glean-specific plugins
-│   ├── platform-auth/          # before_infra_ready
-│   ├── config-fetcher/         # before_config_generated
-│   ├── config-writer/          # after_config_generated
-│   ├── sql-hydrator/           # after_resource_start("sql")
-│   └── opensearch-hydrator/    # after_resource_start("opensearch")
 ├── templates/                  # Plugin scaffolding
 └── examples/                   # Reference implementations
 ```
+
+Organization-specific plugins live in separate repos (e.g., [devdock-glean-plugins](https://github.com/aryan-agrawal-glean/devdock-glean-plugins)).

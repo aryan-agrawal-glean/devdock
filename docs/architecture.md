@@ -171,12 +171,10 @@ lib/
 │  │  Diagnostics (plugins/diagnostics/):                │  │
 │  │  • jira-reporter    → on_error, on_report           │  │
 │  │                                                     │  │
-│  │  Glean (plugins/glean/):                            │  │
-│  │  • platform-auth    → before_infra_ready            │  │
-│  │  • config-fetcher   → before_config_generated       │  │
-│  │  • config-writer    → after_config_generated        │  │
-│  │  • sql-hydrator     → after_resource_start("sql")   │  │
-│  │  • opensearch-hydrator → after_resource_start       │  │
+│  │  Custom (devdock plugin create):                     │  │
+│  │  • Any language (Python, Go, Bash, Rust)             │  │
+│  │                                                     │  │
+│  │  Org-specific plugins live in separate repos         │  │
 │  └─────────────────────────────────────────────────────┘  │
 └──────────────────────────────────────────────────────────┘
 ```
