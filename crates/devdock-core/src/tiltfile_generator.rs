@@ -272,29 +272,48 @@ pub fn extract_shipped_libs_to(workspace_root: &Path) -> std::io::Result<()> {
         include_str!("../../../lib/templates/compose.yaml.tpl"),
     )?;
 
-    // Copy shipped libs into devdock/core/lib/ so that infra Tiltfiles and
-    // helper Tiltfiles can find them via relative paths like:
-    //   load('../../../core/lib/bazel.Tiltfile', ...)
-    //   load('../../../core/lib/utils.Tiltfile', ...)
-    let devdock_core_lib = workspace_root.join("devdock/core/lib");
-    std::fs::create_dir_all(&devdock_core_lib)?;
-    // Copy each shipped Tiltfile into core/lib/ (alongside any existing files)
-    for entry in std::fs::read_dir(lib_dir.as_path())? {
-        let entry = entry?;
-        let src = entry.path();
-        if src.extension().and_then(|e| e.to_str()) == Some("Tiltfile") {
-            let dest = devdock_core_lib.join(entry.file_name());
-            std::fs::copy(&src, &dest)?;
-        }
+    // Create devdock/core/lib/ and devdock/core/templates/ as symlinks to
+    // the runtime_generated copies. This lets infra Tiltfiles and hooks
+    // find shipped libs via relative paths like:
+    //   load('../../core/lib/bazel.Tiltfile', ...)
+    // without duplicating files on disk.
+    let devdock_core = workspace_root.join("devdock/core");
+    std::fs::create_dir_all(&devdock_core)?;
+
+    let core_lib_link = devdock_core.join("lib");
+    let core_templates_link = devdock_core.join("templates");
+
+    // Remove existing (file, dir, or symlink) before creating symlink
+    if core_lib_link.exists() || core_lib_link.is_symlink() {
+        let _ = std::fs::remove_dir_all(&core_lib_link);
+        let _ = std::fs::remove_file(&core_lib_link);
+    }
+    if core_templates_link.exists() || core_templates_link.is_symlink() {
+        let _ = std::fs::remove_dir_all(&core_templates_link);
+        let _ = std::fs::remove_file(&core_templates_link);
     }
 
-    // Same for templates
-    let devdock_core_templates = workspace_root.join("devdock/core/templates");
-    std::fs::create_dir_all(&devdock_core_templates)?;
-    for entry in std::fs::read_dir(templates_dir.as_path())? {
-        let entry = entry?;
-        let dest = devdock_core_templates.join(entry.file_name());
-        std::fs::copy(entry.path(), &dest)?;
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(&lib_dir, &core_lib_link)?;
+        std::os::unix::fs::symlink(&templates_dir, &core_templates_link)?;
+    }
+
+    #[cfg(not(unix))]
+    {
+        // Fallback: copy files on non-Unix systems
+        std::fs::create_dir_all(&core_lib_link)?;
+        for entry in std::fs::read_dir(lib_dir.as_path())? {
+            let entry = entry?;
+            let dest = core_lib_link.join(entry.file_name());
+            std::fs::copy(entry.path(), &dest)?;
+        }
+        std::fs::create_dir_all(&core_templates_link)?;
+        for entry in std::fs::read_dir(templates_dir.as_path())? {
+            let entry = entry?;
+            let dest = core_templates_link.join(entry.file_name());
+            std::fs::copy(entry.path(), &dest)?;
+        }
     }
 
     // Create service_hooks stub (or symlink to repo if exists)
