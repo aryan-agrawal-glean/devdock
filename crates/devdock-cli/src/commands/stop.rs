@@ -149,41 +149,45 @@ fn stop_tilt(_workspace_path: &str, force: bool) -> Result<()> {
     Ok(())
 }
 
-/// Stop all DevDock Docker containers
+/// Stop all DevDock Docker containers (batch rm -f for speed)
 fn cleanup_docker_containers() -> Result<()> {
     output::info("Stopping Docker containers...");
 
-    // Get all devdock containers
-    let output = Command::new("docker")
-        .args(["ps", "-a", "--filter", "name=devdock-", "--format", "{{.Names}}"])
-        .output()?;
+    #[cfg(unix)]
+    {
+        let status = Command::new("sh")
+            .arg("-c")
+            .arg("docker ps -a --filter 'name=devdock-' --format '{{.Names}}' | xargs -r docker rm -f 2>/dev/null || true")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
 
-    if output.status.success() {
-        let containers = String::from_utf8_lossy(&output.stdout);
-        let container_list: Vec<&str> = containers.lines().filter(|s| !s.is_empty()).collect();
+        if let Ok(status) = status {
+            if status.success() {
+                output::success("Stopped Docker containers");
+            }
+        }
+    }
 
-        if !container_list.is_empty() {
-            // Stop containers
-            for container in &container_list {
+    #[cfg(not(unix))]
+    {
+        let output = Command::new("docker")
+            .args(["ps", "-a", "--filter", "name=devdock-", "-q"])
+            .output()?;
+
+        if output.status.success() {
+            let container_ids = String::from_utf8_lossy(&output.stdout);
+            if !container_ids.trim().is_empty() {
                 Command::new("docker")
-                    .args(["stop", container])
+                    .arg("rm")
+                    .arg("-f")
+                    .args(container_ids.lines())
                     .stdout(Stdio::null())
                     .stderr(Stdio::null())
                     .status()
                     .ok();
+                output::success("Stopped Docker containers");
             }
-
-            // Remove containers
-            for container in &container_list {
-                Command::new("docker")
-                    .args(["rm", "-f", container])
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .status()
-                    .ok();
-            }
-
-            output::success(&format!("Stopped {} container(s)", container_list.len()));
         }
     }
 
