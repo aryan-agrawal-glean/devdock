@@ -28,15 +28,25 @@ use std::io::{self, BufRead, Write};
 
 /// Trait that all DevDock plugins implement.
 ///
-/// Plugins receive lifecycle hooks as method calls:
-/// - `"pre_start"` — before anything (auth, infra provisioning)
-/// - `"pre_tilt"` — after config gen, before Tilt (enrich configs)
-/// - `"post_start"` — after Tilt starts (telemetry, notifications)
-/// - `"on_report"` — when `devdock report` runs
-/// - `"on_stop"` — when `devdock stop` runs (cleanup, final telemetry)
+/// Plugins receive lifecycle hooks as method calls. The full lifecycle:
+///
+/// - `"after_profile_loaded"` — profile YAML loaded
+/// - `"before_infra_ready"` — before Docker/ports (auth, credentials)
+/// - `"after_infra_ready"` — after Docker/ports ready
+/// - `"before_config_generated"` — before config files (fetch remote configs)
+/// - `"after_config_generated"` — after config files (write devdock.ini)
+/// - `"before_tilt"` — before Tilt spawns (last-minute config)
+/// - `"after_tilt"` — after Tilt is up (telemetry: session started)
+/// - `"before_resource_start"` — before a resource starts (params: name, kind)
+/// - `"after_resource_start"` — after a resource is healthy (params: name, kind)
+/// - `"after_ready"` — all resources healthy (notifications)
+/// - `"before_stop"` — Ctrl+C / exit signal (final telemetry flush)
+/// - `"after_stop"` — after cleanup complete
+/// - `"on_error"` — unrecoverable error
+/// - `"on_report"` — `devdock report` command
 ///
 /// Plugins only need to handle hooks they care about — unhandled hooks
-/// are dispatched to `handle()` which should return `ok()` by default.
+/// should return `ok()`.
 pub trait Plugin: Default {
     /// Plugin name (for logging).
     fn name(&self) -> &str;
@@ -46,17 +56,17 @@ pub trait Plugin: Default {
 
     /// Handle a method call. Called for lifecycle hooks and custom methods.
     ///
-    /// Common lifecycle hooks:
-    /// - `"pre_start"` — params has `"profile"`, `"config"`
-    /// - `"pre_tilt"` — params has `"profile"`, `"services"`, `"runtime_dir"`
-    /// - `"post_start"` — params has `"session_id"`
-    /// - `"on_report"` — params has `"ticket_key"`
-    /// - `"on_stop"` — params has `"session_id"`, `"duration_secs"`
-    ///
-    /// Legacy telemetry methods:
-    /// - `"emit"` — telemetry event (params has `"event"` field)
-    /// - `"fetch"` — config storage request (params has `"key"` field)
-    /// - `"report"` — bug report (params has `"title"`, `"body"` fields)
+    /// Lifecycle hook params:
+    /// - `"after_profile_loaded"` — `profile_name`, `workspace_root`, `platform`
+    /// - `"before_infra_ready"` — `profile_name`, `instance_id`, `port_base`
+    /// - `"before_config_generated"` — `profile_name`, `runtime_dir`, `workspace_root`
+    /// - `"after_config_generated"` — `profile_name`, `runtime_dir`, `workspace_root`
+    /// - `"before_tilt"` / `"after_tilt"` — `session_id`, `profile_name`
+    /// - `"before_resource_start"` / `"after_resource_start"` — `resource_name`, `resource_kind`
+    /// - `"after_ready"` — `session_id`, `profile_name`, `resource_count`, `startup_duration_secs`
+    /// - `"before_stop"` / `"after_stop"` — `session_id`, `duration_secs`
+    /// - `"on_error"` — `session_id`, `error`, `state`
+    /// - `"on_report"` — `title`, `body`
     fn handle(&self, method: &str, params: &Value) -> Value;
 
     /// Called on shutdown. Override for cleanup.

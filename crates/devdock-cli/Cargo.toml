@@ -16,6 +16,8 @@ path = "src/main.rs"
 
 [dependencies]
 devdock-core = { path = "../devdock-core" }
+devdock-lifecycle = { path = "../devdock-lifecycle" }
+devdock-mcp = { path = "../devdock-mcp" }
 devdock-config = { path = "../devdock-config" }
 devdock-state = { path = "../devdock-state" }
 devdock-codegen = { path = "../devdock-codegen" }

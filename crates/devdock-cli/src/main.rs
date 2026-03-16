@@ -244,6 +244,12 @@ enum Commands {
         profile: Option<String>,
     },
 
+    /// MCP server for AI agent integration
+    Mcp {
+        #[command(subcommand)]
+        command: McpCommands,
+    },
+
     /// Update devdock to latest or specific version
     Update {
         /// Version to install (e.g., '0.2.7', '@0.2.7', or 'latest')
@@ -377,6 +383,12 @@ enum LogsCommands {
 
     /// Show rich logging status
     Status,
+}
+
+#[derive(Subcommand)]
+enum McpCommands {
+    /// Start MCP server (stdin/stdout)
+    Serve,
 }
 
 #[derive(Subcommand)]
@@ -579,6 +591,10 @@ async fn main() {
         Commands::Monitor { timeout, interval, no_notify, profile } => {
             commands::monitor::execute(timeout, interval, no_notify, profile).await
         }
+
+        Commands::Mcp { command } => match command {
+            McpCommands::Serve => devdock_mcp::server::run().await.map_err(Into::into),
+        },
 
         Commands::Update { version, check, force, list } => {
             commands::update::execute(version, check, force, list).await

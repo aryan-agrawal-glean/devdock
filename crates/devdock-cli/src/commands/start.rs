@@ -1,14 +1,32 @@
 //! Start command implementation.
+//!
+//! Uses the lifecycle state machine to drive startup through well-defined states.
 
 use crate::output;
 use anyhow::{Context, Result};
 use colored::Colorize;
 use devdock_config::{DependencyResolver, ProfileLoader, ProfileValidator};
 use devdock_core::PluginManager;
+use devdock_lifecycle::{LifecycleConfig, LifecycleMachine, LifecycleOutput};
 use devdock_state::{Instance, InstanceStatus, PortAllocator, SessionOrigin, StateManager};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+/// Adapter to bridge crate::output to LifecycleOutput trait.
+struct CliOutput;
+
+impl LifecycleOutput for CliOutput {
+    fn info(&self, msg: &str) {
+        output::info(msg);
+    }
+    fn success(&self, msg: &str) {
+        output::success(msg);
+    }
+    fn warn(&self, msg: &str) {
+        output::warn(msg);
+    }
+}
 
 #[allow(clippy::too_many_arguments)]
 pub async fn execute(
@@ -26,6 +44,7 @@ pub async fn execute(
 
     output::info("Starting DevDock...");
 
+    // ── State: Initializing ──────────────────────────────────────────────
     // Step 1: Load and validate profile
     output::info(&format!("Loading profile: {profile_name}"));
     let loader = ProfileLoader::new();
@@ -41,8 +60,6 @@ pub async fn execute(
     output::success("Profile validated");
 
     // Set CLOUD_PLATFORM environment variable based on profile platform
-    // This is needed for platform-specific config loading (e.g., devdock_config_aws.json)
-    // Python code expects uppercase values: "AWS", "GOOGLE", "AZURE"
     let platform_str = profile.platform.to_string().to_uppercase();
     std::env::set_var("CLOUD_PLATFORM", &platform_str);
 
@@ -50,6 +67,65 @@ pub async fn execute(
     let resolver = DependencyResolver::new();
     let resolved_components = resolver.resolve(&profile)?;
     output::info(&format!("Resolved {} components", resolved_components.len()));
+
+    // Find workspace root
+    let workspace_root = find_workspace_root()?;
+
+    // Load devdock.toml and create plugin manager
+    let devdock_toml_path = workspace_root.join(".devdock/devdock.toml");
+    if !devdock_toml_path.exists() {
+        anyhow::bail!(
+            "Missing .devdock/devdock.toml — run `devdock init` to initialize your project"
+        );
+    }
+    let project_config = devdock_core::ProjectConfig::load(&devdock_toml_path)
+        .context("Failed to load .devdock/devdock.toml")?;
+    project_config.export_diagnostics_env();
+
+    // Initialize PluginManager with lifecycle hooks + resource hooks
+    let plugin_manager = PluginManager::with_resource_hooks(
+        project_config.plugins.hooks.clone(),
+        project_config.plugins.resource_hooks.clone(),
+    );
+
+    // Create lifecycle machine
+    let lifecycle_config = LifecycleConfig {
+        profile_name: profile_name.to_string(),
+        services: services.map(String::from),
+        ci_mode,
+        run_monitor,
+        monitor_timeout,
+        telemetry_enabled,
+        dry_run,
+        workspace_root: workspace_root.clone(),
+    };
+
+    let mut machine = LifecycleMachine::new(lifecycle_config, plugin_manager, Box::new(CliOutput));
+    machine.set_platform(project_config.cloud.platform.clone());
+    machine.set_project_name(project_config.project.name.clone());
+
+    // ── State: ProfileLoaded ─────────────────────────────────────────────
+    machine.advance()?; // Initializing -> ProfileLoaded
+    machine.fire_after_profile_loaded();
+
+    // Initialize plugins
+    if machine.has_plugins() {
+        output::info("Initializing plugins...");
+        let plugin_config = serde_json::json!({
+            "project": project_config.project.name,
+            "workspace_root": workspace_root.to_string_lossy(),
+            "platform": project_config.cloud.platform,
+            "profile": profile_name,
+        });
+        machine.plugin_manager_mut().initialize_all(&plugin_config)?;
+        output::success("Plugins initialized");
+    }
+
+    // ── State: PluginsReady ──────────────────────────────────────────────
+    machine.advance()?; // ProfileLoaded -> PluginsReady
+
+    // HOOK: before_infra_ready — auth, cloud credential setup
+    machine.fire_before_infra_ready();
 
     // Step 3: Check Docker is running (skip in dry-run mode)
     if !dry_run {
@@ -73,8 +149,6 @@ pub async fn execute(
         let workspace_path = std::env::current_dir()?.display().to_string();
         let branch = get_git_branch()?;
 
-        // Check if DEVDOCK_ID is already set (from remote mode)
-        // If set, use it for correlation; otherwise generate new ID
         let instance_id = std::env::var("DEVDOCK_ID")
             .ok()
             .filter(|id| !id.is_empty())
@@ -102,7 +176,6 @@ pub async fn execute(
 
         (Some(state_manager), instance_id, port_base)
     } else {
-        // Generate a real ID even in dry-run for display safety, but skip DB registration
         (None, Instance::generate_id(origin), 0)
     };
 
@@ -110,74 +183,31 @@ pub async fn execute(
     if !instance_id.is_empty() {
         std::env::set_var("DEVDOCK_ID", &instance_id);
     }
+    machine.set_instance_id(instance_id.clone());
+    machine.set_port_base(_port_base);
 
-    // Step 6: Load devdock.toml and initialize plugins
-    let workspace_root = find_workspace_root()?;
-    let devdock_toml_path = workspace_root.join(".devdock/devdock.toml");
-    if !devdock_toml_path.exists() {
-        anyhow::bail!(
-            "Missing .devdock/devdock.toml — run `devdock init` to initialize your project"
-        );
-    }
-    let project_config = devdock_core::ProjectConfig::load(&devdock_toml_path)
-        .context("Failed to load .devdock/devdock.toml")?;
-    project_config.export_diagnostics_env();
+    // ── State: InfraReady ────────────────────────────────────────────────
+    machine.advance()?; // PluginsReady -> InfraReady
 
-    // Initialize PluginManager with lifecycle hooks from devdock.toml
-    let mut plugin_manager = PluginManager::new(project_config.plugins.hooks.clone());
-    if plugin_manager.has_plugins() {
-        output::info("Initializing plugins...");
-        let plugin_config = serde_json::json!({
-            "project": project_config.project.name,
-            "workspace_root": workspace_root.to_string_lossy(),
-            "platform": project_config.cloud.platform,
-            "profile": profile_name,
-        });
-        plugin_manager.initialize_all(&plugin_config)?;
-        output::success("Plugins initialized");
-    }
-
-    // HOOK: pre_start — auth, custom infra provisioning
-    if plugin_manager.has_plugins() {
-        let pre_start_ctx = serde_json::json!({
-            "profile": serde_json::to_value(&profile).unwrap_or_default(),
-            "config": {
-                "project": project_config.project.name,
-                "platform": project_config.cloud.platform,
-            },
-        });
-        let results = plugin_manager.run_hook("pre_start", &pre_start_ctx);
-        log_hook_results("pre_start", &results);
-    }
+    // HOOK: before_config_generated — fetch remote configs
+    machine.fire_before_config_generated();
 
     // Step 6b: Generate configuration files
-    // If pre_tilt plugins are configured, they handle config generation (devdock.ini etc.).
-    // Otherwise, use the built-in ConfigGenerator (requires "cloud" feature).
-    let has_pre_tilt_plugins = !project_config.plugins.hooks.pre_tilt.is_empty();
+    let has_config_plugins = !project_config.plugins.hooks.after_config_generated.is_empty();
 
-    if !has_pre_tilt_plugins {
-        // No pre_tilt plugin → generate a minimal temp_profile.yaml
+    if !has_config_plugins {
         generate_minimal_temp_profile(&workspace_root, &profile, services, dry_run).await?;
     } else {
-        // pre_tilt plugins will generate full configs (INI, platform auth, etc.)
-        output::info("Config generation delegated to pre_tilt plugins");
-        // Ensure runtime_generated directory exists for the generated Tiltfile
+        output::info("Config generation delegated to plugins");
         let runtime_dir = workspace_root.join("devdock/runtime_generated");
         std::fs::create_dir_all(&runtime_dir)?;
     }
 
-    // HOOK: pre_tilt — enrich/generate configs before Tilt
-    if plugin_manager.has_plugins() {
-        let runtime_dir = workspace_root.join("devdock/runtime_generated");
-        let pre_tilt_ctx = serde_json::json!({
-            "profile": serde_json::to_value(&profile).unwrap_or_default(),
-            "services": {},
-            "runtime_dir": runtime_dir.to_string_lossy(),
-            "workspace_root": workspace_root.to_string_lossy(),
-        });
-        let results = plugin_manager.run_hook("pre_tilt", &pre_tilt_ctx);
-        log_hook_results("pre_tilt", &results);
-    }
+    // ── State: ConfigReady ───────────────────────────────────────────────
+    machine.advance()?; // InfraReady -> ConfigReady
+
+    // HOOK: after_config_generated — write devdock.ini, enrich configs
+    machine.fire_after_config_generated();
 
     // Step 6c: Generate OSS Tiltfile
     generate_oss_tiltfile(&workspace_root, &profile)?;
@@ -186,34 +216,40 @@ pub async fn execute(
     cleanup_old_logs()?;
     cleanup_startup_state_files()?;
 
+    // ── State: TiltfileReady ─────────────────────────────────────────────
+    machine.advance()?; // ConfigReady -> TiltfileReady
+
     // If dry-run mode, exit here with timing information
     if dry_run {
         let elapsed = chrono::Utc::now() - command_start_time;
         let elapsed_ms = elapsed.num_milliseconds();
 
-        // Output timing in JSON format for benchmarking
         println!("{{\"profile\": \"{}\", \"bootstrap_time_ms\": {}}}", profile_name, elapsed_ms);
 
         output::success(&format!("Dry-run completed in {}ms", elapsed_ms));
-
-        // Force exit to avoid tokio runtime shutdown hang (benchmarking only)
         std::process::exit(0);
     }
 
     // Unwrap state_manager (safe because dry_run is false)
     let state_manager = state_manager.unwrap();
 
+    // HOOK: before_tilt — last-minute config enrichment
+    machine.fire_before_tilt();
+
     // Step 8: Update status and start Tilt
     state_manager.update_status(&instance_id, InstanceStatus::Running).await?;
-
-    // Write profile name to state file for telemetry
     write_profile_state(profile_name)?;
 
     output::info("Starting Tilt...");
     let tilt_process = start_tilt(services, profile_name)?;
 
-    // Track tilt up time for telemetry
     let tilt_up_time = chrono::Utc::now();
+
+    // ── State: TiltRunning ───────────────────────────────────────────────
+    machine.advance()?; // TiltfileReady -> TiltRunning
+
+    // HOOK: after_tilt — telemetry: session started
+    machine.fire_after_tilt();
 
     let gcp_logs_url = format!(
         "https://console.cloud.google.com/logs/query;query=labels.devdock_id%3D%22{instance_id}%22;summaryFields=labels%252Flogger_source:false:32:beginning?project={}",
@@ -228,15 +264,8 @@ pub async fn execute(
     println!("  {} {}", "Logs:   ".cyan().bold(), gcp_logs_url.underline());
     println!("  {}", "──────────────────────────────────────────────────────────".cyan());
 
-    // HOOK: post_start — telemetry, notifications
-    if plugin_manager.has_plugins() {
-        let post_start_ctx = serde_json::json!({
-            "session_id": instance_id,
-            "profile": profile_name,
-        });
-        let results = plugin_manager.run_hook("post_start", &post_start_ctx);
-        log_hook_results("post_start", &results);
-    }
+    // ── State: ResourcesStarting ─────────────────────────────────────────
+    machine.advance()?; // TiltRunning -> ResourcesStarting
 
     if run_monitor {
         println!("\nResource monitor enabled (timeout: {}s)...\n", monitor_timeout.unwrap_or(1200));
@@ -256,7 +285,7 @@ pub async fn execute(
         profile_name,
         command_start_time,
         tilt_up_time,
-        &mut plugin_manager,
+        &mut machine,
     )
     .await?;
 
@@ -271,7 +300,6 @@ fn check_docker() -> Result<()> {
 
     output::info("Checking Docker...");
 
-    // Run docker info with a timeout to prevent hanging
     let (tx, rx) = mpsc::channel();
 
     thread::spawn(move || {
@@ -280,7 +308,6 @@ fn check_docker() -> Result<()> {
         tx.send(result).ok();
     });
 
-    // Wait for result with 10 second timeout
     match rx.recv_timeout(Duration::from_secs(10)) {
         Ok(Ok(status)) if status.success() => {
             output::success("Docker is running");
@@ -347,9 +374,6 @@ fn get_git_branch() -> Result<String> {
 }
 
 /// Generate a minimal temp_profile.yaml with service names, types, and env vars.
-///
-/// Full config generation (INI files, platform auth, etc.) is handled by external
-/// plugins (e.g., devdock-plugin-config-generator) via the pre_tilt hook.
 async fn generate_minimal_temp_profile(
     workspace_root: &Path,
     profile: &devdock_core::profile::Profile,
@@ -359,12 +383,9 @@ async fn generate_minimal_temp_profile(
     let runtime_dir = workspace_root.join("devdock/runtime_generated");
     std::fs::create_dir_all(&runtime_dir)?;
 
-    // Build a minimal profile YAML with service entries and basic env vars
     let mut profile_map = serde_yaml::Mapping::new();
-
     let devdock_id = std::env::var("DEVDOCK_ID").unwrap_or_default();
 
-    // Filter services if specific ones were requested
     let service_filter: Option<Vec<&str>> = services.map(|s| s.split(',').map(str::trim).collect());
 
     let mut services_map = serde_yaml::Mapping::new();
@@ -382,7 +403,6 @@ async fn generate_minimal_temp_profile(
                 .unwrap_or(serde_yaml::Value::String("local".into())),
         );
 
-        // Add basic env vars
         let mut env_map = serde_yaml::Mapping::new();
         env_map.insert(
             serde_yaml::Value::String("DEVDOCK_ID".into()),
@@ -413,9 +433,6 @@ async fn generate_minimal_temp_profile(
 }
 
 /// Generate Tiltfile for OSS pipeline.
-///
-/// Reads .devdock/devdock.toml, discovers service configs, resolves deps,
-/// and generates a Tiltfile that loads shipped Starlark libraries.
 fn generate_oss_tiltfile(
     workspace_root: &Path,
     profile: &devdock_core::profile::Profile,
@@ -429,18 +446,15 @@ fn generate_oss_tiltfile(
     let project_config =
         ProjectConfig::load(&config_path).context("Failed to load .devdock/devdock.toml")?;
 
-    // Discover service configs
     let services_dir = workspace_root.join(&project_config.project.services_dir);
     let service_configs =
         discover_services(&services_dir).context("Failed to discover service configs")?;
 
     output::info(&format!("Discovered {} service config(s)", service_configs.len()));
 
-    // Extract requested services + infra from profile
     let mut requested: Vec<String> = profile.services.keys().cloned().collect();
     requested.extend(profile.infra.keys().cloned());
 
-    // Resolve dependencies
     let resolved = resolver::resolve(&requested, &service_configs)
         .context("Failed to resolve dependencies")?;
 
@@ -450,7 +464,6 @@ fn generate_oss_tiltfile(
         resolved.infra.len()
     ));
 
-    // Generate Tiltfile
     let tiltfile = tiltfile_generator::generate_tiltfile(
         &service_configs,
         &resolved,
@@ -458,7 +471,6 @@ fn generate_oss_tiltfile(
         workspace_root,
     );
 
-    // Write to runtime_generated/
     let runtime_dir = workspace_root.join("devdock/runtime_generated");
     std::fs::create_dir_all(&runtime_dir)?;
     std::fs::write(runtime_dir.join("Tiltfile"), &tiltfile)?;
@@ -475,7 +487,6 @@ fn cleanup_old_logs() -> Result<()> {
     let devdock_dir = PathBuf::from(&home).join(".devdock");
 
     if devdock_dir.exists() {
-        // Clean log files from service directories
         for entry in std::fs::read_dir(&devdock_dir)? {
             let entry = entry?;
             let path = entry.path();
@@ -483,7 +494,6 @@ fn cleanup_old_logs() -> Result<()> {
             if path.is_dir() {
                 let dir_name = path.file_name().unwrap().to_string_lossy();
 
-                // Skip special directories
                 if matches!(
                     dir_name.as_ref(),
                     "images" | "auth" | "sql" | "grafana" | "bazel" | "generated" | "sync"
@@ -491,7 +501,6 @@ fn cleanup_old_logs() -> Result<()> {
                     continue;
                 }
 
-                // Remove log files
                 if let Ok(entries) = std::fs::read_dir(&path) {
                     for log_entry in entries.flatten() {
                         let log_path = log_entry.path();
@@ -535,16 +544,13 @@ fn cleanup_startup_state_files() -> Result<()> {
 fn start_tilt(_services: Option<&str>, profile_name: &str) -> Result<Child> {
     let workspace_root = find_workspace_root()?;
 
-    // Set environment variables
     std::env::set_var("DEVDOCK_ROOT", &workspace_root);
     std::env::set_var("DEVDOCK_RUST_BINARY", "true");
     std::env::set_var("DEVDOCK_PROFILE", profile_name);
 
-    // Extract shipped Starlark libraries to runtime_generated/core/lib/
     devdock_core::tiltfile_generator::extract_shipped_libs_to(&workspace_root)
         .context("Failed to extract shipped Starlark libraries")?;
 
-    // Run Tilt from runtime_generated/ directory (where generated Tiltfile lives)
     let runtime_dir = workspace_root.join("devdock/runtime_generated");
     let mut cmd = Command::new("tilt");
     cmd.arg("up");
@@ -590,23 +596,17 @@ async fn wait_for_tilt(
     profile_name: &str,
     command_start_time: chrono::DateTime<chrono::Utc>,
     tilt_up_time: chrono::DateTime<chrono::Utc>,
-    plugin_manager: &mut PluginManager,
+    machine: &mut LifecycleMachine,
 ) -> Result<()> {
     use devdock_monitor::{StartupMonitor, StartupMonitorConfig, StartupResult};
     let instance_id = instance_id.to_string();
     let workspace_root = workspace_root.clone();
     let profile_name = profile_name.to_string();
 
-    // Track watch start time (when monitoring begins)
     let watch_start_time = chrono::Utc::now();
-
-    // Get PID before moving the process
     let tilt_pid = tilt_process.id();
-
-    // Convert std Child to tokio Command for async waiting
     let mut tilt_handle = tokio::task::spawn_blocking(move || tilt_process.wait());
 
-    // If monitoring is enabled, run the startup monitor
     if run_monitor {
         use devdock_monitor::StabilityConfig;
         use std::time::Duration;
@@ -616,7 +616,7 @@ async fn wait_for_tilt(
             poll_interval_secs: 2,
             notifications_enabled: true,
             show_progress: true,
-            skip_if_completed: false, // Don't skip when integrated with start
+            skip_if_completed: false,
             collect_stats: true,
             stability: StabilityConfig {
                 required_successes: 3,
@@ -636,6 +636,13 @@ async fn wait_for_tilt(
                             resources.len(),
                             duration_secs
                         ));
+
+                        // ── State: Running (all resources healthy) ───────
+                        let _ = machine.advance(); // ResourcesStarting -> Running
+                        machine.fire_after_ready(
+                            resources.len(),
+                            *duration_secs as f64,
+                        );
 
                         if telemetry_enabled {
                             emit_telemetry(
@@ -721,7 +728,12 @@ async fn wait_for_tilt(
         _ = tokio::signal::ctrl_c() => {
             output::info("Received shutdown signal, stopping DevDock...");
 
-            // Update status to stopping
+            // ── State: Stopping ──────────────────────────────────────────
+            let _ = machine.advance(); // Running/ResourcesStarting -> Stopping
+
+            // HOOK: before_stop — final telemetry flush
+            machine.fire_before_stop();
+
             state_manager
                 .update_status(&instance_id, InstanceStatus::Stopping)
                 .await
@@ -731,15 +743,12 @@ async fn wait_for_tilt(
             #[cfg(unix)]
             {
                 output::info(&format!("Terminating Tilt process: {tilt_pid}"));
-                // Send SIGTERM for graceful shutdown
                 unsafe {
                     libc::kill(tilt_pid as i32, libc::SIGTERM);
                 }
 
-                // Wait briefly for graceful shutdown (reduced from 2s to 500ms)
                 tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
-                // Check if still running, send SIGKILL
                 if unsafe { libc::kill(tilt_pid as i32, 0) } == 0 {
                     unsafe {
                         libc::kill(tilt_pid as i32, libc::SIGKILL);
@@ -747,37 +756,27 @@ async fn wait_for_tilt(
                 }
             }
 
-            // HOOK: on_stop — cleanup, final telemetry
-            if plugin_manager.has_plugins() {
-                let duration = (chrono::Utc::now() - command_start_time).num_seconds();
-                let on_stop_ctx = serde_json::json!({
-                    "session_id": instance_id,
-                    "duration_secs": duration,
-                });
-                let results = plugin_manager.run_hook("on_stop", &on_stop_ctx);
-                log_hook_results("on_stop", &results);
-            }
-            plugin_manager.shutdown_all();
+            machine.shutdown_plugins();
 
             // Perform cleanup
             perform_cleanup(&instance_id, &workspace_root).await?;
 
-            // Update status
+            // ── State: Stopped ───────────────────────────────────────────
             state_manager
                 .update_status(&instance_id, InstanceStatus::Stopped)
             .await
             .ok();
 
+            // HOOK: after_stop — post-cleanup actions
+            machine.fire_after_stop();
+
             output::success("DevDock stopped successfully");
         }
         result = &mut tilt_handle => {
-            // Tilt exited on its own
             match result {
                 Ok(Ok(status)) => {
-                    // Perform cleanup
                     perform_cleanup(&instance_id, &workspace_root).await?;
 
-                    // Update status
                     state_manager
                         .update_status(&instance_id, InstanceStatus::Stopped)
                         .await?;
@@ -787,7 +786,6 @@ async fn wait_for_tilt(
                     } else {
                         output::warn(&format!("Tilt exited with status: {status}"));
 
-                        // Emit telemetry for tilt crash
                         if telemetry_enabled {
                             emit_tilt_failure_telemetry(
                                 &instance_id,
@@ -801,7 +799,6 @@ async fn wait_for_tilt(
                 Ok(Err(e)) => {
                     output::warn(&format!("Tilt process error: {e}"));
 
-                    // Emit telemetry for tilt error
                     if telemetry_enabled {
                         emit_tilt_failure_telemetry(
                             &instance_id,
@@ -834,16 +831,9 @@ async fn wait_for_tilt(
 async fn perform_cleanup(_instance_id: &str, workspace_root: &Path) -> Result<()> {
     output::info("Cleaning up DevDock resources...");
 
-    // 1. Stop Docker containers (fast with batch command)
     cleanup_docker_containers()?;
-
-    // 2. Kill processes on ports (fast without sleeps)
     cleanup_port_processes()?;
-
-    // 3. Clean up dangling images (optimized batch command)
     cleanup_dangling_images()?;
-
-    // 4. Clean up temporary files (fast)
     cleanup_temp_files(workspace_root)?;
 
     output::success("Cleanup complete");
@@ -854,8 +844,6 @@ async fn perform_cleanup(_instance_id: &str, workspace_root: &Path) -> Result<()
 fn cleanup_docker_containers() -> Result<()> {
     output::info("Stopping Docker containers...");
 
-    // Use batch docker command for much faster cleanup
-    // This stops and removes all devdock containers in one command
     #[cfg(unix)]
     {
         let status = Command::new("sh")
@@ -874,7 +862,6 @@ fn cleanup_docker_containers() -> Result<()> {
 
     #[cfg(not(unix))]
     {
-        // Fallback for non-Unix systems
         let output = Command::new("docker")
             .args(["ps", "-a", "--filter", "name=devdock-", "-q"])
             .output()?;
@@ -907,7 +894,6 @@ fn cleanup_port_processes() -> Result<()> {
 
     #[cfg(unix)]
     {
-        // Collect all PIDs first to kill them in batch
         let mut pids_to_kill = Vec::new();
 
         for port in ports {
@@ -925,7 +911,6 @@ fn cleanup_port_processes() -> Result<()> {
             }
         }
 
-        // Kill all processes at once with SIGKILL (fast)
         for pid in pids_to_kill {
             unsafe {
                 if libc::kill(pid, libc::SIGKILL) == 0 {
@@ -948,7 +933,6 @@ fn cleanup_dangling_images() -> Result<()> {
 
     #[cfg(unix)]
     {
-        // Use batch command for fast cleanup
         let status = Command::new("sh")
             .arg("-c")
             .arg("docker images --filter 'dangling=true' -q | xargs -r docker rmi 2>/dev/null || true")
@@ -965,7 +949,6 @@ fn cleanup_dangling_images() -> Result<()> {
 
     #[cfg(not(unix))]
     {
-        // Fallback for non-Unix systems
         let output =
             Command::new("docker").args(["images", "--filter", "dangling=true", "-q"]).output()?;
 
@@ -1009,7 +992,6 @@ fn cleanup_temp_files(workspace_root: &Path) -> Result<()> {
         }
     }
 
-    // Clean up runtime_generated directory
     output::info(&format!("Workspace root: {}", workspace_root.display()));
 
     let runtime_gen = workspace_root.join("devdock/runtime_generated");
@@ -1030,7 +1012,6 @@ fn cleanup_temp_files(workspace_root: &Path) -> Result<()> {
         output::info("runtime_generated directory not found (may already be clean)");
     }
 
-    // Also clean up config files
     let config_files = vec![
         workspace_root.join("devdock/devdock.ini"),
         workspace_root.join("config/devdock.ini"),
@@ -1062,8 +1043,6 @@ async fn emit_telemetry(
     let now = chrono::Utc::now();
     let total_startup_secs = (now - command_start_time).num_seconds() as f64;
 
-    // Telemetry sync is handled by external plugins (e.g., devdock-plugin-bigquery-sync).
-    // The devdock binary only collects and logs to file.
     use devdock_telemetry::{SessionMetrics, TelemetryEmitter, TelemetrySnapshot};
 
     let session = SessionMetrics {
@@ -1091,7 +1070,6 @@ async fn emit_telemetry(
 
     let snapshot = TelemetrySnapshot { session: Some(session), ..Default::default() };
 
-    // Emit to file (built-in, always available)
     let emitter = devdock_telemetry::FileEmitter::new("~/.devdock/telemetry");
     if let Err(e) = emitter.emit(&snapshot).await {
         tracing::debug!("File telemetry: {e}");
@@ -1105,7 +1083,6 @@ async fn emit_tilt_failure_telemetry(
     failure_type: &str,
     command_start_time: chrono::DateTime<chrono::Utc>,
 ) {
-    // Emit failure via file telemetry (BigQuery sync via external plugin)
     emit_telemetry(
         devdock_id,
         failure_type,
@@ -1135,29 +1112,7 @@ fn get_machine_id() -> String {
         }
     }
 
-    // Fallback to USER env var
     std::env::var("USER").unwrap_or_else(|_| "unknown".to_string())
-}
-
-/// Log plugin hook results (info for success, warn for errors).
-fn log_hook_results(hook: &str, results: &[(String, Result<serde_json::Value, String>)]) {
-    for (plugin_name, result) in results {
-        match result {
-            Ok(response) => {
-                let status = response.get("status").and_then(|s| s.as_str()).unwrap_or("unknown");
-                if status == "ok" {
-                    output::info(&format!("[{hook}] {plugin_name}: ok"));
-                } else {
-                    let msg =
-                        response.get("message").and_then(|m| m.as_str()).unwrap_or("unknown error");
-                    output::warn(&format!("[{hook}] {plugin_name}: {status} — {msg}"));
-                }
-            }
-            Err(e) => {
-                output::warn(&format!("[{hook}] {plugin_name}: error — {e}"));
-            }
-        }
-    }
 }
 
 /// Write current profile name to state file for telemetry

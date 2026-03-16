@@ -2,6 +2,8 @@
 members = [
     "crates/devdock-core",
     "crates/devdock-cli",
+    "crates/devdock-lifecycle",
+    "crates/devdock-mcp",
     "crates/devdock-config",
     "crates/devdock-state",
     "crates/devdock-codegen",
@@ -13,14 +15,14 @@ members = [
 ]
 exclude = [
     "plugins/sdk",
-    "plugins/common/bigquery-sync",
-    "plugins/common/jira-reporter",
-    "plugins/common/slack-notifier",
-    "plugins/common/sql-hydrator",
-    "plugins/common/opensearch-reindex",
-    "plugins/glean/gcs-storage",
-    "plugins/glean/s3-storage",
-    "plugins/glean/config-generator",
+    "plugins/telemetry/bigquery-sync",
+    "plugins/notifications/slack-notifier",
+    "plugins/diagnostics/jira-reporter",
+    "plugins-glean/platform-auth",
+    "plugins-glean/config-fetcher",
+    "plugins-glean/config-writer",
+    "plugins-glean/sql-hydrator",
+    "plugins-glean/opensearch-hydrator",
 ]
 resolver = "2"
 

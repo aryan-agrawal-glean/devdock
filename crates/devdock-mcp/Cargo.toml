@@ -1,0 +1,25 @@
+[package]
+name = "devdock-mcp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "MCP server for AI agent integration with DevDock"
+
+[lints]
+workspace = true
+
+[dependencies]
+devdock-core = { path = "../devdock-core" }
+devdock-config = { path = "../devdock-config" }
+devdock-state = { path = "../devdock-state" }
+devdock-lifecycle = { path = "../devdock-lifecycle" }
+
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+reqwest.workspace = true

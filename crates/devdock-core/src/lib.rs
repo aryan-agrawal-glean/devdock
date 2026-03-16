@@ -18,6 +18,6 @@ pub use error::{Error, Result};
 pub use plugin::BackendRegistry;
 pub use plugin_manager::PluginManager;
 pub use profile::{InfraConfig, IniOverride, Profile, ServiceConfig};
-pub use project_config::{PluginHooks, PluginsSection, ProjectConfig};
+pub use project_config::{PluginHooks, PluginsSection, ProjectConfig, ResourceHooks};
 pub use resolver::{resolve, ResolvedDeps};
 pub use service_config::{discover_services, ComponentKind, DevdockServiceConfig};

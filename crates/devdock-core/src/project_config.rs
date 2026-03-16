@@ -97,6 +97,20 @@ pub struct PluginsSection {
     /// Lifecycle hooks — maps hook names to ordered lists of plugin executables.
     #[serde(default)]
     pub hooks: PluginHooks,
+    /// Per-resource hooks — maps resource names to before/after start hooks.
+    #[serde(default)]
+    pub resource_hooks: std::collections::HashMap<String, ResourceHooks>,
+}
+
+/// Per-resource hook definitions.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ResourceHooks {
+    /// Plugins to run before this resource starts.
+    #[serde(default)]
+    pub before_start: Vec<String>,
+    /// Plugins to run after this resource becomes healthy.
+    #[serde(default)]
+    pub after_start: Vec<String>,
 }
 
 /// Lifecycle hook definitions.
@@ -105,21 +119,42 @@ pub struct PluginsSection {
 /// Plugins are spawned as child processes and communicate via JSON-lines.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PluginHooks {
-    /// Runs before anything — auth, custom infra provisioning.
+    /// Fires after the profile YAML is loaded.
     #[serde(default)]
-    pub pre_start: Vec<String>,
-    /// Runs after generic config gen, before Tilt — enrich configs, generate devdock.ini.
+    pub after_profile_loaded: Vec<String>,
+    /// Fires before Docker/ports setup — auth, cloud credential setup.
     #[serde(default)]
-    pub pre_tilt: Vec<String>,
-    /// Runs after Tilt starts — telemetry, notifications.
+    pub before_infra_ready: Vec<String>,
+    /// Fires after Docker/ports are ready.
     #[serde(default)]
-    pub post_start: Vec<String>,
-    /// Runs when `devdock report` is invoked.
+    pub after_infra_ready: Vec<String>,
+    /// Fires before config files are generated — fetch remote configs.
+    #[serde(default)]
+    pub before_config_generated: Vec<String>,
+    /// Fires after config files are generated — write devdock.ini, enrich configs.
+    #[serde(default)]
+    pub after_config_generated: Vec<String>,
+    /// Fires before Tilt spawns — last-minute config enrichment.
+    #[serde(default)]
+    pub before_tilt: Vec<String>,
+    /// Fires after Tilt is up — telemetry: session started.
+    #[serde(default)]
+    pub after_tilt: Vec<String>,
+    /// Fires when all resources are healthy — notifications.
+    #[serde(default)]
+    pub after_ready: Vec<String>,
+    /// Fires on Ctrl+C / exit signal — final telemetry flush.
+    #[serde(default)]
+    pub before_stop: Vec<String>,
+    /// Fires after cleanup is complete.
+    #[serde(default)]
+    pub after_stop: Vec<String>,
+    /// Fires on unrecoverable error.
+    #[serde(default)]
+    pub on_error: Vec<String>,
+    /// Fires when `devdock report` is invoked.
     #[serde(default)]
     pub on_report: Vec<String>,
-    /// Runs when `devdock stop` is invoked — cleanup, final telemetry.
-    #[serde(default)]
-    pub on_stop: Vec<String>,
 }
 
 impl PluginHooks {
@@ -127,9 +162,20 @@ impl PluginHooks {
     pub fn all_plugins(&self) -> Vec<String> {
         let mut seen = std::collections::HashSet::new();
         let mut plugins = Vec::new();
-        for list in
-            [&self.pre_start, &self.pre_tilt, &self.post_start, &self.on_report, &self.on_stop]
-        {
+        for list in [
+            &self.after_profile_loaded,
+            &self.before_infra_ready,
+            &self.after_infra_ready,
+            &self.before_config_generated,
+            &self.after_config_generated,
+            &self.before_tilt,
+            &self.after_tilt,
+            &self.after_ready,
+            &self.before_stop,
+            &self.after_stop,
+            &self.on_error,
+            &self.on_report,
+        ] {
             for name in list {
                 if seen.insert(name.clone()) {
                     plugins.push(name.clone());
@@ -142,22 +188,36 @@ impl PluginHooks {
     /// Returns the plugin names for a given hook.
     pub fn get_hook(&self, hook: &str) -> &[String] {
         match hook {
-            "pre_start" => &self.pre_start,
-            "pre_tilt" => &self.pre_tilt,
-            "post_start" => &self.post_start,
+            "after_profile_loaded" => &self.after_profile_loaded,
+            "before_infra_ready" => &self.before_infra_ready,
+            "after_infra_ready" => &self.after_infra_ready,
+            "before_config_generated" => &self.before_config_generated,
+            "after_config_generated" => &self.after_config_generated,
+            "before_tilt" => &self.before_tilt,
+            "after_tilt" => &self.after_tilt,
+            "after_ready" => &self.after_ready,
+            "before_stop" => &self.before_stop,
+            "after_stop" => &self.after_stop,
+            "on_error" => &self.on_error,
             "on_report" => &self.on_report,
-            "on_stop" => &self.on_stop,
             _ => &[],
         }
     }
 
     /// Returns true if any hooks are configured.
     pub fn has_any(&self) -> bool {
-        !self.pre_start.is_empty()
-            || !self.pre_tilt.is_empty()
-            || !self.post_start.is_empty()
+        !self.after_profile_loaded.is_empty()
+            || !self.before_infra_ready.is_empty()
+            || !self.after_infra_ready.is_empty()
+            || !self.before_config_generated.is_empty()
+            || !self.after_config_generated.is_empty()
+            || !self.before_tilt.is_empty()
+            || !self.after_tilt.is_empty()
+            || !self.after_ready.is_empty()
+            || !self.before_stop.is_empty()
+            || !self.after_stop.is_empty()
+            || !self.on_error.is_empty()
             || !self.on_report.is_empty()
-            || !self.on_stop.is_empty()
     }
 }
 
@@ -340,18 +400,18 @@ mod tests {
         name = "test"
 
         [plugins.hooks]
-        pre_start = ["devdock-plugin-gcloud-auth"]
-        pre_tilt = ["devdock-plugin-config-gen"]
-        post_start = ["devdock-plugin-bigquery-sync"]
+        before_infra_ready = ["devdock-plugin-gcloud-auth"]
+        before_config_generated = ["devdock-plugin-config-gen"]
+        after_tilt = ["devdock-plugin-bigquery-sync"]
         on_report = ["devdock-plugin-jira-reporter", "devdock-plugin-slack-notifier"]
-        on_stop = ["devdock-plugin-bigquery-sync"]
+        before_stop = ["devdock-plugin-bigquery-sync"]
         "#;
         let c = ProjectConfig::parse(toml).unwrap();
-        assert_eq!(c.plugins.hooks.pre_start, vec!["devdock-plugin-gcloud-auth"]);
-        assert_eq!(c.plugins.hooks.pre_tilt, vec!["devdock-plugin-config-gen"]);
+        assert_eq!(c.plugins.hooks.before_infra_ready, vec!["devdock-plugin-gcloud-auth"]);
+        assert_eq!(c.plugins.hooks.before_config_generated, vec!["devdock-plugin-config-gen"]);
         assert_eq!(c.plugins.hooks.on_report.len(), 2);
         assert!(c.plugins.hooks.has_any());
-        // all_plugins deduplicates bigquery-sync (in post_start and on_stop)
+        // all_plugins deduplicates bigquery-sync (in after_tilt and before_stop)
         let all = c.plugins.hooks.all_plugins();
         assert_eq!(all.iter().filter(|p| *p == "devdock-plugin-bigquery-sync").count(), 1);
     }

@@ -4,7 +4,7 @@
 //! The PluginManager owns all plugin processes for a session and dispatches
 //! lifecycle hooks to them in the order configured in `devdock.toml`.
 
-use crate::project_config::PluginHooks;
+use crate::project_config::{PluginHooks, ResourceHooks};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, Command, Stdio};
@@ -71,6 +71,8 @@ pub struct PluginManager {
     processes: HashMap<String, PluginProcess>,
     /// Hook configuration — which plugins run at which hook point.
     hooks: PluginHooks,
+    /// Per-resource hook configuration.
+    resource_hooks: HashMap<String, ResourceHooks>,
 }
 
 impl PluginManager {
@@ -78,24 +80,51 @@ impl PluginManager {
     ///
     /// Does NOT spawn any processes yet — call `initialize_all()` to start them.
     pub fn new(hooks: PluginHooks) -> Self {
-        Self { processes: HashMap::new(), hooks }
+        Self { processes: HashMap::new(), hooks, resource_hooks: HashMap::new() }
+    }
+
+    /// Create a PluginManager with resource hooks.
+    pub fn with_resource_hooks(
+        hooks: PluginHooks,
+        resource_hooks: HashMap<String, ResourceHooks>,
+    ) -> Self {
+        Self { processes: HashMap::new(), hooks, resource_hooks }
     }
 
     /// Create a no-op PluginManager (no hooks configured).
     pub fn empty() -> Self {
-        Self { processes: HashMap::new(), hooks: PluginHooks::default() }
+        Self {
+            processes: HashMap::new(),
+            hooks: PluginHooks::default(),
+            resource_hooks: HashMap::new(),
+        }
     }
 
     /// Returns true if any hooks are configured.
     pub fn has_plugins(&self) -> bool {
         self.hooks.has_any()
+            || self
+                .resource_hooks
+                .values()
+                .any(|rh| !rh.before_start.is_empty() || !rh.after_start.is_empty())
     }
 
     /// Spawn all referenced plugin processes and send initialize message.
     ///
     /// The `config` value is sent as the initialize payload to each plugin.
     pub fn initialize_all(&mut self, config: &serde_json::Value) -> crate::Result<()> {
-        let all_plugins = self.hooks.all_plugins();
+        let mut all_plugins = self.hooks.all_plugins();
+
+        // Also include plugins from resource hooks
+        let mut seen: std::collections::HashSet<String> = all_plugins.iter().cloned().collect();
+        for rh in self.resource_hooks.values() {
+            for name in rh.before_start.iter().chain(rh.after_start.iter()) {
+                if seen.insert(name.clone()) {
+                    all_plugins.push(name.clone());
+                }
+            }
+        }
+
         if all_plugins.is_empty() {
             return Ok(());
         }
@@ -171,6 +200,44 @@ impl PluginManager {
         results
     }
 
+    /// Run a per-resource hook, dispatching to plugins configured for that resource.
+    ///
+    /// Looks up resource_hooks in the PluginsSection to find which plugins handle
+    /// before_start / after_start for the given resource name.
+    pub fn run_resource_hook(
+        &mut self,
+        hook: &str,
+        resource_name: &str,
+        context: &serde_json::Value,
+    ) -> Vec<(String, Result<serde_json::Value, String>)> {
+        let plugin_names: Vec<String> = self
+            .resource_hooks
+            .get(resource_name)
+            .map(|rh| match hook {
+                "before_resource_start" => rh.before_start.clone(),
+                "after_resource_start" => rh.after_start.clone(),
+                _ => Vec::new(),
+            })
+            .unwrap_or_default();
+
+        let mut results = Vec::new();
+        for plugin_name in &plugin_names {
+            let msg = serde_json::json!({
+                "method": hook,
+                "params": context,
+            });
+
+            let result = if let Some(process) = self.processes.get_mut(plugin_name) {
+                process.send(&msg)
+            } else {
+                Err(format!("Plugin '{plugin_name}' not initialized"))
+            };
+
+            results.push((plugin_name.clone(), result));
+        }
+        results
+    }
+
     /// Shutdown all plugin processes gracefully.
     pub fn shutdown_all(&mut self) {
         for (_, mut process) in self.processes.drain() {
@@ -231,7 +298,8 @@ mod tests {
 
     #[test]
     fn manager_with_hooks_has_plugins() {
-        let hooks = PluginHooks { pre_start: vec!["test-plugin".into()], ..Default::default() };
+        let hooks =
+            PluginHooks { before_infra_ready: vec!["test-plugin".into()], ..Default::default() };
         let mgr = PluginManager::new(hooks);
         assert!(mgr.has_plugins());
     }
@@ -239,7 +307,7 @@ mod tests {
     #[test]
     fn run_hook_on_empty_returns_empty() {
         let mut mgr = PluginManager::empty();
-        let results = mgr.run_hook("pre_start", &serde_json::json!({}));
+        let results = mgr.run_hook("before_infra_ready", &serde_json::json!({}));
         assert!(results.is_empty());
     }
 
