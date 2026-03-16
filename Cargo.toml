@@ -18,11 +18,11 @@ exclude = [
     "plugins/telemetry/bigquery-sync",
     "plugins/notifications/slack-notifier",
     "plugins/diagnostics/jira-reporter",
-    "plugins-glean/platform-auth",
-    "plugins-glean/config-fetcher",
-    "plugins-glean/config-writer",
-    "plugins-glean/sql-hydrator",
-    "plugins-glean/opensearch-hydrator",
+    "plugins/glean/platform-auth",
+    "plugins/glean/config-fetcher",
+    "plugins/glean/config-writer",
+    "plugins/glean/sql-hydrator",
+    "plugins/glean/opensearch-hydrator",
 ]
 resolver = "2"
 

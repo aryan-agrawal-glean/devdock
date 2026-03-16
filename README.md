@@ -23,51 +23,47 @@ Sub-60 second startup. No scripts. No manual configuration.
 
 ## Architecture
 
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│                        devdock start <profile>                       │
-│                                                                      │
-│  ┌─────────────┐   ┌──────────────┐   ┌─────────────────────────┐  │
-│  │ Profile YAML │──→│  Dependency  │──→│  Runtime Generation     │  │
-│  │ (what to     │   │  Resolver    │   │  • devdock.ini          │  │
-│  │  run)        │   │  (DFS)       │   │  • temp_profile.yaml    │  │
-│  └─────────────┘   └──────────────┘   │  • Tiltfile             │  │
-│                                        │  • watch_file_*.yaml    │  │
-│  ┌─────────────┐   ┌──────────────┐   └────────────┬────────────┘  │
-│  │ devdock.toml│──→│  Platform    │                 │               │
-│  │ (project    │   │  Auth        │                 ▼               │
-│  │  config)    │   │  (GCP/AWS)   │   ┌─────────────────────────┐  │
-│  └─────────────┘   └──────────────┘   │  Tilt                   │  │
-│                                        │  ┌───────────────────┐  │  │
-│  ┌─────────────┐                      │  │ Shipped Starlark  │  │  │
-│  │ devdock_    │                      │  │ Libraries         │  │  │
-│  │ config.json │                      │  │ • service.Tiltfile│  │  │
-│  │ (per-service│                      │  │ • docker.Tiltfile │  │  │
-│  │  metadata)  │                      │  │ • bazel.Tiltfile  │  │  │
-│  └─────────────┘                      │  └───────────────────┘  │  │
-│                                        │           │              │  │
-│                                        │           ▼              │  │
-│                                        │  ┌─── Docker ────────┐  │  │
-│                                        │  │ Bazel builds      │  │  │
-│                                        │  │ Dockerfile gen    │  │  │
-│                                        │  │ Compose gen       │  │  │
-│                                        │  │ Container mgmt   │  │  │
-│                                        │  └──────────────────┘  │  │
-│                                        └─────────────────────────┘  │
-│                                                                      │
-│  ┌──────────── External Plugins (JSON stdin/stdout) ─────────────┐  │
-│  │ bigquery-sync │ jira-reporter │ slack-notifier │ gcs-storage  │  │
-│  └───────────────────────────────────────────────────────────────┘  │
-└──────────────────────────────────────────────────────────────────────┘
-```
+DevDock uses an explicit **lifecycle state machine** to drive startup. Each state transition fires plugin hooks, making the pipeline fully extensible:
 
-### How It Works
+```
+devdock start <profile>
+│
+├── Initializing ─── Parse CLI args, find workspace root
+│
+├── ProfileLoaded ── Load profile YAML, validate, resolve dependencies
+│   └── hook: after_profile_loaded
+│
+├── PluginsReady ─── Load devdock.toml, spawn plugin processes
+│   └── hook: before_infra_ready (auth, cloud credentials)
+│
+├── InfraReady ───── Docker check, networks, port allocation
+│   └── hook: before_config_generated (fetch remote configs)
+│
+├── ConfigReady ──── Generate temp_profile.yaml, devdock.ini
+│   └── hook: after_config_generated (enrich configs)
+│
+├── TiltfileReady ── Discover services, resolve deps, generate Tiltfile
+│   └── hook: before_tilt (last-minute config)
+│
+├── TiltRunning ──── Spawn `tilt up`, extract Starlark libs
+│   └── hook: after_tilt (telemetry: session started)
+│
+├── ResourcesStarting ── Per-resource startup with hooks:
+│   │   hook: before_resource_start(name, kind)
+│   │   hook: after_resource_start(name, kind)
+│   └── e.g., sql-hydrator runs after SQL becomes healthy
+│
+├── Running ──────── All resources healthy, steady state
+│   └── hook: after_ready (notifications: "DevDock ready in 3m")
+│
+├── Stopping ─────── Ctrl+C or Tilt exits
+│   └── hook: before_stop (final telemetry flush)
+│
+└── Stopped ──────── Cleanup complete
+    └── hook: after_stop
 
-1. **You define** services (`devdock_config.json`) and profiles (`*.yaml`)
-2. **DevDock generates** all runtime configs (INI, Tiltfile, watch patterns)
-3. **Tilt orchestrates** Docker containers using shipped Starlark libraries
-4. **Bazel builds** on host, binaries volume-mounted into containers
-5. **External plugins** handle telemetry sync, bug reporting, notifications
+Any state → Failed → hook: on_error → Stopping
+```
 
 ### What's in Your Repo vs What DevDock Ships
 
@@ -151,9 +147,8 @@ services:
 
 ```bash
 devdock start default
-# → Generates configs
-# → Builds with Bazel
-# → Starts Docker containers
+# → Lifecycle machine runs through all states
+# → Generates configs, builds with Bazel, starts Docker containers
 # → Tilt UI at http://localhost:10350
 ```
 
@@ -165,8 +160,8 @@ devdock start default
 [project]
 name = "my-project"
 domain = "localhost"
-services_dir = "devdock/config/services"    # where service configs live
-infra_dir = "devdock/config/infra"          # where infra compose files live
+services_dir = "devdock/config/services"
+infra_dir = "devdock/config/infra"
 
 [cloud]
 platform = "google"           # google, aws, azure, none
@@ -182,10 +177,21 @@ provider = "ssh"              # ssh, coder
 
 [diagnostics]
 reporter = "stdout"           # stdout, jira
-jira_url = "https://your-org.atlassian.net"
-jira_email = "bot@your-org.com"
-jira_project = "ENG"
-secret_project = "your-gcp-project"
+
+[plugins.hooks]
+before_infra_ready = ["my-auth-plugin"]
+after_config_generated = ["my-config-plugin"]
+after_tilt = ["devdock-plugin-bigquery-sync"]
+after_ready = ["devdock-plugin-slack-notifier"]
+before_stop = ["devdock-plugin-bigquery-sync"]
+on_error = ["devdock-plugin-jira-reporter"]
+on_report = ["devdock-plugin-jira-reporter"]
+
+[plugins.resource_hooks.sql]
+after_start = ["devdock-plugin-sql-hydrator"]
+
+[plugins.resource_hooks.opensearch]
+after_start = ["devdock-plugin-opensearch-hydrator"]
 ```
 
 ### Service Config (`devdock_config.json`)
@@ -199,7 +205,6 @@ secret_project = "your-gcp-project"
 | `dependencies` | No | Other services/infra this service needs |
 | `env` | No | Environment variables |
 | `healthcheck` | No | Docker healthcheck config |
-| `requirements` | No | Python requirements paths (linux, darwin, wheels) |
 
 ### Profile (`*.yaml`)
 
@@ -220,43 +225,100 @@ services:
     hot_reload: enable
   worker:
     type: local
-
-# Optional: multi-project support
-multi_project:
-  project: secondary-project
-  services:
-    internal_admin:
-      type: remote
 ```
 
-## External Plugins
+## Lifecycle Hooks
+
+DevDock fires **14 plugin hooks** at state transitions. Plugins only need to handle hooks they care about.
+
+| Hook | When | Example Use |
+|------|------|-------------|
+| `after_profile_loaded` | Profile YAML loaded | Validate custom fields |
+| `before_infra_ready` | Before Docker/ports | Cloud auth, credentials |
+| `after_infra_ready` | After Docker/ports | Custom network setup |
+| `before_config_generated` | Before config files | Fetch remote configs (GCS/S3) |
+| `after_config_generated` | After config files | Write devdock.ini, enrich configs |
+| `before_tilt` | Before Tilt spawns | Last-minute config |
+| `after_tilt` | After Tilt is up | Telemetry: session started |
+| `before_resource_start` | Before resource starts | Per-resource setup |
+| `after_resource_start` | After resource healthy | SQL hydration, search reindex |
+| `after_ready` | All resources healthy | Slack: "DevDock ready in 3m" |
+| `before_stop` | Ctrl+C / exit signal | Final telemetry flush |
+| `after_stop` | After cleanup | Post-cleanup actions |
+| `on_error` | Unrecoverable error | Create Jira ticket |
+| `on_report` | `devdock report` | Create bug report |
+
+## MCP Server
+
+DevDock includes an MCP (Model Context Protocol) server for AI agent integration. This lets Claude Code, Cursor, Codex, and other AI tools control DevDock directly.
+
+### Setup
+
+Add to your project's `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "devdock": {
+      "command": "devdock",
+      "args": ["mcp", "serve"]
+    }
+  }
+}
+```
+
+### Available Tools
+
+| Tool | Description |
+|------|-------------|
+| `devdock_start` | Start a profile (dry-run or real) |
+| `devdock_stop` | Stop current instance |
+| `devdock_status` | Get all resource health from Tilt API |
+| `devdock_resource_status` | Get health of a specific resource |
+| `devdock_logs` | Get recent logs for a service |
+| `devdock_profile_list` | List available profiles |
+| `devdock_profile_show` | Show profile details |
+| `devdock_validate` | Validate a profile |
+| `devdock_plugin_create` | Scaffold a new plugin |
+| `devdock_plugin_list` | List installed plugins |
+| `devdock_lifecycle_state` | Get current lifecycle state |
+| `devdock_config_show` | Show devdock.toml contents |
+
+## Plugins
 
 DevDock uses external plugins for cloud integrations. Plugins are standalone executables that communicate via JSON over stdin/stdout.
 
 ### Available Plugins
 
-| Plugin | Location | What it does |
-|--------|----------|-------------|
-| `bigquery-sync` | `plugins/common/` | Sync telemetry to BigQuery |
-| `jira-reporter` | `plugins/common/` | Create Jira tickets for bug reports |
-| `slack-notifier` | `plugins/common/` | Send Slack notifications |
-| `gcs-storage` | `plugins/glean/` | Read config from GCS buckets |
-| `s3-storage` | `plugins/glean/` | Read config from S3 buckets |
+| Plugin | Location | Hooks |
+|--------|----------|-------|
+| `bigquery-sync` | `plugins/telemetry/` | `after_tilt`, `after_ready`, `before_stop` |
+| `slack-notifier` | `plugins/notifications/` | `after_ready`, `on_error` |
+| `jira-reporter` | `plugins/diagnostics/` | `on_error`, `on_report` |
+
+Glean-specific plugins (in `plugins/glean/`):
+
+| Plugin | Hook |
+|--------|------|
+| `platform-auth` | `before_infra_ready` |
+| `config-fetcher` | `before_config_generated` |
+| `config-writer` | `after_config_generated` |
+| `sql-hydrator` | `after_resource_start("sql")` |
+| `opensearch-hydrator` | `after_resource_start("opensearch")` |
 
 ### Install a Plugin
 
 ```bash
-cargo install --path plugins/common/bigquery-sync
+cargo install --path plugins/telemetry/bigquery-sync
 ```
 
 ### Create Your Own Plugin
 
 ```bash
 devdock plugin create my-metrics --type telemetry --language python
-# Generates ~/.devdock/plugins/my-metrics/ with boilerplate
 ```
 
-Plugin templates available for **Rust**, **Python**, **Go**, and **Bash**. Rust plugins use the `devdock-plugin-sdk` crate for type-safe, native-performance plugins.
+Plugin templates available for **Rust**, **Python**, **Go**, and **Bash**.
 
 ### Plugin Protocol
 
@@ -267,8 +329,8 @@ devdock binary                    plugin executable
     │   "config":{...}} ──────────────→│
     │   ←────────────────────────────── {"status":"ok"}
     │                                  │
-    ├─ {"method":"emit",               │
-    │   "event":{...}} ───────────────→│
+    ├─ {"method":"after_tilt",         │
+    │   "params":{...}} ──────────────→│
     │   ←────────────────────────────── {"status":"ok"}
     │                                  │
     ├─ {"method":"shutdown"} ─────────→│
@@ -308,97 +370,110 @@ devdock start <profile> -m remote   # Start on remote workspace
 devdock sync start                  # Start file sync
 devdock ports forward --all         # Forward remote ports
 
-# Infrastructure
-devdock infra sql setup             # Hydrate local SQL
-devdock infra opensearch copy       # Copy search indexes
-
 # Plugins
-devdock plugin list                 # Show backends + installed plugins
+devdock plugin list                 # Show installed plugins
 devdock plugin create <name>        # Create external plugin
+
+# MCP server
+devdock mcp serve                   # Start MCP server (stdin/stdout)
 
 # Diagnostics
 devdock report                      # Generate and submit bug report
 devdock docker check                # Check Docker status
 devdock profile list                # List available profiles
-
-# Logging
-devdock logs enable                 # Set up logging (via plugin)
-devdock logs status                 # Check logging status
+devdock monitor                     # Monitor startup health
 ```
 
 ## Repo Structure
 
 ```
 devdock/
-├── crates/                     # Rust source (zero cloud-specific code)
-│   ├── devdock-cli/            #   CLI commands, entry point
-│   ├── devdock-core/           #   Core types, Tiltfile generator, plugin traits
-│   ├── devdock-config/         #   Config generation (devdock.ini, profiles)
-│   ├── devdock-remote/         #   Remote dev (SSH, Coder)
-│   ├── devdock-sync/           #   File sync daemon
-│   ├── devdock-monitor/        #   Startup health monitoring
-│   ├── devdock-state/          #   SQLite state management
-│   ├── devdock-telemetry/      #   Telemetry collection (sync via plugins)
-│   ├── devdock-diagnostics/    #   Bug reporting
-│   └── devdock-codegen/        #   Config codegen
-├── lib/                        # Shipped Starlark libraries
-│   ├── service.Tiltfile        #   Service orchestration
-│   ├── docker.Tiltfile         #   Dockerfile/compose generation
-│   ├── bazel.Tiltfile          #   Bazel build helpers
-│   └── templates/              #   Dockerfile templates (Python, Go, Java)
-├── infra/                      # Default infra compose files
+├── crates/                         # Rust source (12 crates, zero cloud-specific code)
+│   ├── devdock-cli/                #   CLI entry point, commands
+│   ├── devdock-lifecycle/          #   Lifecycle state machine, hooks, contexts
+│   ├── devdock-mcp/                #   MCP server for AI agent integration
+│   ├── devdock-core/               #   Core types, Tiltfile generator, plugin manager
+│   ├── devdock-config/             #   Profile loading, validation, watch patterns
+│   ├── devdock-state/              #   SQLite instance tracking
+│   ├── devdock-codegen/            #   Config code generation
+│   ├── devdock-remote/             #   Remote dev (SSH, Coder)
+│   ├── devdock-sync/               #   File sync daemon
+│   ├── devdock-monitor/            #   Startup health monitoring
+│   ├── devdock-telemetry/          #   Telemetry collection + file emitter
+│   └── devdock-diagnostics/        #   Bug reporting
 ├── plugins/
-│   ├── sdk/                    #   Plugin SDK (Rust crate)
-│   ├── common/                 #   Community plugins (BigQuery, Jira, Slack)
-│   ├── glean/                  #   Glean-specific plugins (GCS, S3)
-│   ├── templates/              #   Plugin scaffolding (Rust, Python, Go, Bash)
-│   └── examples/               #   Example plugins (Prometheus, Slack)
-├── tests/fixtures/             # Test repos
-├── docs/                       # Documentation
-├── CLAUDE.md                   # Claude Code development guide
-├── CONTRIBUTING.md
-├── LICENSE-MIT
-└── LICENSE-APACHE
+│   ├── sdk/                        #   Plugin SDK (Rust crate, JSON protocol)
+│   ├── telemetry/
+│   │   └── bigquery-sync/          #   Telemetry → BigQuery
+│   ├── notifications/
+│   │   └── slack-notifier/         #   Slack notifications
+│   ├── diagnostics/
+│   │   └── jira-reporter/          #   Jira bug reports
+│   ├── glean/                      #   Glean-specific plugins
+│   │   ├── platform-auth/          #   Cloud authentication
+│   │   ├── config-fetcher/         #   Fetch configs from GCS/S3
+│   │   ├── config-writer/          #   Generate devdock.ini
+│   │   ├── sql-hydrator/           #   Hydrate SQL databases
+│   │   └── opensearch-hydrator/    #   Reindex OpenSearch
+│   ├── templates/                  #   Plugin scaffolding (Rust, Python, Go, Bash)
+│   └── examples/                   #   Example plugins (Prometheus, Slack)
+├── skills/                         #   Claude Code skills
+│   ├── devdock-start.md
+│   ├── devdock-debug.md
+│   ├── devdock-plugin-create.md
+│   └── devdock-profile-create.md
+├── lib/                            #   Shipped Starlark libraries
+│   ├── service.Tiltfile
+│   ├── docker.Tiltfile
+│   ├── bazel.Tiltfile
+│   └── templates/                  #   Dockerfile templates
+├── infra/                          #   Default infra compose files
+├── tests/fixtures/                 #   Test repos
+├── docs/                           #   Documentation
+├── .mcp.json                       #   MCP server config for AI agents
+├── CLAUDE.md                       #   Claude Code development guide
+└── CONTRIBUTING.md
 ```
 
 ## Development
 
 ### With Claude Code
 
-DevDock is a Claude-friendly repo with built-in skills for agentic development:
+DevDock ships with Claude Code skills for agentic development:
 
-```bash
-/build-and-test              # Build, clippy, test, install
-/test-profile qe             # E2E test a profile against scio
-/check-tilt-status           # Check running Tilt resources
-/setup-scio-test             # Set up scio repo for testing
-```
+| Skill | What it does |
+|-------|-------------|
+| `/devdock-start` | Start a profile, validate, check health |
+| `/devdock-debug` | Diagnose failing services via Tilt API + logs |
+| `/devdock-plugin-create` | Scaffold a plugin targeting a lifecycle hook |
+| `/devdock-profile-create` | Create a profile interactively |
 
-See `CLAUDE.md` for the full development guide.
+The MCP server (`devdock mcp serve`) provides 12 tools for AI agents. See `.mcp.json` for configuration.
 
 ### Manual
 
 ```bash
 cargo build                  # Build all crates
-cargo test                   # Run tests (141 tests)
+cargo test --workspace       # Run tests (132 tests)
 cargo clippy --workspace     # Lint (0 warnings required)
+cargo fmt --check            # Format check
 cargo install --path crates/devdock-cli --debug --force  # Install dev build
 ```
 
 ### Building Plugins
 
 ```bash
-cd plugins/common/bigquery-sync
-cargo build
-cargo install --path .
+cd plugins/telemetry/bigquery-sync && cargo build
+cd plugins/glean/platform-auth && cargo build
 ```
 
-## Deployment: Binary Releases
+## Deployment
 
 ### OSS Binary (public)
 
 The devdock binary has **zero cloud-specific code**. It contains:
-- Core CLI commands
+- Core CLI commands + lifecycle state machine
+- MCP server for AI agent integration
 - Telemetry collection (sync via external plugins)
 - Shipped Starlark libraries
 - Default infra compose files
@@ -413,66 +488,20 @@ curl -L https://github.com/askscio/devdock/releases/latest/download/devdock-$(un
 chmod +x devdock
 ```
 
-### Organization-Specific Plugins (separate repo)
+### Organization-Specific Plugins
 
-Cloud integrations ship as separate plugin binaries. For example, Glean's plugins
-live in a private repo (`devdock-glean-plugins`) and are installed separately:
+Cloud integrations ship as separate plugin binaries:
 
 ```bash
 # Install devdock (same binary for everyone)
 cargo install devdock
 
-# Install organization plugins (from private repo)
+# Install organization plugins
 cargo install --git https://github.com/your-org/devdock-plugins devdock-plugin-bigquery-sync
-cargo install --git https://github.com/your-org/devdock-plugins devdock-plugin-jira-reporter
-cargo install --git https://github.com/your-org/devdock-plugins devdock-plugin-gcs-storage
+cargo install --git https://github.com/your-org/devdock-plugins devdock-plugin-config-fetcher
 ```
 
 The plugin binaries go to `~/.cargo/bin/` (in PATH). DevDock finds them by name.
-
-### Plugin Repo Structure
-
-```
-your-org/devdock-plugins/           # Private repo
-├── Cargo.toml                      # Workspace
-├── bigquery-sync/
-│   ├── Cargo.toml                  # depends on devdock-plugin-sdk
-│   └── src/main.rs
-├── jira-reporter/
-│   ├── Cargo.toml
-│   └── src/main.rs
-├── gcs-storage/
-│   ├── Cargo.toml
-│   └── src/main.rs
-└── s3-storage/
-    ├── Cargo.toml
-    └── src/main.rs
-```
-
-Each plugin depends only on `devdock-plugin-sdk` (published to crates.io), NOT on devdock internals.
-
-### How It All Connects
-
-```
-User's Machine
-├── devdock (binary)                     ← from github.com/askscio/devdock
-├── devdock-plugin-bigquery-sync         ← from your-org/devdock-plugins
-├── devdock-plugin-jira-reporter         ← from your-org/devdock-plugins
-└── devdock-plugin-gcs-storage           ← from your-org/devdock-plugins
-
-devdock.toml
-├── [telemetry]
-│   backend = "external"
-│   plugin = "devdock-plugin-bigquery-sync"   ← found in $PATH
-├── [diagnostics]
-│   reporter = "jira"                          ← built-in config-driven
-└── [cloud]
-    storage = "external"
-    plugin = "devdock-plugin-gcs-storage"      ← found in $PATH
-```
-
-When `devdock start` runs, it spawns plugin binaries as subprocesses and communicates
-via JSON stdin/stdout. The main binary never imports cloud SDK code.
 
 ## Contributing
 

@@ -11,20 +11,24 @@ cloud integrations (telemetry, storage, diagnostics).
 
 ```
 devdock start <profile>
-├─ Loads .devdock/devdock.toml (project config)
-├─ Loads profile YAML (services + infra)
-├─ Generates runtime configs (devdock.ini, temp_profile.yaml, watch files)
-├─ Generates Tiltfile (loads shipped Starlark libs)
+├─ Lifecycle state machine (devdock-lifecycle crate)
+│  Initializing → ProfileLoaded → PluginsReady → InfraReady
+│  → ConfigReady → TiltfileReady → TiltRunning
+│  → ResourcesStarting → Running → Stopping → Stopped
+├─ 14 plugin hooks fire at each state transition
+├─ Per-resource hooks (before/after_resource_start)
+├─ Generates runtime configs + Tiltfile
 ├─ Extracts shipped libs to devdock/runtime_generated/core/lib/
 └─ Starts Tilt
 ```
 
 ## Key Directories
 
-- `crates/` — Rust source code (10 crates, zero cloud-specific code)
+- `crates/` — Rust source code (12 crates, zero cloud-specific code)
 - `lib/` — Shipped Starlark libraries (embedded via include_str!)
 - `infra/` — Default infra compose files
-- `plugins/` — Plugin SDK + common/glean plugins + templates
+- `plugins/` — Plugin SDK + phase-based plugins (telemetry/, notifications/, diagnostics/, glean/)
+- `skills/` — Claude Code skills (devdock-start, devdock-debug, etc.)
 - `tests/fixtures/` — Test repos (minimal-python, multi-service, with-infra)
 
 ## Build & Test
@@ -36,7 +40,7 @@ cargo clippy --workspace        # Lint (must be 0 warnings)
 cargo fmt --check               # Format check
 
 # Build a specific plugin
-cd plugins/common/bigquery-sync && cargo build
+cd plugins/telemetry/bigquery-sync && cargo build
 
 # Install dev binary
 cargo install --path crates/devdock-cli --debug --force
@@ -95,6 +99,9 @@ echo '{"method":"initialize","config":{}}
 | `crates/devdock-core/src/service_config.rs` | Parses devdock_config.json |
 | `crates/devdock-core/src/resolver.rs` | DFS dependency resolver |
 | `crates/devdock-cli/src/commands/start.rs` | Main start command |
+| `crates/devdock-lifecycle/src/machine.rs` | Lifecycle state machine |
+| `crates/devdock-lifecycle/src/hooks.rs` | 14 lifecycle hooks |
+| `crates/devdock-mcp/src/tools.rs` | MCP server tools (12 tools) |
 | `lib/service.Tiltfile` | Service orchestration (shipped) |
 | `lib/docker.Tiltfile` | Dockerfile/compose generation (shipped) |
 | `plugins/sdk/src/lib.rs` | Plugin SDK |

@@ -2,123 +2,119 @@
 
 ## Overview
 
-DevDock is a Rust CLI that generates runtime configuration and Tiltfiles for managing
-development environments. It uses Tilt for container orchestration and external plugins
-for cloud integrations.
+DevDock is a Rust CLI that uses a **lifecycle state machine** to orchestrate development
+environments. It generates runtime configuration and Tiltfiles, manages plugin hooks at
+each state transition, and supports AI agent integration via an MCP server.
 
-## Pipeline
+## Lifecycle State Machine
+
+The startup pipeline is driven by `devdock-lifecycle::LifecycleMachine`, which transitions
+through 12 states. Plugin hooks fire at each transition:
 
 ```
-devdock start <profile>
-│
-├─[1] Load .devdock/devdock.toml
-│     → Project name, services_dir, infra_dir, cloud config, diagnostics
-│
-├─[2] Load profile YAML
-│     → Which services (local/remote), which infra, env overrides
-│
-├─[3] Resolve dependencies (DFS)
-│     → Reads devdock_config.json per service
-│     → Discovers transitive deps (api → sql, redis)
-│     → Separates services from infra
-│
-├─[4] Docker health check + network setup
-│     → devdock_network, devdock_infra
-│
-├─[5] Instance registration + port allocation
-│     → SQLite state DB at ~/.devdock/devdock.db
-│
-├─[6] Set environment variables
-│     → DEVDOCK_ID, CLOUD_PLATFORM, DEVDOCK_ROOT
-│     → DEVDOCK_JIRA_URL, DEVDOCK_SLACK_CHANNEL (from diagnostics config)
-│
-├─[7] Parallel config generation
-│     │
-│     ├─[7a] devdock.ini
-│     │   → Service configuration (SQL host, Redis port, etc.)
-│     │   → Platform-specific settings
-│     │   → INI overrides from profile
-│     │
-│     ├─[7b] temp_profile.yaml
-│     │   → Enriched profile with env vars, platform info
-│     │   → Consumed by Tiltfile at runtime
-│     │
-│     ├─[7c] watch_file_*.yaml
-│     │   → Per-service file watch patterns
-│     │   → Static glob patterns (no Bazel query required)
-│     │
-│     └─[7d] Tiltfile
-│         → Generated orchestrator
-│         → Loads shipped Starlark libs
-│         → For each local service: setup_service()
-│         → For each remote service: setup_remote_service()
-│         → For each infra: load Tiltfile or docker_compose
-│
-├─[8] Extract shipped Starlark libs
-│     → Copies lib/*.Tiltfile to devdock/core/lib/
-│     → Copies templates/*.tpl to devdock/core/templates/
-│
-├─[9] Start Tilt
-│     → tilt up from devdock/runtime_generated/
-│     → Tilt loads generated Tiltfile
-│     │
-│     └─ For each local service:
-│        ├─ Bazel build on host → ~/.devdock/{service}/
-│        ├─ Generate Dockerfile from template
-│        ├─ Generate docker-compose.yaml
-│        ├─ Docker build + start container
-│        └─ Volume mount binary from ~/.devdock/{service}/
-│
-└─[10] Monitor + telemetry
-      → Startup monitor tracks resource health
-      → Telemetry collected to file (sync via external plugin)
+ Initializing ─── Parse CLI args, find workspace root
+      │
+      ▼
+ ProfileLoaded ── Load profile YAML, validate, resolve deps
+      │            hook: after_profile_loaded
+      ▼
+ PluginsReady ─── Load devdock.toml, spawn plugin processes
+      │            hook: before_infra_ready (auth, credentials)
+      ▼
+ InfraReady ───── Docker check, networks, port allocation, instance registration
+      │            hook: before_config_generated (fetch remote configs)
+      ▼
+ ConfigReady ──── Generate temp_profile.yaml (+ INI via plugin)
+      │            hook: after_config_generated (write devdock.ini)
+      ▼
+ TiltfileReady ── Discover services, resolve deps, generate Tiltfile
+      │            hook: before_tilt (last-minute config)
+      ▼
+ TiltRunning ──── Spawn `tilt up`, extract Starlark libs
+      │            hook: after_tilt (telemetry: session started)
+      ▼
+ ResourcesStarting ── Per-resource loop:
+      │   for each resource:
+      │     hook: before_resource_start(name, kind)
+      │     [Tilt starts container, wait healthy]
+      │     hook: after_resource_start(name, kind)
+      ▼
+ Running ──────── All resources healthy, steady state
+      │            hook: after_ready (notifications)
+      ▼
+ Stopping ─────── Ctrl+C or Tilt exits
+      │            hook: before_stop (final telemetry)
+      ▼
+ Stopped ──────── Cleanup complete
+                   hook: after_stop
+
+ Any state → Failed → hook: on_error → Stopping
 ```
+
+## Hook Reference
+
+| Hook | When | Params |
+|------|------|--------|
+| `after_profile_loaded` | Profile YAML loaded | `profile_name`, `workspace_root`, `platform` |
+| `before_infra_ready` | Before Docker/ports | `profile_name`, `instance_id`, `port_base` |
+| `after_infra_ready` | After Docker/ports | same as above |
+| `before_config_generated` | Before config files | `profile_name`, `runtime_dir`, `workspace_root` |
+| `after_config_generated` | After config files | same as above |
+| `before_tilt` | Before Tilt spawns | `session_id`, `profile_name` |
+| `after_tilt` | After Tilt is up | same as above |
+| `before_resource_start` | Before resource starts | `resource_name`, `resource_kind` |
+| `after_resource_start` | After resource healthy | same as above |
+| `after_ready` | All resources healthy | `session_id`, `resource_count`, `startup_duration_secs` |
+| `before_stop` | Ctrl+C / exit signal | `session_id`, `duration_secs` |
+| `after_stop` | After cleanup | same as above |
+| `on_error` | Unrecoverable error | `session_id`, `error`, `state` |
+| `on_report` | `devdock report` | `title`, `body` |
 
 ## Crate Architecture
 
 ```
-devdock-cli (binary)
-├── commands/start.rs         → Main pipeline orchestration
+devdock-cli (binary — thin orchestrator)
+├── commands/start.rs         → Creates LifecycleMachine, calls advance()
 ├── commands/init.rs          → Project initialization
 ├── commands/report.rs        → Bug reporting
 ├── commands/remote.rs        → Remote workspace management
 └── commands/monitor.rs       → Health monitoring
 
-devdock-core (library)
-├── project_config.rs         → devdock.toml parser
+devdock-lifecycle (library — state machine)
+├── state.rs                  → State enum + transitions
+├── machine.rs                → LifecycleMachine (advance, fire hooks, fail)
+├── hooks.rs                  → Hook enum + HookRunner (dispatches to PluginManager)
+└── context.rs                → Typed context structs (ProfileContext, InfraContext, etc.)
+
+devdock-mcp (library — MCP server)
+├── server.rs                 → JSON-RPC stdin/stdout server
+└── tools.rs                  → 12 MCP tools (start, stop, status, logs, etc.)
+
+devdock-core (library — foundation)
+├── project_config.rs         → devdock.toml parser (PluginHooks, ResourceHooks)
 ├── service_config.rs         → devdock_config.json parser
 ├── resolver.rs               → DFS dependency resolver
 ├── tiltfile_generator.rs     → Tiltfile generation + lib extraction
+├── plugin_manager.rs         → Plugin spawn/dispatch/shutdown
 ├── plugin/                   → Plugin trait interfaces
-│   ├── traits.rs             → Backend traits (telemetry, storage, etc.)
-│   ├── registry.rs           → Backend registry
-│   └── external.rs           → External plugin protocol
 └── profile.rs                → Profile YAML types
 
 devdock-config (library)
-├── generator.rs              → Config generation orchestrator
-├── ini_generator.rs          → devdock.ini generation
-├── profile_generator.rs      → temp_profile.yaml generation
-├── platform.rs               → GCP/AWS/Azure auth
-├── dependency_graph.rs       → Service dependency graph
+├── loader.rs                 → Profile loading + validation
+├── dependency.rs             → Service dependency graph
 └── watch_patterns.rs         → File watch pattern generation
 
 devdock-remote (library)
 ├── coder.rs                  → Coder workspace management
 ├── workspace.rs              → Remote startup orchestration
-├── config_sync.rs            → Config sync to remote
-├── ssh.rs                    → SSH utilities
 └── port_forward.rs           → Port forwarding
 
 devdock-telemetry (library)
-├── collector.rs              → Telemetry collection
 ├── emitter.rs                → FileEmitter (built-in)
 └── models.rs                 → TelemetrySnapshot data model
 
 devdock-diagnostics (library)
 ├── report.rs                 → Bug report workflow
-├── jira.rs                   → Jira ticket creation (config-driven)
-├── slack.rs                  → Slack notifications (config-driven)
 └── system.rs                 → System info collection
 ```
 
@@ -136,71 +132,67 @@ lib/
 │   └── Creates dc_resource with dependencies
 │
 ├── docker.Tiltfile           → setup_docker_build(context)
-│   ├── Generates Dockerfile from template
-│   ├── Generates docker-compose.yaml
-│   └── Handles volume mounts for binary + config
-│
 ├── bazel.Tiltfile            → bazel_build(name, target, ...)
-│   ├── Runs bazel build on host
-│   ├── Rsyncs output to ~/.devdock/{service}/
-│   └── Sets up file watching via watch_file_*.yaml
-│
 ├── remote_service.Tiltfile   → setup_remote_service(name, port)
-│   └── kubectl port-forward to remote service
-│
 ├── central_bazel.Tiltfile    → setup_central_bazel_build(profile)
-│   └── Parallel Bazel compilation for non-Go services
 │
 └── templates/
-    ├── Dockerfile.python.tpl → Python service Dockerfile
-    ├── Dockerfile.go.tpl     → Go service Dockerfile
-    ├── Dockerfile.tpl        → Java/generic Dockerfile
-    └── compose.yaml.tpl      → docker-compose template
+    ├── Dockerfile.python.tpl
+    ├── Dockerfile.go.tpl
+    ├── Dockerfile.tpl
+    └── compose.yaml.tpl
 ```
 
 ## Plugin Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    devdock binary                            │
-│                                                              │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │ Built-in (always available)                          │   │
-│  │  • FileEmitter (telemetry to local file)             │   │
-│  │  • LocalStorage (config from filesystem)             │   │
-│  │  • SSH (remote dev)                                  │   │
-│  │  • Stdout (diagnostics)                              │   │
-│  └──────────────────────────────────────────────────────┘   │
-│                         │                                    │
-│                   JSON stdin/stdout                          │
-│                         │                                    │
-│  ┌──────────────────────▼──────────────────────────────┐   │
-│  │ External Plugins (separate executables)              │   │
-│  │                                                      │   │
-│  │  Common (plugins/common/):                           │   │
-│  │  • bigquery-sync    → telemetry to BigQuery          │   │
-│  │  • jira-reporter    → bug reports to any Jira        │   │
-│  │  • slack-notifier   → notifications to any Slack     │   │
-│  │                                                      │   │
-│  │  Glean (plugins/glean/):                             │   │
-│  │  • gcs-storage      → config from GCS buckets        │   │
-│  │  • s3-storage       → config from S3 buckets         │   │
-│  │                                                      │   │
-│  │  Custom (devdock plugin create):                     │   │
-│  │  • Any language (Python, Go, Bash, Rust)             │   │
-│  └──────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────┐
+│                     devdock binary                        │
+│                                                          │
+│  ┌────────────────────────────────────────────────────┐  │
+│  │ Built-in (always available)                        │  │
+│  │  • FileEmitter (telemetry to local file)           │  │
+│  │  • LocalStorage (config from filesystem)           │  │
+│  │  • SSH (remote dev)                                │  │
+│  │  • Stdout (diagnostics)                            │  │
+│  └────────────────────────────────────────────────────┘  │
+│                        │                                  │
+│                  JSON stdin/stdout                        │
+│                        │                                  │
+│  ┌─────────────────────▼──────────────────────────────┐  │
+│  │ External Plugins (separate executables)             │  │
+│  │                                                     │  │
+│  │  Telemetry (plugins/telemetry/):                    │  │
+│  │  • bigquery-sync    → after_tilt, after_ready       │  │
+│  │                                                     │  │
+│  │  Notifications (plugins/notifications/):            │  │
+│  │  • slack-notifier   → after_ready, on_error         │  │
+│  │                                                     │  │
+│  │  Diagnostics (plugins/diagnostics/):                │  │
+│  │  • jira-reporter    → on_error, on_report           │  │
+│  │                                                     │  │
+│  │  Glean (plugins/glean/):                            │  │
+│  │  • platform-auth    → before_infra_ready            │  │
+│  │  • config-fetcher   → before_config_generated       │  │
+│  │  • config-writer    → after_config_generated        │  │
+│  │  • sql-hydrator     → after_resource_start("sql")   │  │
+│  │  • opensearch-hydrator → after_resource_start       │  │
+│  └─────────────────────────────────────────────────────┘  │
+└──────────────────────────────────────────────────────────┘
 ```
 
 ### Plugin Protocol
 
-Every external plugin is an executable that reads JSON from stdin and writes JSON to stdout:
+Plugins are executables that read JSON-lines from stdin and write JSON-lines to stdout:
 
 ```json
-→ {"method":"initialize","config":{"project":"my-project"}}
+→ {"method":"initialize","config":{"project":"my-project","platform":"google"}}
 ← {"status":"ok"}
 
-→ {"method":"emit","event":{"type":"SessionStart","session_id":"abc"}}
+→ {"method":"after_tilt","params":{"session_id":"dev-abc","profile_name":"default"}}
+← {"status":"ok"}
+
+→ {"method":"after_resource_start","params":{"resource_name":"sql","resource_kind":"infra"}}
 ← {"status":"ok"}
 
 → {"method":"shutdown"}
@@ -217,8 +209,7 @@ devdock_config.json (per service)
 Dependency Resolver (DFS)
   ↓
 ┌─────────────────────────────────┐
-│ Parallel Generation             │
-│ ├── devdock.ini     (services)  │
+│ Config Generation               │
 │ ├── temp_profile.yaml (Tilt)    │
 │ ├── watch_file_*.yaml (reload)  │
 │ └── Tiltfile         (orchestr) │
@@ -231,10 +222,7 @@ For each service:
   ├── Dockerfile from template
   ├── docker-compose.yaml from template
   ├── Docker build
-  └── Container starts with volume mounts:
-      ├── ~/.devdock/{service}/ → /app/{service}/     (binary)
-      ├── config/devdock.ini   → /config/devdock.ini  (config)
-      └── ~/.config/gcloud/    → /tmp/.config/gcloud/ (credentials)
+  └── Container starts with volume mounts
 ```
 
 ## State Management

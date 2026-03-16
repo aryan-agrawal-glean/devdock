@@ -10,5 +10,5 @@ name = "devdock-plugin-opensearch-hydrator"
 path = "src/main.rs"
 
 [dependencies]
-devdock-plugin-sdk = { path = "../../plugins/sdk" }
+devdock-plugin-sdk = { path = "../../sdk" }
 serde_json = "1.0"
