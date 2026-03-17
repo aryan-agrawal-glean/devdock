@@ -74,8 +74,7 @@ async fn get_remote_workspace() -> Result<Option<String>> {
         return Ok(Some(name.clone()));
     }
 
-    if let Ok(Some((workspace_name, _, _, _))) =
-        state_manager.get_sync_session(&instance.id).await
+    if let Ok(Some((workspace_name, _, _, _))) = state_manager.get_sync_session(&instance.id).await
     {
         return Ok(Some(workspace_name));
     }
@@ -93,16 +92,12 @@ async fn report_via_remote_interactive(workspace_name: &str) -> Result<()> {
     );
 
     println!("\n{}", "Please provide a brief summary of the issue:".bold());
-    let summary: String = Input::new()
-        .with_prompt(">")
-        .interact_text()
-        .context("Failed to read summary")?;
+    let summary: String =
+        Input::new().with_prompt(">").interact_text().context("Failed to read summary")?;
 
     println!("\n{}", "Please provide a detailed description of the issue:".bold());
-    let description: String = Input::new()
-        .with_prompt(">")
-        .interact_text()
-        .context("Failed to read description")?;
+    let description: String =
+        Input::new().with_prompt(">").interact_text().context("Failed to read description")?;
 
     println!("\n{}", "What command did you run when this issue occurred?".bold());
     let command: String = Input::new()
