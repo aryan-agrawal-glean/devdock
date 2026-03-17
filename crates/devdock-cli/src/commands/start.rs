@@ -6,7 +6,7 @@ use crate::output;
 use anyhow::{Context, Result};
 use colored::Colorize;
 use devdock_config::{DependencyResolver, ProfileLoader, ProfileValidator};
-use devdock_core::PluginManager;
+use devdock_core::{types::Platform, PluginManager};
 use devdock_lifecycle::{LifecycleConfig, LifecycleMachine, LifecycleOutput};
 use devdock_state::{Instance, InstanceStatus, PortAllocator, SessionOrigin, StateManager};
 use std::path::{Path, PathBuf};
@@ -78,8 +78,20 @@ pub async fn execute(
         .context("Failed to load .devdock/devdock.toml")?;
     project_config.export_diagnostics_env();
 
-    // Set environment variables from devdock.toml for use by Starlark libs and infra Tiltfiles
-    let platform_str = project_config.cloud.platform.to_uppercase();
+    // Set environment variables from devdock.toml for use by Starlark libs and infra Tiltfiles.
+    // The profile's platform (e.g. platform: aws in aws_profile.yaml) takes precedence over
+    // devdock.toml so that AWS/Azure profiles work even when devdock.toml defaults to google.
+    let resolved_platform: Platform = if profile.platform != Platform::None {
+        profile.platform
+    } else {
+        match project_config.cloud.platform.to_lowercase().as_str() {
+            "google" => Platform::Google,
+            "aws" => Platform::Aws,
+            "azure" => Platform::Azure,
+            _ => Platform::None,
+        }
+    };
+    let platform_str = resolved_platform.to_string().to_uppercase();
     std::env::set_var("CLOUD_PLATFORM", &platform_str);
     std::env::set_var("DEVDOCK_SERVICES_DIR", &project_config.project.services_dir);
     std::env::set_var("DEVDOCK_INFRA_DIR", &project_config.project.infra_dir);
@@ -103,7 +115,7 @@ pub async fn execute(
     };
 
     let mut machine = LifecycleMachine::new(lifecycle_config, plugin_manager, Box::new(CliOutput));
-    machine.set_platform(project_config.cloud.platform.clone());
+    machine.set_platform(resolved_platform.to_string());
     machine.set_project_name(project_config.project.name.clone());
 
     // ── State: ProfileLoaded ─────────────────────────────────────────────
@@ -115,9 +127,9 @@ pub async fn execute(
         output::info("Initializing plugins...");
         let plugin_config = serde_json::json!({
             "project": project_config.project.name,
-            "cloud_project": project_config.cloud.project,
+            "cloud_project": profile.project,
             "workspace_root": workspace_root.to_string_lossy(),
-            "platform": project_config.cloud.platform,
+            "platform": resolved_platform.to_string(),
             "region": project_config.cloud.region,
             "profile": profile_name,
             "dataset": project_config.telemetry.dataset,
