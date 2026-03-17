@@ -96,11 +96,12 @@ pub async fn execute(
     std::env::set_var("DEVDOCK_SERVICES_DIR", &project_config.project.services_dir);
     std::env::set_var("DEVDOCK_INFRA_DIR", &project_config.project.infra_dir);
 
-    // Initialize PluginManager with lifecycle hooks + resource hooks
-    let plugin_manager = PluginManager::with_resource_hooks(
+    // Initialize PluginManager with lifecycle hooks + resource hooks + per-plugin config
+    let mut plugin_manager = PluginManager::with_resource_hooks(
         project_config.plugins.hooks.clone(),
         project_config.plugins.resource_hooks.clone(),
     );
+    plugin_manager.set_plugin_configs(project_config.plugins.config.clone());
 
     // Create lifecycle machine
     let lifecycle_config = LifecycleConfig {

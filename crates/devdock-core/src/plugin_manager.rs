@@ -73,6 +73,8 @@ pub struct PluginManager {
     hooks: PluginHooks,
     /// Per-resource hook configuration.
     resource_hooks: HashMap<String, ResourceHooks>,
+    /// Per-plugin config from `[plugins.config.<name>]` in devdock.toml.
+    plugin_configs: HashMap<String, serde_json::Value>,
 }
 
 impl PluginManager {
@@ -80,15 +82,25 @@ impl PluginManager {
     ///
     /// Does NOT spawn any processes yet — call `initialize_all()` to start them.
     pub fn new(hooks: PluginHooks) -> Self {
-        Self { processes: HashMap::new(), hooks, resource_hooks: HashMap::new() }
+        Self {
+            processes: HashMap::new(),
+            hooks,
+            resource_hooks: HashMap::new(),
+            plugin_configs: HashMap::new(),
+        }
     }
 
-    /// Create a PluginManager with resource hooks.
+    /// Create a PluginManager with resource hooks and per-plugin configs.
     pub fn with_resource_hooks(
         hooks: PluginHooks,
         resource_hooks: HashMap<String, ResourceHooks>,
     ) -> Self {
-        Self { processes: HashMap::new(), hooks, resource_hooks }
+        Self { processes: HashMap::new(), hooks, resource_hooks, plugin_configs: HashMap::new() }
+    }
+
+    /// Set per-plugin config blocks (from `[plugins.config.<name>]` in devdock.toml).
+    pub fn set_plugin_configs(&mut self, configs: HashMap<String, serde_json::Value>) {
+        self.plugin_configs = configs;
     }
 
     /// Create a no-op PluginManager (no hooks configured).
@@ -97,6 +109,7 @@ impl PluginManager {
             processes: HashMap::new(),
             hooks: PluginHooks::default(),
             resource_hooks: HashMap::new(),
+            plugin_configs: HashMap::new(),
         }
     }
 
@@ -147,10 +160,26 @@ impl PluginManager {
 
             let mut process = PluginProcess { name: plugin_name.clone(), child };
 
+            // Build per-plugin config: start with the shared context, then overlay
+            // any plugin-specific keys from `[plugins.config.<plugin-name>]`.
+            let plugin_config = if let Some(specific) = self.plugin_configs.get(plugin_name) {
+                if let (Some(base_obj), Some(extra_obj)) =
+                    (config.as_object(), specific.as_object())
+                {
+                    let mut merged = base_obj.clone();
+                    merged.extend(extra_obj.clone());
+                    serde_json::Value::Object(merged)
+                } else {
+                    config.clone()
+                }
+            } else {
+                config.clone()
+            };
+
             // Send initialize
             let init_msg = serde_json::json!({
                 "method": "initialize",
-                "config": config,
+                "config": plugin_config,
             });
 
             let response = process.send(&init_msg).map_err(|e| {

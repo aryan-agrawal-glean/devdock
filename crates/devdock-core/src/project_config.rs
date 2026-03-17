@@ -100,6 +100,11 @@ pub struct PluginsSection {
     /// Per-resource hooks — maps resource names to before/after start hooks.
     #[serde(default)]
     pub resource_hooks: std::collections::HashMap<String, ResourceHooks>,
+    /// Per-plugin config blocks from `[plugins.config.<plugin-name>]`.
+    /// Each key is a plugin executable name; the value is passed as `config`
+    /// in the `initialize` message sent to that plugin.
+    #[serde(default)]
+    pub config: std::collections::HashMap<String, serde_json::Value>,
 }
 
 /// Per-resource hook definitions.
