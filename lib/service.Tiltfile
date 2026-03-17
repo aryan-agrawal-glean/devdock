@@ -3,7 +3,7 @@
 load("bazel.Tiltfile", "bazel_build")
 load("docker.Tiltfile", "generate_compose", "setup_docker_build")
 load('logger.Tiltfile', 'export_logs')
-load('../../config/services/service_hooks/Tiltfile', 'get_pre_service_hooks')
+load('../../services/service_hooks/Tiltfile', 'get_pre_service_hooks')
 
 DEVDOCK_GCLOUD_VAULT_PATH = '~/.devdock/vault_key'
 DUMMY_METRIC_PORT = 10000
