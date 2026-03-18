@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project>
+    <modelVersion>4.0.0</modelVersion>
+    <packaging>war</packaging>
+    <groupId>com.devdock</groupId>
+    <artifactId>java-service</artifactId>
+    <version>1</version>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.eclipse.jetty</groupId>
+                <artifactId>jetty-maven-plugin</artifactId>
+                <version>9.4.50.v20221201</version>
+                <configuration>
+                    <daemon>false</daemon>
+                    <reload>automatic</reload>
+                    <scanIntervalSeconds>3</scanIntervalSeconds>
+                    <webApp>
+                        <contextPath>/</contextPath>
+                        <war>/app/service.war</war>
+                    </webApp>
+                    <systemProperties>
+                        <systemProperty>
+                            <name>org.eclipse.jetty.util.log.class</name>
+                            <value>org.eclipse.jetty.util.log.StdErrLog</value>
+                        </systemProperty>
+                        <systemProperty>
+                            <name>org.eclipse.jetty.annotations.AnnotationParser.LEVEL</name>
+                            <value>OFF</value>
+                        </systemProperty>
+                    </systemProperties>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>

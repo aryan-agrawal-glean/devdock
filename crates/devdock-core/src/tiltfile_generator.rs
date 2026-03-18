@@ -271,6 +271,7 @@ pub fn extract_shipped_libs_to(workspace_root: &Path) -> std::io::Result<()> {
         "compose.yaml.tpl",
         include_str!("../../../lib/templates/compose.yaml.tpl"),
     )?;
+    write_embedded(&templates_dir, "pom.xml", include_str!("../../../lib/templates/pom.xml"))?;
 
     // Create devdock/core/lib/ and devdock/core/templates/ as symlinks to
     // the runtime_generated copies. This lets infra Tiltfiles and hooks
