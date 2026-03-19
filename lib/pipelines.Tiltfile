@@ -103,10 +103,12 @@ def setup_pipeline(name, profile, project):
     params_str = " ".join(params_list)
 
     # Build the pipeline using Bazel
-    # Pipeline Bazel target — must be specified in pipeline config
-    bazel_target = pipeline_config.get('bazel_target', '')
-    if not bazel_target:
-        fail("Pipeline '{}' must specify 'bazel_target' in its config".format(name))
+    # Use config-specified target, or fall back to platform defaults
+    if temp_profile.get('platform', '') == 'aws':
+        default_bazel_target = "//java/com/askscio/platform/common/flink:flink_deploy.jar"
+    else:
+        default_bazel_target = "//java/com/askscio/platform/google/dataflow:dataflow_deploy.jar"
+    bazel_target = pipeline_config.get('bazel_target', default_bazel_target)
 
     watch_dirs = pipeline_config.get('watch_dirs', ["java"])
 
@@ -124,9 +126,13 @@ def setup_pipeline(name, profile, project):
         mount_binary_path = "~/.devdock/{}/flink_deploy.jar:/app/flink_deploy.jar".format(name, binary)
     devdock_root = os.getenv('DEVDOCK_ROOT')
 
-    # Create necessary directories
+    # Create necessary directories and copy entrypoint script
     pipeline_dir = "{}/devdock/config/pipelines/{}".format(devdock_root, name)
     local("mkdir -p {}".format(pipeline_dir))
+    # Copy platform-appropriate entrypoint script into the Docker build context
+    tpl_dir = "{}/devdock/core/templates".format(devdock_root)
+    entrypoint_src = "{}/entrypoint_pipelines.sh".format(tpl_dir)
+    local("cp {} {}/entrypoint.sh".format(entrypoint_src, pipeline_dir))
 
     # Determine which main class to use based on pipeline execution method
     pipeline_execution = profile.get('pipelines', {}).get(name, {}).get('execution', 'auto')

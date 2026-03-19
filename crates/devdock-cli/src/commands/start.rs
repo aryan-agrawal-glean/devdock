@@ -479,6 +479,34 @@ async fn generate_minimal_temp_profile(
     profile_map
         .insert(serde_yaml::Value::String("infra".into()), serde_yaml::Value::Mapping(infra_map));
 
+    // Build pipelines section from profile
+    if !profile.pipelines.is_empty() {
+        let mut pipelines_map = serde_yaml::Mapping::new();
+        for (name, pipeline) in &profile.pipelines {
+            let pipeline_value = serde_yaml::to_value(pipeline)
+                .unwrap_or(serde_yaml::Value::Mapping(serde_yaml::Mapping::new()));
+            pipelines_map.insert(serde_yaml::Value::String(name.clone()), pipeline_value);
+        }
+        profile_map.insert(
+            serde_yaml::Value::String("pipelines".into()),
+            serde_yaml::Value::Mapping(pipelines_map),
+        );
+    }
+
+    // Build test_suite section from profile
+    if !profile.test_suite.is_empty() {
+        let mut test_map = serde_yaml::Mapping::new();
+        for (name, suite) in &profile.test_suite {
+            let suite_value = serde_yaml::to_value(suite)
+                .unwrap_or(serde_yaml::Value::Mapping(serde_yaml::Mapping::new()));
+            test_map.insert(serde_yaml::Value::String(name.clone()), suite_value);
+        }
+        profile_map.insert(
+            serde_yaml::Value::String("test_suite".into()),
+            serde_yaml::Value::Mapping(test_map),
+        );
+    }
+
     let yaml = serde_yaml::to_string(&profile_map)?;
     std::fs::write(runtime_dir.join("temp_profile.yaml"), &yaml)?;
 
@@ -523,6 +551,7 @@ fn generate_oss_tiltfile(
         &resolved,
         &project_config,
         workspace_root,
+        profile,
     );
 
     let runtime_dir = workspace_root.join("devdock/runtime_generated");

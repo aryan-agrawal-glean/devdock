@@ -22,9 +22,15 @@ def generate_dockerfile(template_path, context, type = 'services'):
         lines.append(line)
 
     rendered = '\n'.join(lines)
-    dir_env = 'DEVDOCK_SERVICES_DIR' if type == 'services' else 'DEVDOCK_INFRA_DIR'
-    base_dir = os.getenv(dir_env, 'devdock/' + type)
-    local('cat > %s/%s/%s/Dockerfile << EOL\n%s\nEOL' % (os.getenv('DEVDOCK_ROOT'), base_dir, context['service'], rendered))
+    # pipelines and test_suite write to devdock/config/{type}/{service}/
+    # services write to DEVDOCK_SERVICES_DIR, infra to DEVDOCK_INFRA_DIR
+    if type in ('pipelines', 'test_suite'):
+        base_dir = 'devdock/config/' + type
+    elif type == 'services':
+        base_dir = os.getenv('DEVDOCK_SERVICES_DIR', 'devdock/services')
+    else:
+        base_dir = os.getenv('DEVDOCK_INFRA_DIR', 'devdock/infra')
+    local('mkdir -p %s/%s/%s && cat > %s/%s/%s/Dockerfile << EOL\n%s\nEOL' % (os.getenv('DEVDOCK_ROOT'), base_dir, context['service'], os.getenv('DEVDOCK_ROOT'), base_dir, context['service'], rendered))
     return rendered
 
 def generate_compose(template_path, context, type = 'services'):
@@ -51,9 +57,13 @@ def generate_compose(template_path, context, type = 'services'):
         lines.insert(ports_index + 1, "      - \"{}:8081\"".format(context.get('metrics_port')))
 
     rendered = '\n'.join(lines)
-    dir_env = 'DEVDOCK_SERVICES_DIR' if type == 'services' else 'DEVDOCK_INFRA_DIR'
-    base_dir = os.getenv(dir_env, 'devdock/' + type)
-    local('cat > %s/%s/%s/docker-compose.yaml << EOL\n%s\nEOL' % (os.getenv('DEVDOCK_ROOT'), base_dir, context['service'], rendered))
+    if type in ('pipelines', 'test_suite'):
+        base_dir = 'devdock/config/' + type
+    elif type == 'services':
+        base_dir = os.getenv('DEVDOCK_SERVICES_DIR', 'devdock/services')
+    else:
+        base_dir = os.getenv('DEVDOCK_INFRA_DIR', 'devdock/infra')
+    local('mkdir -p %s/%s/%s && cat > %s/%s/%s/docker-compose.yaml << EOL\n%s\nEOL' % (os.getenv('DEVDOCK_ROOT'), base_dir, context['service'], os.getenv('DEVDOCK_ROOT'), base_dir, context['service'], rendered))
     return rendered
 
 def setup_docker_build(context, dockerfile = None, compose_file = None):
@@ -94,6 +104,14 @@ def setup_docker_build(context, dockerfile = None, compose_file = None):
 
     elif context.get("type") == "pipeline":
         local('chmod -R 755 ~/.devdock/{} || true'.format(service_name))
+        # Extract JAR filename from mount path and pre-create file placeholder
+        # (prevents Docker from creating a directory when bind-mounting a missing file)
+        mount_parts = context.get("mount_binary_path", "").split(":")
+        if len(mount_parts) >= 1:
+            jar_src = mount_parts[0].replace("~", os.getenv("HOME", "~"))
+            jar_filename = jar_src.split("/")[-1]
+            local('[ -d ~/.devdock/{}/{} ] && rm -rf ~/.devdock/{}/{} || true'.format(service_name, jar_filename, service_name, jar_filename))
+            local('[ -f ~/.devdock/{}/{} ] || touch ~/.devdock/{}/{}'.format(service_name, jar_filename, service_name, jar_filename))
         context["mount_binary_path"] = context["mount_binary_path"]
     elif context.get("type") == "test_suite":
         local('chmod -R 755 ~/.devdock/{} || true'.format(service_name))

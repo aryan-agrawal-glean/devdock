@@ -1,5 +1,6 @@
 //! Integration tests running the full pipeline against fixture repos.
 
+use devdock_core::profile::Profile;
 use devdock_core::project_config::ProjectConfig;
 use devdock_core::resolver;
 use devdock_core::service_config::discover_services;
@@ -39,7 +40,19 @@ fn run_pipeline(
     }
 
     let resolved = resolver::resolve(&requested, &services).unwrap();
-    let tiltfile = tiltfile_generator::generate_tiltfile(&services, &resolved, &config, &fixture);
+    let profile: Profile = serde_yaml::from_str(&profile_content).unwrap_or_else(|_| Profile {
+        project: "test".into(),
+        platform: devdock_core::types::Platform::None,
+        infra: std::collections::HashMap::new(),
+        services: std::collections::HashMap::new(),
+        pipelines: std::collections::HashMap::new(),
+        test_suite: std::collections::HashMap::new(),
+        env: std::collections::HashMap::new(),
+        ini_overrides: vec![],
+        multi_project: None,
+    });
+    let tiltfile =
+        tiltfile_generator::generate_tiltfile(&services, &resolved, &config, &fixture, &profile);
     (tiltfile, resolved)
 }
 
