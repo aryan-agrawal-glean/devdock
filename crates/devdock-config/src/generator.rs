@@ -636,33 +636,9 @@ impl ConfigGenerator {
                 .generate_multi_project_profile(profile, multi_config, dynamic_ini.as_ref())
                 .await?;
             generator.set_multi_project(multi_profile_data);
-
-            // 2. Add multi-project services to TOP-LEVEL services dict (Python behavior)
-            self.apply_multi_project_services_to_generator(
-                &mut generator,
-                multi_config,
-                dynamic_ini.as_ref(),
-            )
-            .await?;
         }
 
         generator.generate()
-    }
-
-    /// Add multi-project services to TOP-LEVEL services dict (matches Python behavior)
-    async fn apply_multi_project_services_to_generator(
-        &self,
-        generator: &mut TempProfileGenerator,
-        multi_config: &devdock_core::profile::MultiProjectConfig,
-        _dynamic_ini: Option<&ParsedIniConfig>,
-    ) -> Result<()> {
-        let services = self.build_multi_project_service_entries(multi_config).await?;
-
-        for (name, entry) in services {
-            generator.add_service(&name, entry);
-        }
-
-        Ok(())
     }
 
     /// Generate nested multi-project profile data (platform info + SQL + services)
