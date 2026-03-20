@@ -736,12 +736,6 @@ impl TempProfileGenerator {
         self.profile.multi_project = Some(multi_project);
     }
 
-    /// Add a service to the TOP-LEVEL services dict (used for multi-project services)
-    /// Overwrites existing entry to ensure multi-project config takes precedence
-    pub fn add_service(&mut self, name: &str, entry: ServiceProfileEntry) {
-        self.profile.services.insert(name.to_string(), entry);
-    }
-
     /// Apply remote SQL configuration to temp_profile (matches Python logic)
     fn apply_remote_sql_config(&mut self, extra: &mut HashMap<String, serde_json::Value>) {
         let Some(ref metadata) = self.sql_remote_metadata else {
