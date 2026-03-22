@@ -193,13 +193,12 @@ pub fn generate_tiltfile(
     // Test suites
     if !profile.test_suite.is_empty() {
         out.push_str("# ─── Test Suites ─────────────────────────────────────────────\n\n");
-        out.push_str("load('./core/lib/test_suite.Tiltfile', 'setup_test_suite')\n\n");
+        out.push_str("load('./core/lib/test_suite.Tiltfile', 'setup_test')\n\n");
         let mut tests_sorted: Vec<_> = profile.test_suite.keys().collect();
         tests_sorted.sort();
         for name in &tests_sorted {
-            out.push_str(&format!(
-                "setup_test_suite('{name}', profile.get('test_suite', {{}}).get('{name}', {{}}))\n"
-            ));
+            // setup_test(name, profile, project) — pass full profile + project for context.
+            out.push_str(&format!("setup_test('{name}', profile, profile.get('project', ''))\n"));
         }
         out.push('\n');
     }

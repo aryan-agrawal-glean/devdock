@@ -1,6 +1,6 @@
 //! Profile types representing DevDock configuration.
 
-use crate::types::{ComponentName, DeploymentType, EnvVars, Platform};
+use crate::types::{deserialize_env_vars, ComponentName, DeploymentType, EnvVars, Platform};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -31,7 +31,7 @@ pub struct Profile {
     pub test_suite: HashMap<ComponentName, TestSuiteConfig>,
 
     /// Global environment variables.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_env_vars")]
     pub env: EnvVars,
 
     /// Profile-level INI overrides (applied after all service-level overrides).
@@ -63,7 +63,8 @@ pub struct ServiceConfig {
     pub deployment_type: DeploymentType,
 
     /// Environment variables for this service.
-    #[serde(default)]
+    /// YAML booleans/numbers are coerced to strings (e.g. `DEBUG_MODE: True`).
+    #[serde(default, deserialize_with = "deserialize_env_vars")]
     pub env: EnvVars,
 
     /// Hot reload setting.
@@ -149,7 +150,74 @@ pub struct MultiProjectConfig {
     pub services: HashMap<ComponentName, ServiceConfig>,
 }
 
+/// Normalize the shorthand multi-project format in a raw YAML value.
+///
+/// If a top-level key is not in `KNOWN_PROFILE_KEYS` and its value contains
+/// `infra` or `services` sub-keys, rewrite it as a canonical `multi_project:`
+/// block with the key's name stored as `project`.
+fn normalize_multi_project_key(value: &mut serde_yaml::Value) {
+    let Some(map) = value.as_mapping_mut() else {
+        return;
+    };
+
+    // Already has explicit multi_project — nothing to do.
+    if map.contains_key("multi_project") {
+        return;
+    }
+
+    // Find the first unknown key whose value looks like a project block.
+    let extra_key = map
+        .keys()
+        .filter_map(|k| k.as_str())
+        .filter(|k| !KNOWN_PROFILE_KEYS.contains(k))
+        .find(|k| {
+            map.get(*k).is_some_and(|v| v.get("infra").is_some() || v.get("services").is_some())
+        })
+        .map(String::from);
+
+    let Some(extra_key) = extra_key else {
+        return;
+    };
+
+    if let Some(mut extra_val) = map.remove(serde_yaml::Value::String(extra_key.clone())) {
+        // Inject the project name into the multi-project block.
+        if let Some(multi_map) = extra_val.as_mapping_mut() {
+            multi_map.insert(
+                serde_yaml::Value::String("project".to_string()),
+                serde_yaml::Value::String(extra_key),
+            );
+        }
+        map.insert(serde_yaml::Value::String("multi_project".to_string()), extra_val);
+    }
+}
+
+/// Known top-level keys in a profile YAML — everything else is treated as a
+/// shorthand multi-project block where the key itself is the project name.
+const KNOWN_PROFILE_KEYS: &[&str] = &[
+    "project",
+    "platform",
+    "region",
+    "infra",
+    "services",
+    "pipelines",
+    "test_suite",
+    "env",
+    "ini_overrides",
+    "multi_project",
+];
+
 impl Profile {
+    /// Parse a profile from a YAML string.
+    ///
+    /// Supports both the canonical format with an explicit `multi_project:` key
+    /// and the shorthand format where the secondary project name is used directly
+    /// as a top-level key (e.g. `glean-apps-canary: { infra: ..., services: ... }`).
+    pub fn from_yaml(yaml: &str) -> Result<Self, serde_yaml::Error> {
+        let mut value: serde_yaml::Value = serde_yaml::from_str(yaml)?;
+        normalize_multi_project_key(&mut value);
+        serde_yaml::from_value(value)
+    }
+
     /// Get all component names from this profile.
     pub fn all_components(&self) -> Vec<ComponentName> {
         use std::collections::HashSet;
@@ -385,5 +453,50 @@ multi_project:
         assert_eq!(multi.services.len(), 1);
         assert_eq!(multi.infra.len(), 1);
         assert!(multi.services.contains_key("internal_admin"));
+    }
+
+    #[test]
+    fn test_parse_profile_multi_project_shorthand() {
+        // Shorthand format: secondary project name is the top-level YAML key.
+        let yaml = r"
+project: salessavvy-test
+infra:
+  sql:
+    type: local
+  opensearch:
+    type: remote
+services:
+  qe:
+    type: local
+  fe:
+    type: local
+glean-apps-canary:
+  infra:
+    sql:
+      type: local
+  services:
+    central_datasources:
+      type: local
+      env:
+        TEST_USER: steve.smith@salessavvy.net
+";
+        let profile = Profile::from_yaml(yaml).unwrap();
+
+        // Top-level fields
+        assert_eq!(profile.project, "salessavvy-test");
+        assert!(profile.has_component("qe"));
+        assert!(profile.has_component("fe"));
+        assert!(profile.has_component("sql"));
+        assert!(profile.has_component("opensearch"));
+
+        // Multi-project parsed from shorthand key
+        let multi = profile.multi_project.as_ref().expect("multi_project should be present");
+        assert_eq!(multi.project, "glean-apps-canary");
+        assert!(multi.services.contains_key("central_datasources"));
+        assert!(multi.infra.contains_key("sql"));
+
+        // all_components includes secondary project services
+        let all = profile.all_components();
+        assert!(all.contains(&"central_datasources".to_string()));
     }
 }

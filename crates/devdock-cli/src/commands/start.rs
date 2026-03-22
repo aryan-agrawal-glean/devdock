@@ -463,6 +463,58 @@ async fn generate_minimal_temp_profile(
             .insert(serde_yaml::Value::String(name.clone()), serde_yaml::Value::Mapping(svc_entry));
     }
 
+    // Merge multi-project services into the services section.
+    if let Some(ref multi) = profile.multi_project {
+        for (name, svc) in &multi.services {
+            let is_active = if let Some(ref filter) = service_filter {
+                filter.contains(&name.as_str())
+            } else {
+                true
+            };
+
+            let mut svc_entry = serde_yaml::Mapping::new();
+            svc_entry.insert(
+                serde_yaml::Value::String("type".into()),
+                serde_yaml::to_value(svc.deployment_type)
+                    .unwrap_or(serde_yaml::Value::String("local".into())),
+            );
+            svc_entry.insert(
+                serde_yaml::Value::String("active".into()),
+                serde_yaml::Value::String(is_active.to_string()),
+            );
+            // Tag with the secondary project so config-writer can use it.
+            svc_entry.insert(
+                serde_yaml::Value::String("cloud_project".into()),
+                serde_yaml::Value::String(multi.project.clone()),
+            );
+
+            let mut env_map = serde_yaml::Mapping::new();
+            env_map.insert(
+                serde_yaml::Value::String("DEVDOCK_ID".into()),
+                serde_yaml::Value::String(devdock_id.clone()),
+            );
+            env_map.insert(
+                serde_yaml::Value::String("IS_DEVDOCK".into()),
+                serde_yaml::Value::String("true".into()),
+            );
+            for (k, v) in &svc.env {
+                env_map.insert(
+                    serde_yaml::Value::String(k.clone()),
+                    serde_yaml::Value::String(v.clone()),
+                );
+            }
+            svc_entry.insert(
+                serde_yaml::Value::String("env".into()),
+                serde_yaml::Value::Mapping(env_map),
+            );
+
+            services_map.insert(
+                serde_yaml::Value::String(name.clone()),
+                serde_yaml::Value::Mapping(svc_entry),
+            );
+        }
+    }
+
     profile_map.insert(
         serde_yaml::Value::String("services".into()),
         serde_yaml::Value::Mapping(services_map),
@@ -474,6 +526,16 @@ async fn generate_minimal_temp_profile(
         let infra_value = serde_yaml::to_value(infra)
             .unwrap_or(serde_yaml::Value::Mapping(serde_yaml::Mapping::new()));
         infra_map.insert(serde_yaml::Value::String(name.clone()), infra_value);
+    }
+    // Merge multi-project infra.
+    if let Some(ref multi) = profile.multi_project {
+        for (name, infra) in &multi.infra {
+            if !infra_map.contains_key(name.as_str()) {
+                let infra_value = serde_yaml::to_value(infra)
+                    .unwrap_or(serde_yaml::Value::Mapping(serde_yaml::Mapping::new()));
+                infra_map.insert(serde_yaml::Value::String(name.clone()), infra_value);
+            }
+        }
     }
 
     profile_map
@@ -536,6 +598,11 @@ fn generate_oss_tiltfile(
 
     let mut requested: Vec<String> = profile.services.keys().cloned().collect();
     requested.extend(profile.infra.keys().cloned());
+    // Include multi-project services so they get resolved and appear in the Tiltfile.
+    if let Some(ref multi) = profile.multi_project {
+        requested.extend(multi.services.keys().cloned());
+        requested.extend(multi.infra.keys().cloned());
+    }
 
     let resolved = resolver::resolve(&requested, &service_configs)
         .context("Failed to resolve dependencies")?;

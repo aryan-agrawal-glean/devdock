@@ -16,17 +16,28 @@ def expand_env_vars(value):
             return os.getenv(var_name, value)
     return value
 
-def load_test_suite_config(test_name):
-    """Load test suite configuration from test_suite_config.yaml"""
+def load_test_suite_config(test_name, profile_test_config=None):
+    """Load test suite configuration from profile or legacy YAML file."""
+    # Start with whatever the profile says about this test.
+    merged = {}
+    if profile_test_config:
+        merged.update(profile_test_config)
+
+    # Try to load the legacy YAML config file.
     config_path = '{}/devdock/config/test_suite/test_suite_config.yaml'.format(os.getenv('DEVDOCK_ROOT'))
-    if not os.path.exists(config_path):
-        fail("Test suite config not found at: " + config_path)
+    if os.path.exists(config_path):
+        file_config = read_yaml(config_path)
+        if test_name in file_config:
+            # File entries are the base; profile overrides them.
+            base = {}
+            base.update(file_config[test_name])
+            base.update(merged)
+            merged = base
 
-    config = read_yaml(config_path)
-    if test_name not in config:
-        fail("Test suite config not found for test: " + test_name)
+    if 'bazel_target' not in merged:
+        fail("No bazel_target found for test suite '{}'. Add 'bazel_target: //path/to:target' under test_suite.{} in your profile, or create devdock/config/test_suite/test_suite_config.yaml.".format(test_name, test_name))
 
-    return config[test_name]
+    return merged
 
 def merge_test_suite_params(test_config, profile_params):
     """Merge test suite default params with profile-provided params"""
@@ -134,9 +145,13 @@ def setup_test(name, profile, project):
     # Get architecture for image tag
     architecture = profile.get('architecture', 'unknown')
 
-    # Load the test suite configuration
-    test_suite_config = load_test_suite_config(test_name)
+    # Load the test suite configuration.
+    # Profile's test_suite section takes priority; legacy YAML file is a fallback.
     test_suite_profile = profile.get("test_suite", {})
+    profile_test_config = test_suite_profile.get(name, {})
+    test_suite_config = load_test_suite_config(test_name, profile_test_config)
+    # Alias for profile-level test config (dependencies, stable_wait_seconds, env, etc.)
+    test_config = profile_test_config
 
     # Get profile params if they exist
     profile_params = test_suite_profile.get(name, {}).get("params", {})
@@ -317,10 +332,7 @@ def setup_test(name, profile, project):
     # Enable log streaming
     export_logs(name, name)
 
-    # Get test configuration
-    test_config = test_suite_profile.get(name, {})
-
-    # Get dependencies
+    # Get dependencies (test_config already set above from profile_test_config)
     dependencies = test_config.get('dependencies', [])
 
     # Get stability configuration

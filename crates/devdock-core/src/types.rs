@@ -60,8 +60,47 @@ pub enum ServiceType {
     Custom(String),
 }
 
-/// Environment variables map.
+/// Environment variables map — values are always strings.
+///
+/// During YAML parsing, non-string scalars (booleans, integers) are coerced
+/// to their string representation so that `DEBUG_MODE: True` is accepted.
 pub type EnvVars = HashMap<String, String>;
+
+/// Deserialize a `HashMap<String, String>` where YAML values may be booleans
+/// or numbers (e.g. `DEBUG_MODE: True`).  Coerces all scalars to strings.
+pub fn deserialize_env_vars<'de, D>(deserializer: D) -> Result<EnvVars, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::MapAccess;
+
+    struct EnvVisitor;
+
+    impl<'de> serde::de::Visitor<'de> for EnvVisitor {
+        type Value = EnvVars;
+
+        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("a map of string env var names to scalar values")
+        }
+
+        fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<EnvVars, A::Error> {
+            let mut result = HashMap::new();
+            while let Some((key, value)) = map.next_entry::<String, serde_yaml::Value>()? {
+                let s = match &value {
+                    serde_yaml::Value::String(s) => s.clone(),
+                    serde_yaml::Value::Bool(b) => b.to_string(),
+                    serde_yaml::Value::Number(n) => n.to_string(),
+                    serde_yaml::Value::Null => String::new(),
+                    other => serde_yaml::to_string(other).unwrap_or_default().trim().to_string(),
+                };
+                result.insert(key, s);
+            }
+            Ok(result)
+        }
+    }
+
+    deserializer.deserialize_map(EnvVisitor)
+}
 
 /// Port number.
 pub type Port = u16;

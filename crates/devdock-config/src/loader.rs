@@ -73,7 +73,7 @@ impl ProfileLoader {
             Error::InvalidProfile(format!("Failed to read profile file {}: {}", path.display(), e))
         })?;
 
-        let profile: Profile = serde_yaml::from_str(&content).map_err(|e| {
+        let profile = Profile::from_yaml(&content).map_err(|e| {
             Error::InvalidProfile(format!("Failed to parse profile {}: {}", path.display(), e))
         })?;
 
