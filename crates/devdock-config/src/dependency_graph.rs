@@ -205,16 +205,20 @@ impl DependencyGraph {
 
         let mut futures = Vec::new();
 
-        // Load service configs
+        // Load service configs — return (name, Result) so name is available on error
         for (service_name, service_profile) in &profile.services {
             let workspace_root = workspace_root.to_path_buf();
             let service_name = service_name.clone();
             let is_local = service_profile.deployment_type == DeploymentType::Local;
 
             futures.push(tokio::spawn(async move {
-                let mut config = Self::load_service_config(&workspace_root, &service_name).await?;
-                config.set_deployment_local(is_local);
-                Ok::<_, anyhow::Error>((service_name, (config, ComponentType::Service)))
+                let result = Self::load_service_config(&workspace_root, &service_name).await.map(
+                    |mut config| {
+                        config.set_deployment_local(is_local);
+                        (config, ComponentType::Service)
+                    },
+                );
+                (service_name, result)
             }));
         }
 
@@ -225,9 +229,13 @@ impl DependencyGraph {
             let is_local = infra_profile.deployment_type == DeploymentType::Local;
 
             futures.push(tokio::spawn(async move {
-                let mut config = Self::load_infra_config(&workspace_root, &infra_name).await?;
-                config.set_deployment_local(is_local);
-                Ok::<_, anyhow::Error>((infra_name, (config, ComponentType::Infra)))
+                let result = Self::load_infra_config(&workspace_root, &infra_name).await.map(
+                    |mut config| {
+                        config.set_deployment_local(is_local);
+                        (config, ComponentType::Infra)
+                    },
+                );
+                (infra_name, result)
             }));
         }
 
@@ -239,26 +247,18 @@ impl DependencyGraph {
         let mut errors = Vec::new();
         for result in results {
             match result {
-                Ok(Ok((name, config_tuple))) => {
+                Ok((name, Ok(config_tuple))) => {
                     configs.insert(name, config_tuple);
                 }
-                Ok(Err(e)) => {
-                    let error_msg = e.to_string();
-                    let is_hook_service =
-                        error_msg.contains("pre_setup") || error_msg.contains("post_setup");
-
-                    if is_hook_service {
+                Ok((name, Err(e))) => {
+                    if name == "pre_setup" || name == "post_setup" {
                         continue;
                     }
-
-                    // Extract service name from error to check if it was explicitly configured
-                    let is_explicit = explicit_services.iter().any(|svc| error_msg.contains(svc));
-
-                    if is_explicit {
-                        errors.push(format!("{e:#}"));
+                    if explicit_services.contains(&name) {
+                        errors.push(format!("{name}: {e:#}"));
                     } else {
                         eprintln!(
-                            "Warning: Failed to load config for transitive dependency: {e:#}"
+                            "Warning: Failed to load config for transitive dependency '{name}': {e:#}"
                         );
                     }
                 }

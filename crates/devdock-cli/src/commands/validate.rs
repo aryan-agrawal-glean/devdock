@@ -98,10 +98,21 @@ fn validate_service_configs(
             }
         }
         if !found {
-            // Infra components and test suites don't always have devdock_config.json
-            let is_infra =
-                workspace_root.join(format!("devdock/config/infra/{component}")).exists();
-            if !is_infra {
+            let infra_config_path = workspace_root
+                .join(format!("devdock/config/infra/{component}/devdock_config.json"));
+            if infra_config_path.exists() {
+                match validate_single_config(&infra_config_path) {
+                    Ok(()) => {
+                        let is_explicit = profile.infra.contains_key(component);
+                        let marker = if is_explicit { "explicit" } else { "transitive" };
+                        println!("    [ok] {component} (infra, {marker})");
+                    }
+                    Err(e) => {
+                        errors.push(format!("{component}: {e:#}"));
+                        println!("    [FAIL] {component}: {e:#}");
+                    }
+                }
+            } else if !workspace_root.join(format!("devdock/config/infra/{component}")).exists() {
                 println!("    [skip] {component} (no devdock_config.json)");
             }
         }
