@@ -1,5 +1,7 @@
-# Claude Code development assistant (organization-specific, not part of OSS)
-.claude/
+# Claude Code — exclude local-only files, keep skills and settings
+.claude/worktrees/
+.claude/settings.local.json
+.claude/memory/
 
 # Rust
 /target/

@@ -223,6 +223,32 @@ For each service:
   └── Container starts with volume mounts
 ```
 
+## MCP Server (AI Agent Integration)
+
+DevDock ships a built-in MCP (Model Context Protocol) server, making it a first-class
+citizen for AI-assisted development. When you open DevDock in Claude Code, the MCP server
+is auto-configured via `.mcp.json`.
+
+```
+Claude Code  ─── JSON-RPC ───  devdock mcp serve
+                               │
+                               ├─ devdock_start(profile, dry_run)
+                               ├─ devdock_stop(target)
+                               ├─ devdock_status()
+                               ├─ devdock_logs(service, lines)
+                               ├─ devdock_validate(profile)
+                               ├─ devdock_generate(profile)
+                               ├─ devdock_list_profiles()
+                               ├─ devdock_list_services()
+                               ├─ devdock_plugin_create(name, hook, language)
+                               ├─ devdock_exec(container, command)
+                               ├─ devdock_cleanup()
+                               └─ devdock_report()
+```
+
+Claude Code skills (slash commands) for users live in `skills/`. Contributor skills
+for working on DevDock itself live in `.claude/skills/`.
+
 ## State Management
 
 DevDock uses SQLite at `~/.devdock/devdock.db` to track:

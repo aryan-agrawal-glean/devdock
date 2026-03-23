@@ -10,7 +10,7 @@ We welcome contributions! Here's how to get started.
 # - Docker
 # - Tilt (docs.tilt.dev)
 
-git clone https://github.com/askscio/devdock.git
+git clone https://github.com/aryan-agrawal-glean/devdock.git
 cd devdock
 cargo build
 cargo test

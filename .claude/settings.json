@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo build*)",
+      "Bash(cargo test*)",
+      "Bash(cargo clippy*)",
+      "Bash(cargo fmt*)",
+      "Bash(cargo check*)",
+      "Bash(cargo install*)",
+      "Bash(git diff*)",
+      "Bash(git log*)",
+      "Bash(git status*)",
+      "Bash(devdock *)",
+      "Bash(docker ps*)",
+      "Bash(docker logs*)",
+      "Bash(curl -s http://localhost:10350*)"
+    ]
+  }
+}
