@@ -2,8 +2,8 @@
 <project>
     <modelVersion>4.0.0</modelVersion>
     <packaging>war</packaging>
-    <groupId>com.glean</groupId>
-    <artifactId>glean-appengine</artifactId>
+    <groupId>com.example</groupId>
+    <artifactId>devdock-java-service</artifactId>
     <version>1</version>
 
     <build>

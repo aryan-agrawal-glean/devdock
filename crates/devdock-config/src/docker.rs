@@ -283,9 +283,20 @@ pub fn cleanup_ports(ports: &[u16]) -> Result<usize> {
     Ok(killed)
 }
 
-/// Authenticate with GCR/Artifact Registry
+/// Authenticate with a Docker registry using gcloud access tokens.
+///
+/// The registry endpoint is read from the `DEVDOCK_REGISTRY_URL` environment
+/// variable, which is set automatically from the `[registry] url` field in
+/// `devdock.toml`. Set it to your Artifact Registry host, e.g.
+/// `us-central1-docker.pkg.dev` or `europe-docker.pkg.dev`.
 pub fn docker_login_gcr() -> Result<()> {
-    info!("Authenticating with Google Container Registry...");
+    let registry_url = std::env::var("DEVDOCK_REGISTRY_URL").context(
+        "DEVDOCK_REGISTRY_URL is not set.\n\
+        Set [registry] url in devdock.toml (e.g. us-central1-docker.pkg.dev)\n\
+        or export DEVDOCK_REGISTRY_URL=<your-registry-host>",
+    )?;
+
+    info!("Authenticating with registry: {}", registry_url);
 
     // Get access token
     let token_output = Command::new("gcloud")
@@ -299,15 +310,15 @@ pub fn docker_login_gcr() -> Result<()> {
 
     let token = String::from_utf8_lossy(&token_output.stdout).trim().to_string();
 
-    // Login to artifact registry
+    // Normalise: docker login expects https:// prefix
+    let login_url = if registry_url.starts_with("https://") {
+        registry_url
+    } else {
+        format!("https://{registry_url}")
+    };
+
     let login = Command::new("docker")
-        .args([
-            "login",
-            "-u",
-            "oauth2accesstoken",
-            "--password-stdin",
-            "https://us-central1-docker.pkg.dev",
-        ])
+        .args(["login", "-u", "oauth2accesstoken", "--password-stdin", &login_url])
         .stdin(std::process::Stdio::piped())
         .spawn()
         .context("Failed to start docker login")?;

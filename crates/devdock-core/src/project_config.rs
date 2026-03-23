@@ -425,7 +425,7 @@ mod tests {
     fn parse_full() {
         let toml = r#"
         [project]
-        name = "scio"
+        name = "my-project"
         domain = "local.myapp.com"
         services_dir = "devdock/services"
         infra_dir = "devdock/infra"
@@ -446,7 +446,7 @@ mod tests {
         reporter = "jira"
         "#;
         let c = ProjectConfig::parse(toml).unwrap();
-        assert_eq!(c.project.name, "scio");
+        assert_eq!(c.project.name, "my-project");
         assert_eq!(c.cloud.platform, "google");
         assert_eq!(c.telemetry.backend, "bigquery");
         assert_eq!(c.remote.provider, "coder");

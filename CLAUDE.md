@@ -27,7 +27,7 @@ devdock start <profile>
 - `crates/` — Rust source code (12 crates, zero cloud-specific code)
 - `lib/` — Shipped Starlark libraries (embedded via include_str!)
 - `infra/` — Default infra compose files
-- `plugins/` — Plugin SDK + phase-based plugins (telemetry/, notifications/, diagnostics/, glean/)
+- `plugins/` — Plugin SDK + phase-based plugins (telemetry/, notifications/, diagnostics/)
 - `skills/` — Claude Code skills (devdock-start, devdock-debug, etc.)
 - `tests/fixtures/` — Test repos (minimal-python, multi-service, with-infra)
 
@@ -46,11 +46,11 @@ cd plugins/telemetry/bigquery-sync && cargo build
 cargo install --path crates/devdock-cli --debug --force
 ```
 
-## Testing Against Scio
+## Testing Against Your Monorepo
 
 ```bash
-cd ~/workspace/scio
-devdock start qe                # Start qe profile
+cd ~/workspace/your-monorepo
+devdock start <profile>         # Start a profile
 # Check Tilt UI at http://localhost:10350
 # Verify all resources are green
 
@@ -108,7 +108,7 @@ echo '{"method":"initialize","config":{}}
 
 ## Conventions
 
-- No Glean-specific code in `crates/` — all cloud code in `plugins/`
+- No org-specific code in `crates/` — all cloud/org integrations go in external plugins
 - All config comes from `devdock.toml` or env vars, never hardcoded
 - Tests use fixture repos in `tests/fixtures/`
 - Pre-commit hooks enforce: cargo fmt, clippy, no large files

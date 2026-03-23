@@ -5,11 +5,11 @@
 Create a GitHub App to enable CI on release PRs:
 
 ### 1. Create GitHub App
-- Go to: https://github.com/organizations/askscio/settings/apps
+- Go to: `https://github.com/organizations/YOUR_ORG/settings/apps`
 - Click **"New GitHub App"**
 - Settings:
   - Name: `DevDock Release Bot`
-  - Homepage URL: `https://github.com/askscio/devdock`
+  - Homepage URL: `https://github.com/YOUR_ORG/devdock`
   - Webhook: ❌ Uncheck "Active"
   - Permissions → Repository:
     - Contents: Read and write
@@ -24,7 +24,7 @@ Create a GitHub App to enable CI on release PRs:
 - Save the `.pem` file
 
 ### 3. Install App
-- Click **"Install App"** → Install on `askscio/devdock`
+- Click **"Install App"** → Install on `YOUR_ORG/devdock`
 
 ### 4. Add Secrets
 ```bash

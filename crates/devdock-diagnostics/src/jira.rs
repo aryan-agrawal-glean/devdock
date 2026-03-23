@@ -115,8 +115,12 @@ struct JiraUser {
 /// Get Jira API token from Google Cloud Secret Manager.
 pub fn get_jira_token() -> Result<String> {
     let secret_project = std::env::var("DEVDOCK_SECRET_PROJECT").unwrap_or_default();
-    let secret_name =
-        std::env::var("DEVDOCK_JIRA_SECRET").unwrap_or("ONCALL_USER_JIRA_TOKEN".into());
+    let secret_name = std::env::var("DEVDOCK_JIRA_SECRET").map_err(|_| {
+        DiagnosticsError::Jira(
+            "DEVDOCK_JIRA_SECRET not set — configure diagnostics.jira_secret in devdock.toml"
+                .into(),
+        )
+    })?;
     if secret_project.is_empty() {
         return Err(DiagnosticsError::Jira(
             "DEVDOCK_SECRET_PROJECT not set — configure diagnostics.secret_project in devdock.toml"

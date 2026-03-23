@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
-# DevDock Installation Script for Private Repository
-# Requires: GitHub CLI (gh) with authentication
-# Usage: bash <(gh api repos/askscio/devdock/contents/install.sh --jq .content | base64 -d)
-#    or: gh repo clone askscio/devdock && cd devdock && ./install.sh
+# DevDock Installation Script
+# Usage: curl -fsSL https://raw.githubusercontent.com/askscio/devdock/main/install.sh | bash
+#    or: git clone https://github.com/askscio/devdock && cd devdock && ./install.sh
 
 set -e
 
@@ -35,18 +34,15 @@ error() {
     exit 1
 }
 
-# Check if gh CLI is available
-check_gh_cli() {
-    if ! command -v gh >/dev/null 2>&1; then
-        error "GitHub CLI (gh) is required but not installed.\nInstall it: https://cli.github.com/"
+# Detect best available download tool: curl (preferred) or gh CLI (fallback)
+detect_download_tool() {
+    if command -v curl >/dev/null 2>&1; then
+        echo "curl"
+    elif command -v gh >/dev/null 2>&1; then
+        echo "gh"
+    else
+        error "Neither curl nor GitHub CLI (gh) is installed.\nInstall curl or gh: https://cli.github.com/"
     fi
-
-    # Check if authenticated
-    if ! gh auth status >/dev/null 2>&1; then
-        error "GitHub CLI is not authenticated.\nRun: gh auth login"
-    fi
-
-    success "GitHub CLI is authenticated"
 }
 
 # Detect OS and architecture
@@ -85,10 +81,19 @@ detect_platform() {
     echo "${os}-${arch}"
 }
 
-# Get latest release version
+# Get latest release version (curl preferred, gh fallback)
 get_latest_version() {
+    local download_tool="$1"
     local version
-    version=$(gh release list --repo "$REPO" --limit 1 --json tagName --jq '.[0].tagName')
+
+    if [ "$download_tool" = "curl" ]; then
+        # Use GitHub API (no auth required for public repos)
+        version=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
+            | grep '"tag_name"' \
+            | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')
+    else
+        version=$(gh release list --repo "$REPO" --limit 1 --json tagName --jq '.[0].tagName')
+    fi
 
     if [ -z "$version" ]; then
         error "Failed to fetch latest version from GitHub"
@@ -97,21 +102,28 @@ get_latest_version() {
     echo "$version"
 }
 
-# Download binary using gh CLI
+# Download binary (curl preferred, gh fallback)
 download_binary() {
     local version="$1"
     local platform="$2"
+    local download_tool="$3"
     local asset_name="${BINARY_NAME}-${platform}-${version}.tar.gz"
     local temp_dir
     temp_dir=$(mktemp -d)
 
     info "Downloading DevDock ${version} for ${platform}..."
 
-    # Download using gh CLI (works with private repos)
-    if ! gh release download "$version" --repo "$REPO" --pattern "$asset_name" --dir "$temp_dir"; then
-        error "Failed to download binary. Available assets:"
-        gh release view "$version" --repo "$REPO" --json assets --jq '.assets[].name'
-        exit 1
+    if [ "$download_tool" = "curl" ]; then
+        local url="https://github.com/${REPO}/releases/download/${version}/${asset_name}"
+        if ! curl -fsSL "$url" -o "${temp_dir}/${asset_name}"; then
+            error "Failed to download binary from ${url}"
+        fi
+    else
+        if ! gh release download "$version" --repo "$REPO" --pattern "$asset_name" --dir "$temp_dir"; then
+            error "Failed to download binary. Available assets:"
+            gh release view "$version" --repo "$REPO" --json assets --jq '.assets[].name'
+            exit 1
+        fi
     fi
 
     # Verify the download succeeded
@@ -251,8 +263,10 @@ main() {
     echo "╚════════════════════════════════════════╝"
     echo ""
 
-    # Check prerequisites
-    check_gh_cli
+    # Detect best download tool (curl preferred, gh fallback)
+    local download_tool
+    download_tool=$(detect_download_tool)
+    info "Download method: ${download_tool}"
 
     # Detect platform
     local platform
@@ -261,7 +275,7 @@ main() {
 
     # Get latest version
     local version
-    version=$(get_latest_version)
+    version=$(get_latest_version "$download_tool")
     info "Latest version: ${version}"
 
     # Check if already installed
@@ -286,7 +300,7 @@ main() {
 
     # Download binary
     local temp_dir
-    temp_dir=$(download_binary "$version" "$platform")
+    temp_dir=$(download_binary "$version" "$platform" "$download_tool")
 
     # Install binary
     install_binary "$temp_dir"
