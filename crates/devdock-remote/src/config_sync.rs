@@ -382,46 +382,6 @@ pub fn sync_all_config(
         ));
     }
 
-    // Merge Claude MCP config via Python (non-critical: || true so set -e doesn't abort)
-    script
-        .push_str("python3 << 'DEVDOCK_PYTHON_EOF' || echo 'DEVDOCK_WARN:claude_config_failed'\n");
-    script.push_str(
-        r#"import json
-from pathlib import Path
-
-devdock_mcp_config = {
-    "devdock": {
-        "type": "stdio",
-        "command": "python",
-        "args": ["/home/workspace/scio/devdock/core/mcp_server/main.py"],
-        "description": "Devdock MCP server for devdock resource logs and error analysis"
-    }
-}
-
-claude_config_path = Path.home() / ".claude.json"
-
-if claude_config_path.exists():
-    try:
-        with open(claude_config_path, 'r') as f:
-            config = json.load(f)
-    except json.JSONDecodeError:
-        config = {}
-else:
-    config = {}
-
-if "mcpServers" not in config:
-    config["mcpServers"] = {}
-
-config["mcpServers"]["devdock"] = devdock_mcp_config["devdock"]
-
-with open(claude_config_path, 'w') as f:
-    json.dump(config, f, indent=2)
-
-print(f"✓ Claude MCP configuration updated at {claude_config_path}")
-"#,
-    );
-    script.push_str("DEVDOCK_PYTHON_EOF\n");
-
     let output = Command::new("coder")
         .arg("ssh")
         .arg(workspace)
@@ -445,31 +405,10 @@ print(f"✓ Claude MCP configuration updated at {claude_config_path}")
         )));
     }
 
-    // Check for non-critical warnings in output
-    let claude_config_ok = !stdout.contains("DEVDOCK_WARN:claude_config_failed");
-    if !claude_config_ok {
-        debug!("Claude config merge failed (non-critical)");
-        if verbose {
-            eprintln!("    ⚠ Warning: Failed to sync Claude MCP config");
-        }
-        if let Some(log_path) = log_file {
-            if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(log_path) {
-                let _ = writeln!(file, "WARNING: Failed to sync Claude config");
-            }
-        }
-    }
-
     if verbose {
         println!("      ✓ Profile synced to {}", remote_profile_path);
         if custom_ini_content.is_some() {
             println!("      ✓ custom.ini synced");
-        }
-        if claude_config_ok {
-            for line in stdout.lines() {
-                if line.contains("Claude MCP") {
-                    println!("      {}", line.trim());
-                }
-            }
         }
     }
 

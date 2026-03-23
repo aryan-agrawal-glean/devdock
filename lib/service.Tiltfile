@@ -13,7 +13,6 @@ ENV_TO_PROFILE_MAP = {
     'SQL_ACCOUNT': 'sql_account',
     'AWS_ACCOUNT_ID': 'aws_account_id',
     'REGION': 'region',
-    'GLEAN_INSTANCE_NAME': 'glean_instance_name',
     'AZURE_VERSIONED_STORAGE_ACCOUNT': 'azure_versioned_storage_account',
     'AZURE_UNVERSIONED_STORAGE_ACCOUNT': 'azure_unversioned_storage_account',
     'ARM_SUBSCRIPTION_ID': 'subscription_id',
@@ -135,13 +134,6 @@ def setup_service(name, config, auto_init=True):
         domain = profile.get('domain', os.getenv('DEVDOCK_DOMAIN', ''))
         if domain:
             extra_hosts_entries.append(domain + ':host-gateway')
-
-    if profile.get('services', {}).get('composio_apollo', {}).get('type', '') == 'remote':
-        extra_hosts_entries += [
-            'composio-apollo.composio.svc.cluster.local:host-gateway',
-            'composio-apollo:host-gateway',
-            'composio-mcp.composio.svc.cluster.local:host-gateway',
-        ]
 
     debugport_hosts = ""
     if extra_hosts_entries:

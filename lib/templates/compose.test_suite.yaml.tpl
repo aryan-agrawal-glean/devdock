@@ -20,7 +20,6 @@ $extra_mounts
           - $service.devdock.local
     extra_hosts:
         - host.docker.internal:host-gateway
-        - local.glean.com:host-gateway
 $debugport_hosts
 $healthcheck
     labels:
