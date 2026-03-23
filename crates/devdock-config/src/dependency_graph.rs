@@ -37,12 +37,8 @@ impl DependencyGraph {
         let mut graph = Self { nodes: HashMap::new() };
 
         // Track services explicitly listed in the profile (not auto-resolved)
-        let explicit_services: HashSet<String> = profile
-            .services
-            .keys()
-            .chain(profile.infra.keys())
-            .cloned()
-            .collect();
+        let explicit_services: HashSet<String> =
+            profile.services.keys().chain(profile.infra.keys()).cloned().collect();
 
         // Create an expanded profile with transitive dependencies resolved
         let step_start = std::time::Instant::now();
@@ -55,8 +51,7 @@ impl DependencyGraph {
 
         // Load all service configs in parallel
         let step_start = std::time::Instant::now();
-        let configs =
-            Self::load_all_configs(&expanded, workspace_root, &explicit_services).await?;
+        let configs = Self::load_all_configs(&expanded, workspace_root, &explicit_services).await?;
         println!(
             "      └─ Loaded {} configs in {:.2}s",
             configs.len(),
@@ -257,14 +252,14 @@ impl DependencyGraph {
                     }
 
                     // Extract service name from error to check if it was explicitly configured
-                    let is_explicit = explicit_services
-                        .iter()
-                        .any(|svc| error_msg.contains(svc));
+                    let is_explicit = explicit_services.iter().any(|svc| error_msg.contains(svc));
 
                     if is_explicit {
                         errors.push(format!("{e:#}"));
                     } else {
-                        eprintln!("Warning: Failed to load config for transitive dependency: {e:#}");
+                        eprintln!(
+                            "Warning: Failed to load config for transitive dependency: {e:#}"
+                        );
                     }
                 }
                 Err(e) => {

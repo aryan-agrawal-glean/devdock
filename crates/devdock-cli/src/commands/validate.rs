@@ -53,9 +53,11 @@ fn find_workspace_root() -> Result<PathBuf> {
         if dir.join("devdock").join("config").exists() {
             return Ok(dir.to_path_buf());
         }
-        dir = dir
-            .parent()
-            .ok_or_else(|| anyhow::anyhow!("Could not find workspace root (no devdock/config/ found in any parent directory)"))?;
+        dir = dir.parent().ok_or_else(|| {
+            anyhow::anyhow!(
+                "Could not find workspace root (no devdock/config/ found in any parent directory)"
+            )
+        })?;
     }
 }
 
@@ -73,8 +75,7 @@ fn validate_service_configs(
             workspace_root.join(format!(
                 "devdock/config/services/{component}/devdock_config_{platform}.json"
             )),
-            workspace_root
-                .join(format!("devdock/config/services/{component}/devdock_config.json")),
+            workspace_root.join(format!("devdock/config/services/{component}/devdock_config.json")),
         ];
 
         let mut found = false;
@@ -98,9 +99,8 @@ fn validate_service_configs(
         }
         if !found {
             // Infra components and test suites don't always have devdock_config.json
-            let is_infra = workspace_root
-                .join(format!("devdock/config/infra/{component}"))
-                .exists();
+            let is_infra =
+                workspace_root.join(format!("devdock/config/infra/{component}")).exists();
             if !is_infra {
                 println!("    [skip] {component} (no devdock_config.json)");
             }
