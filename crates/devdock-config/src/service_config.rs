@@ -60,15 +60,10 @@ pub enum ServiceType {
     Minimal,
 }
 
-/// Entrypoint configuration — supports both script-based and command-based formats.
-///
-/// Script-based (object): `{"script": "entrypoint.sh"}`
-/// Command-based (array): `["java", "-jar", "/app/foo.jar"]`
+/// Entrypoint configuration
 #[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(untagged)]
-pub enum Entrypoint {
-    Script { script: String },
-    Command(Vec<String>),
+pub struct Entrypoint {
+    pub script: String,
 }
 
 /// Healthcheck configuration
@@ -166,14 +161,11 @@ mod tests {
         }"#;
 
         let config: ServiceConfig = serde_json::from_str(json).unwrap();
-        match config.entrypoint.unwrap() {
-            Entrypoint::Script { script } => assert_eq!(script, "entrypoint.sh"),
-            Entrypoint::Command(_) => panic!("Expected Script variant"),
-        }
+        assert_eq!(config.entrypoint.unwrap().script, "entrypoint.sh");
     }
 
     #[test]
-    fn test_parse_config_with_command_entrypoint() {
+    fn test_parse_config_with_array_entrypoint_fails() {
         let json = r#"{
             "base_image": "test:latest",
             "type": "java",
@@ -181,13 +173,8 @@ mod tests {
             "env": {}
         }"#;
 
-        let config: ServiceConfig = serde_json::from_str(json).unwrap();
-        match config.entrypoint.unwrap() {
-            Entrypoint::Command(cmd) => {
-                assert_eq!(cmd, vec!["java", "-jar", "/app/foo.jar"]);
-            }
-            Entrypoint::Script { .. } => panic!("Expected Command variant"),
-        }
+        let result = serde_json::from_str::<ServiceConfig>(json);
+        assert!(result.is_err(), "Array-style entrypoint should fail parsing");
     }
 
     #[test]
