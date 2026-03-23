@@ -1,0 +1,23 @@
+services:
+  memcached:
+    image: memcached:1.6-alpine
+    container_name: devdock-memcached
+    ports:
+      - "11211:11211"
+    command: memcached -m 512
+    networks:
+      devdock_network:
+        aliases:
+          - memcached.devdock.local
+      devdock_infra:
+        aliases:
+          - memcached.infra.local
+    labels:
+      devdock.service: "memcached"
+      devdock.type: "infra"
+
+networks:
+  devdock_network:
+    external: true
+  devdock_infra:
+    external: true

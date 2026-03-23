@@ -1,0 +1,25 @@
+[package]
+name = "devdock-state"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+devdock-core = { path = "../devdock-core" }
+anyhow.workspace = true
+thiserror.workspace = true
+sqlx.workspace = true
+openssl = { workspace = true, features = ["vendored"] }
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

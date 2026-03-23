@@ -1,0 +1,154 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  fmt:
+    name: Rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --all-targets --all-features -- -D warnings
+
+  test:
+    name: Tests
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --all-features --workspace
+
+      # Run startup benchmark and check thresholds (PR only, both OS)
+      - name: Startup Time Benchmark
+        if: github.event_name == 'pull_request'
+        run: |
+          echo "Running startup benchmark test..."
+          echo ""
+
+          set +e
+          cargo test -p devdock-cli benchmark_startup -- --ignored --nocapture 2>&1 | tee benchmark_output.txt
+          TEST_EXIT_CODE=$?
+          set -e
+
+          echo ""
+          if [ $TEST_EXIT_CODE -ne 0 ]; then
+            echo "❌ Benchmark test failed with exit code $TEST_EXIT_CODE"
+            echo ""
+            echo "=== Full Output ==="
+            cat benchmark_output.txt
+            exit 1
+          fi
+
+          echo "=== Extracting Timing ==="
+          if grep -q '"bootstrap_time_ms"' benchmark_output.txt; then
+            # Extract just the number from the JSON line (portable for both GNU and BSD sed)
+            BOOTSTRAP_TIME=$(grep '"bootstrap_time_ms"' benchmark_output.txt | sed -E 's/.*"bootstrap_time_ms": *([0-9]+).*/\1/')
+
+            if [ -z "$BOOTSTRAP_TIME" ]; then
+              echo "❌ Extracted value is empty"
+              echo "Line found:"
+              grep '"bootstrap_time_ms"' benchmark_output.txt
+              exit 1
+            fi
+
+            echo "✅ Extracted: ${BOOTSTRAP_TIME}ms"
+          else
+            echo "❌ Failed to find bootstrap_time_ms in output"
+            echo ""
+            echo "=== Full Output ==="
+            cat benchmark_output.txt
+            exit 1
+          fi
+
+          echo ""
+          echo "=== Performance Check ==="
+          BOOTSTRAP_SEC=$(awk "BEGIN {printf \"%.2f\", $BOOTSTRAP_TIME / 1000}")
+          echo "Bootstrap time: ${BOOTSTRAP_TIME}ms (${BOOTSTRAP_SEC}s)"
+
+          # Thresholds
+          FAIL_THRESHOLD=15000    # 15 seconds
+          WARN_THRESHOLD=10000    # 10 seconds
+
+          if [ "$BOOTSTRAP_TIME" -gt "$FAIL_THRESHOLD" ]; then
+            echo ""
+            echo "❌ PERFORMANCE REGRESSION!"
+            echo "Bootstrap time (${BOOTSTRAP_SEC}s) exceeds 15s threshold"
+            exit 1
+          elif [ "$BOOTSTRAP_TIME" -gt "$WARN_THRESHOLD" ]; then
+            echo ""
+            echo "⚠️  WARNING: Bootstrap time is elevated (${BOOTSTRAP_SEC}s)"
+            echo "Between 10-15s. Consider investigating."
+          else
+            echo ""
+            echo "✅ EXCELLENT: Bootstrap time under 10s"
+          fi
+
+  doc:
+    name: Documentation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo doc --no-deps --all-features --workspace
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+  deny:
+    name: Cargo Deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: EmbarkStudios/cargo-deny-action@v2
+
+  coverage:
+    name: Code Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
+      - uses: codecov/codecov-action@v5
+        with:
+          files: lcov.info
+          fail_ci_if_error: false
+
+  msrv:
+    name: MSRV Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@1.74.0
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --all-features --workspace

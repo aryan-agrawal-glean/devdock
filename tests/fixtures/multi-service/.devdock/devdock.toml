@@ -1,0 +1,5 @@
+[project]
+name = "multi-service"
+
+[cloud]
+platform = "none"

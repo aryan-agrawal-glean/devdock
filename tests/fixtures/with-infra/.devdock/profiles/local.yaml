@@ -1,0 +1,13 @@
+project: with-infra
+
+infra:
+  sql:
+    type: local
+  redis:
+    type: local
+  opensearch:
+    type: local
+
+services:
+  api:
+    type: local

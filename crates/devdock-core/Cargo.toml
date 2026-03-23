@@ -1,0 +1,33 @@
+[package]
+name = "devdock-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+toml.workspace = true
+async-trait.workspace = true
+tokio.workspace = true
+dirs.workspace = true
+tracing.workspace = true
+which.workspace = true
+
+[features]
+default = []
+gcp = []
+aws = []
+datadog = []
+
+[dev-dependencies]
+tempfile.workspace = true

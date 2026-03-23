@@ -1,0 +1,35 @@
+# Claude Code development assistant (organization-specific, not part of OSS)
+.claude/
+
+# Rust
+/target/
+**/*.rs.bk
+*.pdb
+Cargo.lock
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# DevDock runtime
+.devdock/
+*.db
+*.db-shm
+*.db-wal
+
+# Test artifacts
+/tmp/
+/test-output/
+
+# Logs
+*.log
+
+# Release binaries (should be distributed via GitHub Releases, not committed)
+devdock-*-v*
+*.tar.gz
+plugins/*/target/
+plugins/*/*/target/

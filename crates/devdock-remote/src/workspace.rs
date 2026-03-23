@@ -1,0 +1,443 @@
+//! Workspace lifecycle management.
+
+use crate::{coder, config_sync, port_forward::PortForwardManager, ssh, RemoteError, Result};
+use devdock_core::project_config::RemoteSection;
+use std::path::Path;
+use std::thread::sleep;
+use std::time::Duration;
+use tracing::info;
+
+/// Cleanup existing DevDock session on remote workspace.
+pub fn cleanup_existing_devdock(
+    workspace: &str,
+    log_file: Option<&Path>,
+    remote_workspace_path: &str,
+) -> Result<()> {
+    info!("Cleaning up existing DevDock processes on {}", workspace);
+
+    // Optimized cleanup: Single SSH session with parallelized independent operations
+    // This reduces 5 sequential SSH calls (~10 seconds) to 1 batched call (~2 seconds)
+    let cleanup_script = format!(
+        r#"
+# Parallelize independent cleanup operations for speed
+# Each operation runs in background, we wait for all to complete
+
+# 1. Kill tmux session (background)
+(tmux kill-session -t devdock 2>/dev/null || true) &
+pid_tmux=$!
+
+# 2. Kill tilt processes (background)
+(pkill -f 'tilt up' 2>/dev/null || true) &
+pid_tilt=$!
+
+# 3. Clean up Docker containers - optimized bulk operation (background)
+(
+  # Use -q for just IDs, then bulk remove (faster than xargs with names)
+  containers=$(docker ps -a --filter 'name=devdock-' -q 2>/dev/null)
+  if [ -n "$containers" ]; then
+    docker rm -f $containers 2>/dev/null || true
+  fi
+) &
+pid_docker=$!
+
+# 4. Clean up DevDock database and pid files (background)
+(rm -f ~/.devdock/devdock.db ~/.devdock/*.pid 2>/dev/null || true) &
+pid_files=$!
+
+# Wait for all parallel operations to complete
+wait $pid_tmux $pid_tilt $pid_docker $pid_files
+
+# 5. Run comprehensive devdock cleanup (sequential, after others complete)
+# This ensures all resources are cleaned before running the full cleanup
+cd '{remote_workspace_path}' && devdock cleanup 2>/dev/null || true
+
+echo "Cleanup complete"
+"#,
+        remote_workspace_path = remote_workspace_path
+    );
+
+    match ssh::ssh_exec_with_log(workspace, &cleanup_script, log_file) {
+        Ok(_) => {
+            info!("Cleanup completed successfully");
+            Ok(())
+        }
+        Err(e) => {
+            // Log error but don't fail - cleanup is best-effort
+            info!("Cleanup encountered errors (non-fatal): {}", e);
+            Ok(())
+        }
+    }
+}
+
+/// Provision a new Coder workspace.
+pub async fn provision_workspace(config: &coder::CoderWorkspaceConfig) -> Result<String> {
+    info!("Provisioning workspace: {}", config.workspace_name);
+
+    // Create workspace
+    let workspace_name = coder::create_workspace(config)?;
+
+    // Wait for SSH to be ready
+    ssh::wait_for_ssh_ready(&workspace_name, 300)?; // 5 minute timeout
+
+    Ok(workspace_name)
+}
+
+/// Start DevDock on remote workspace with optional port forwarding.
+#[allow(clippy::too_many_arguments)]
+pub async fn start_remote_devdock<F>(
+    workspace: &str,
+    profile: &str,
+    profile_path: &Path,
+    devdock_id: &str,
+    services: Option<&str>,
+    auto_forward: bool,
+    offset: u16,
+    remote_config: &RemoteSection,
+    project_name: &str,
+    log_file: Option<&Path>,
+    verbose: bool,
+    on_config_complete: Option<F>,
+) -> Result<Option<PortForwardManager>>
+where
+    F: FnOnce(),
+{
+    info!("Starting DevDock on remote workspace: {}", workspace);
+
+    // Log start
+    if let Some(log_path) = log_file {
+        use std::fs::OpenOptions;
+        use std::io::Write;
+        if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(log_path) {
+            let _ = writeln!(file, "\n=== Starting DevDock on Remote Workspace ===");
+            let _ = writeln!(file, "Workspace: {workspace}");
+            let _ = writeln!(file, "Profile: {profile}");
+            let _ = writeln!(file, "DevDock ID: {devdock_id}");
+            let _ = writeln!(file, "Port Offset: {offset}");
+            let _ = writeln!(file, "Services: {services:?}");
+        }
+    }
+
+    let remote_workspace_path = remote_config.resolved_workspace_path(project_name);
+
+    // 1. Sync configuration files
+    info!("Syncing configuration to remote...");
+    if verbose {
+        println!("  Syncing configuration files...");
+    }
+
+    let sync_status = config_sync::sync_all_config(
+        workspace,
+        profile_path,
+        remote_config,
+        project_name,
+        log_file,
+        verbose,
+    )?;
+    if verbose {
+        println!("  ✓ Configuration synced");
+    }
+
+    // Signal that config phase is complete (for progress UI)
+    if let Some(callback) = on_config_complete {
+        callback();
+    }
+
+    // Handle ADC expired (detected during config sync Phase 3, no extra SSH needed)
+    if sync_status.adc_expired {
+        println!();
+        println!("╭─────────────────────────────────────────────────────╮");
+        println!("│  ❌ ERROR: ADC Credentials EXPIRED                  │");
+        println!("╰─────────────────────────────────────────────────────╯");
+        println!();
+        println!("DevDock requires valid Application Default Credentials (ADC).");
+        println!("Your ADC credentials have expired and need to be refreshed.");
+        println!();
+        println!("To fix:");
+        println!("  1. SSH to workspace: coder ssh {workspace}");
+        println!("  2. Run: gcloud auth application-default login");
+        println!("  3. Restart DevDock");
+        println!();
+
+        // Ask user if they want to continue anyway (for debugging)
+        print!("Continue anyway? (DevDock will likely fail) [y/N] ");
+        use std::io::{self, Write};
+        io::stdout().flush().ok();
+
+        let mut response = String::new();
+        io::stdin().read_line(&mut response).ok();
+
+        if !response.trim().eq_ignore_ascii_case("y") {
+            return Err(RemoteError::SshError(
+                "ADC credentials expired - please refresh and try again".to_string(),
+            ));
+        }
+
+        println!("⚠️  Continuing with expired ADC (expect failures)...");
+        println!();
+    }
+
+    // 2. Start DevDock in tmux session on remote
+    // Export environment variables before tmux, they will be inherited by the session
+
+    // Build environment variable exports (quote values to handle special characters)
+    let mut env_exports =
+        format!("export DEVDOCK_ID='{devdock_id}' && export DEVDOCK_PORT_OFFSET={offset}");
+
+    // Export ALL AWS environment variables if set locally
+    // This allows users to use either:
+    //   1. Environment variables (export AWS_ACCESS_KEY_ID=...) OR
+    //   2. Credential files (~/.aws/credentials + ~/.aws/config)
+    // Both approaches are now fully supported and consistent
+    let aws_env_vars = vec![
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_SESSION_TOKEN",
+        "AWS_REGION",
+        "AWS_DEFAULT_REGION",
+        "AWS_PROFILE",
+    ];
+
+    let mut exported_aws_vars = Vec::new();
+    for var in aws_env_vars {
+        if let Ok(value) = std::env::var(var) {
+            // Quote the value to handle spaces and special characters
+            env_exports.push_str(&format!(" && export {var}='{value}'"));
+            exported_aws_vars.push(var);
+        }
+    }
+
+    if verbose && !exported_aws_vars.is_empty() {
+        println!("  AWS env vars exported: {}", exported_aws_vars.join(", "));
+    }
+
+    let start_script = if let Some(svc) = services {
+        format!(
+            "{env_exports} && cd '{remote_workspace_path}' && tmux new-session -d -s devdock 'devdock start {profile} -s {svc}'"
+        )
+    } else {
+        format!(
+            "{env_exports} && cd '{remote_workspace_path}' && tmux new-session -d -s devdock 'devdock start {profile}'"
+        )
+    };
+
+    info!("Starting DevDock in tmux session");
+    if verbose {
+        println!("  Starting DevDock on remote workspace...");
+        println!("  Profile: {profile}");
+        println!("  DevDock ID: {}", &devdock_id[..8.min(devdock_id.len())]);
+        println!("  Port Offset: {offset}");
+    }
+
+    match ssh::ssh_exec_with_log(workspace, &start_script, log_file) {
+        Ok(output) => {
+            if verbose {
+                println!("  ✓ DevDock start command executed");
+            }
+            // Don't print environment variable dumps
+            if verbose
+                && !output.trim().is_empty()
+                && !output.trim().contains("tmux")
+                && !output.trim().contains("declare -x")
+            {
+                println!("  Output: {}", output.trim());
+            }
+        }
+        Err(e) => {
+            let err_msg = format!("{e}");
+            // Check for duplicate session error
+            if err_msg.contains("duplicate session") {
+                println!("  ⚠ Duplicate tmux session detected, cleaning up...");
+
+                // Kill existing session
+                let _ = ssh::ssh_exec_with_log(
+                    workspace,
+                    "tmux kill-session -t devdock 2>/dev/null || true",
+                    log_file,
+                );
+                sleep(Duration::from_secs(2));
+
+                // Retry
+                println!("  Retrying DevDock start...");
+                match ssh::ssh_exec_with_log(workspace, &start_script, log_file) {
+                    Ok(_) => println!("  ✓ Retry succeeded"),
+                    Err(e2) => {
+                        eprintln!("  ❌ ERROR: Retry failed: {e2}");
+                        return Err(e2);
+                    }
+                }
+            } else {
+                eprintln!("  ❌ ERROR: DevDock start command failed: {e}");
+                return Err(e);
+            }
+        }
+    }
+
+    if verbose {
+        println!("  ✓ DevDock command started in background");
+        println!("  To view logs: coder ssh {workspace} -- tmux attach -t devdock");
+    }
+
+    // 3. Wait for Tilt process to start
+    // Combined check: verifies tmux is alive AND Tilt port 10350 is listening
+    // in a single SSH call per iteration (replaces 2 separate SSH calls + sleep(5))
+    if verbose {
+        println!("  Waiting for Tilt to start (timeout: 60s)...");
+    }
+    let timeout = Duration::from_secs(60);
+    let start = std::time::Instant::now();
+    let mut last_print = 0u64;
+
+    // Combined tmux + port check script (single SSH call per iteration)
+    // Always exits 0 so ssh_exec_with_log returns Ok; status is in stdout markers
+    let combined_check = r#"
+if ! tmux has-session -t devdock 2>/dev/null; then
+    echo "DEVDOCK_STATUS:tmux_dead"
+    exit 0
+fi
+if ss -tlnp 2>/dev/null | grep -q ':10350 ' 2>/dev/null; then
+    echo "DEVDOCK_STATUS:tilt_ready"
+    exit 0
+fi
+echo "DEVDOCK_STATUS:waiting"
+exit 0
+"#;
+
+    loop {
+        let elapsed = start.elapsed().as_secs();
+
+        match ssh::ssh_exec_with_log(workspace, combined_check, log_file) {
+            Ok(output) if output.contains("DEVDOCK_STATUS:tilt_ready") => {
+                if verbose {
+                    println!("  ✓ Tilt process is running on port 10350!");
+                }
+                break;
+            }
+            Ok(output) if output.contains("DEVDOCK_STATUS:tmux_dead") => {
+                eprintln!("\n  ❌ ERROR: DevDock tmux session died while waiting for Tilt!");
+                eprintln!("\n  To debug:");
+                eprintln!("    1. SSH to workspace: coder ssh {workspace}");
+                eprintln!("    2. Check logs: cat /tmp/devdock-start.log");
+                eprintln!("    3. Try manual start: devdock start {profile}");
+                return Err(RemoteError::CommandFailed(
+                    "DevDock process died during startup".to_string(),
+                ));
+            }
+            Ok(_) => {
+                // DEVDOCK_STATUS:waiting or unknown — not ready yet, continue
+            }
+            Err(_) => {
+                // SSH connection error — transient, keep waiting
+            }
+        }
+
+        // Print progress every 10 seconds
+        if elapsed > 0 && elapsed >= last_print + 10 {
+            println!("    ... still waiting ({elapsed}s elapsed)");
+            last_print = elapsed;
+        }
+
+        if start.elapsed() > timeout {
+            eprintln!(
+                "\n  ⚠ Warning: Tilt not detected on port 10350 after {} seconds",
+                timeout.as_secs()
+            );
+            eprintln!("  DevDock may still be starting up. Check logs:");
+            eprintln!("    coder ssh {workspace} -- tmux attach -t devdock");
+            break;
+        }
+
+        sleep(Duration::from_secs(2));
+    }
+
+    if verbose {
+        println!();
+        println!("  To view DevDock logs:");
+        println!("    coder ssh {workspace}");
+        println!("    tmux attach -t devdock");
+    }
+
+    // 4. Setup port forwarding
+    if verbose {
+        println!();
+        println!("  Setting up port forwarding...");
+    }
+    let port_mgr = if auto_forward {
+        info!("Setting up auto port forwarding...");
+        let mut mgr =
+            PortForwardManager::from_profile(profile_path, workspace, devdock_id, offset)?;
+        mgr.start_all_forwards()?;
+        if verbose {
+            println!("  ✓ Auto port forwarding enabled");
+        }
+        Some(mgr)
+    } else {
+        // Manual mode: only forward Tilt UI
+        info!("Forwarding Tilt UI only (use --auto-forward for all services)");
+        let tilt_port = offset + 10350;
+        println!("  Starting port forward: localhost:{tilt_port} -> remote:10350");
+        let _child = coder::port_forward_single(workspace, tilt_port, 10350)?;
+        // Keep the child process alive - it will be cleaned up when the program exits
+        std::mem::forget(_child);
+        if verbose {
+            println!("  ✓ Tilt UI port forward started");
+        }
+        None
+    };
+
+    // 5. Final success message (only in verbose mode, caller shows better summary)
+    if verbose {
+        println!("\n  ✅ DevDock is running!");
+        println!("  Tilt UI: http://localhost:{}", offset + 10350);
+        println!("  Logs: coder ssh {workspace} && tmux attach -t devdock");
+    }
+
+    Ok(port_mgr)
+}
+
+/// Wait for Tilt UI to become accessible with progress updates.
+pub fn wait_for_tilt_ui(port: u16, timeout_secs: u64) -> Result<()> {
+    use std::time::Instant;
+
+    info!("Waiting for Tilt UI at http://localhost:{}", port);
+    println!("  Waiting for Tilt UI to become ready (this can take 3-5 minutes)...");
+    println!("  Check logs on remote: coder ssh <workspace> and look at tmux or DevDock logs");
+
+    let start = Instant::now();
+    let timeout = Duration::from_secs(timeout_secs);
+    let mut last_update = 0u64;
+
+    loop {
+        let elapsed = start.elapsed().as_secs();
+
+        // Print progress every 10 seconds
+        if elapsed - last_update >= 10 {
+            println!(
+                "  Still waiting... ({}s elapsed, timeout in {}s)",
+                elapsed,
+                timeout_secs - elapsed
+            );
+            last_update = elapsed;
+        }
+
+        // Try to connect to Tilt UI
+        if std::net::TcpStream::connect(format!("127.0.0.1:{port}")).is_ok() {
+            info!("Tilt UI is ready");
+            println!("  ✓ Tilt UI is ready!");
+            return Ok(());
+        }
+
+        if start.elapsed() > timeout {
+            eprintln!("\n  ❌ Timeout: Tilt UI not ready after {timeout_secs} seconds");
+            eprintln!("  Debug steps:");
+            eprintln!("    1. SSH into workspace: coder ssh <workspace-name>");
+            eprintln!("    2. Check if DevDock started: ps aux | grep devdock");
+            eprintln!("    3. Check Tilt: ps aux | grep tilt");
+            eprintln!("    4. View logs: journalctl --user -f");
+            return Err(RemoteError::CommandFailed(format!(
+                "Tilt UI not ready after {timeout_secs} seconds"
+            )));
+        }
+
+        sleep(Duration::from_secs(5));
+    }
+}

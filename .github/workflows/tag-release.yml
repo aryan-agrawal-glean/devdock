@@ -1,0 +1,74 @@
+name: Tag Release After PR Merge
+
+on:
+  pull_request:
+    types: [closed]
+    branches:
+      - main
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  create-tag:
+    name: Create Release Tag
+    runs-on: ubuntu-latest
+    # Only run if PR was merged (not just closed) and has 'release' label
+    if: github.event.pull_request.merged == true && contains(github.event.pull_request.labels.*.name, 'release')
+    permissions:
+      contents: write
+    steps:
+      - name: Generate GitHub App Token
+        id: generate-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Extract version and create tag using GitHub API
+        id: get-version
+        env:
+          GH_TOKEN: ${{ steps.generate-token.outputs.token }}
+        run: |
+          set -e
+
+          # Get Cargo.toml content from main branch via API
+          CARGO_CONTENT=$(gh api /repos/${{ github.repository }}/contents/Cargo.toml \
+            --jq '.content' | base64 -d)
+
+          # Extract version
+          VERSION=$(echo "$CARGO_CONTENT" | awk '/^\[workspace\.package\]/{flag=1; next} /^\[/{flag=0} flag && /^version/{gsub(/[" ]/, "", $3); print $3; exit}')
+          TAG="v$VERSION"
+
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "Extracted version: $VERSION"
+
+          # Check if tag already exists
+          if gh api /repos/${{ github.repository }}/git/ref/tags/$TAG 2>/dev/null; then
+            echo "Tag $TAG already exists, skipping"
+            exit 0
+          fi
+
+          # Get the SHA of main branch
+          MAIN_SHA=$(gh api /repos/${{ github.repository }}/git/ref/heads/main --jq '.object.sha')
+
+          echo "Creating tag $TAG on commit $MAIN_SHA"
+
+          # Create annotated tag object (auto-signed by GitHub when using App token!)
+          # NOTE: Do NOT set tagger - let GitHub set it automatically for signing
+          TAG_OBJECT_SHA=$(echo "{
+            \"tag\": \"$TAG\",
+            \"message\": \"Release $VERSION\",
+            \"object\": \"$MAIN_SHA\",
+            \"type\": \"commit\"
+          }" | gh api /repos/${{ github.repository }}/git/tags --input - --jq '.sha')
+
+          # Create reference to the tag
+          echo "{
+            \"ref\": \"refs/tags/$TAG\",
+            \"sha\": \"$TAG_OBJECT_SHA\"
+          }" | gh api /repos/${{ github.repository }}/git/refs --input -
+
+          echo "✅ Tag $TAG created successfully"
+          echo "🚀 This will trigger the release workflow to build and publish the release"

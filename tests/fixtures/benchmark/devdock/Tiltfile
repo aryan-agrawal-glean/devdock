@@ -1,0 +1,5 @@
+# Minimal Tiltfile for benchmark test fixture
+# This file is not actually executed during dry-run mode,
+# but may be checked for existence during startup validation.
+
+print("Benchmark test Tiltfile loaded")

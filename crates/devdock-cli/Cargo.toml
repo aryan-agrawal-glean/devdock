@@ -1,0 +1,55 @@
+[package]
+name = "devdock-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "devdock"
+path = "src/main.rs"
+
+[dependencies]
+devdock-core = { path = "../devdock-core" }
+devdock-lifecycle = { path = "../devdock-lifecycle" }
+devdock-mcp = { path = "../devdock-mcp" }
+devdock-config = { path = "../devdock-config" }
+devdock-state = { path = "../devdock-state" }
+devdock-codegen = { path = "../devdock-codegen" }
+devdock-remote = { path = "../devdock-remote" }
+devdock-sync = { path = "../devdock-sync" }
+devdock-diagnostics = { path = "../devdock-diagnostics" }
+devdock-monitor = { path = "../devdock-monitor" }
+devdock-telemetry = { path = "../devdock-telemetry" }
+
+anyhow.workspace = true
+async-trait.workspace = true
+clap.workspace = true
+colored.workspace = true
+tokio.workspace = true
+futures.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+indicatif.workspace = true
+dialoguer.workspace = true
+prettytable-rs.workspace = true
+uuid.workspace = true
+serde.workspace = true
+serde_yaml.workspace = true
+serde_json.workspace = true
+which.workspace = true
+libc.workspace = true
+reqwest.workspace = true
+openssl = { workspace = true, features = ["vendored"] }
+regex.workspace = true
+walkdir.workspace = true
+chrono.workspace = true
+dirs.workspace = true
+tempfile.workspace = true
+
+[dev-dependencies]
