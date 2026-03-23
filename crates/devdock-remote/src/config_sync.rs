@@ -1,12 +1,13 @@
 //! Configuration file synchronization to remote workspaces.
 //!
 //! Optimized for minimal SSH connections:
-//! - Phase 1 (1 SSH): Create directories, write profile, custom.ini, and claude.json
+//! - Phase 1 (1 SSH): Create directories, write profile, and any extra sync_files
 //! - Phase 2 (1 SCP): Copy gcloud credential files (GCP/unknown platform only)
 //! - Phase 3 (1 SSH): Finalize gcloud - move creds, verify auth, set project (GCP/unknown platform only)
 
 use crate::{RemoteError, Result};
 use devdock_core::profile::Profile;
+use devdock_core::project_config::{RemoteSection, RemoteSyncFile};
 use std::path::Path;
 use std::process::Command;
 use tracing::{debug, info};
@@ -285,11 +286,12 @@ pub struct ConfigSyncStatus {
 pub fn sync_all_config(
     workspace: &str,
     profile_path: &Path,
-    custom_ini_path: Option<&Path>,
-    remote_workspace_path: &str,
+    remote_config: &RemoteSection,
+    project_name: &str,
     log_file: Option<&Path>,
     verbose: bool,
 ) -> Result<ConfigSyncStatus> {
+    let remote_workspace_path = remote_config.resolved_workspace_path(project_name);
     use std::fs::OpenOptions;
     use std::io::Write;
 
@@ -310,19 +312,31 @@ pub fn sync_all_config(
     let profile_content = std::fs::read_to_string(profile_path)
         .map_err(|e| RemoteError::ConfigSyncError(format!("Failed to read profile: {e}")))?;
     let (remote_profile_path, remote_profile_dir) =
-        compute_remote_profile_path(profile_path, remote_workspace_path)?;
+        compute_remote_profile_path(profile_path, &remote_workspace_path)?;
 
-    let custom_ini_content = if let Some(path) = custom_ini_path {
-        if path.exists() {
-            Some(std::fs::read_to_string(path).map_err(|e| {
-                RemoteError::ConfigSyncError(format!("Failed to read custom.ini: {e}"))
-            })?)
-        } else {
-            None
-        }
-    } else {
-        None
-    };
+    // Read extra sync_files from config (fail fast if a file is listed but missing)
+    let devdock_root = std::env::var("DEVDOCK_ROOT")
+        .or_else(|_| std::env::var("PWD"))
+        .unwrap_or_else(|_| ".".to_string());
+    let extra_file_contents: Vec<(&RemoteSyncFile, String)> = remote_config
+        .sync_files
+        .iter()
+        .filter_map(|sf| {
+            let local_path = std::path::Path::new(&devdock_root).join(&sf.local);
+            if local_path.exists() {
+                match std::fs::read_to_string(&local_path) {
+                    Ok(content) => Some(Ok((sf, content))),
+                    Err(e) => Some(Err(RemoteError::ConfigSyncError(format!(
+                        "Failed to read sync_file '{}': {e}",
+                        sf.local
+                    )))),
+                }
+            } else {
+                debug!("sync_file '{}' not found locally, skipping", sf.local);
+                None
+            }
+        })
+        .collect::<Result<Vec<_>>>()?;
 
     let platform = get_profile_platform(profile_path).ok();
     let is_gcp = matches!(platform.as_deref(), Some("google") | Some("gcp"));
@@ -360,18 +374,29 @@ pub fn sync_all_config(
     let mut script = String::new();
     script.push_str("set -e\n\n");
 
-    // Create all directories in one shot
+    // Create all required directories in one shot:
+    // - the profile's parent dir
+    // - any extra_dirs from devdock.toml [remote]
+    // - parent dirs for each sync_file destination
+    // - the secrets-sync staging dir (when syncing gcloud credentials)
     if needs_secrets_sync {
         script.push_str("rm -rf ~/.secrets-sync\n");
     }
-    script.push_str(&format!(
-        "mkdir -p '{}' \
-         '{remote_workspace_path}/devdock/profiles/user_profiles' \
-         '{remote_workspace_path}/devdock/profiles/integration_tests' \
-         '{remote_workspace_path}/config'{}\n\n",
-        remote_profile_dir,
-        if needs_secrets_sync { " ~/.secrets-sync" } else { "" }
-    ));
+    let mut mkdir_dirs = vec![format!("'{remote_profile_dir}'")];
+    for dir in &remote_config.extra_dirs {
+        mkdir_dirs.push(format!("'{remote_workspace_path}/{dir}'"));
+    }
+    for sf in &remote_config.sync_files {
+        if let Some(parent) = std::path::Path::new(&sf.remote).parent() {
+            if !parent.as_os_str().is_empty() {
+                mkdir_dirs.push(format!("'{remote_workspace_path}/{}'", parent.display()));
+            }
+        }
+    }
+    if needs_secrets_sync {
+        mkdir_dirs.push("~/.secrets-sync".to_string());
+    }
+    script.push_str(&format!("mkdir -p {}\n\n", mkdir_dirs.join(" ")));
 
     // Write profile via heredoc
     script.push_str(&format!(
@@ -379,11 +404,12 @@ pub fn sync_all_config(
         remote_profile_path, profile_content
     ));
 
-    // Write custom.ini via heredoc (conditional)
-    if let Some(ref ini_content) = custom_ini_content {
+    // Write each sync_file via heredoc
+    for (i, (sf, content)) in extra_file_contents.iter().enumerate() {
+        let tag = format!("DEVDOCK_FILE_{i}_EOF");
         script.push_str(&format!(
-            "cat > '{remote_workspace_path}/config/custom.ini' << 'DEVDOCK_INI_EOF'\n{}\nDEVDOCK_INI_EOF\n\n",
-            ini_content
+            "cat > '{remote_workspace_path}/{}' << '{tag}'\n{}\n{tag}\n\n",
+            sf.remote, content
         ));
     }
 
@@ -412,8 +438,8 @@ pub fn sync_all_config(
 
     if verbose {
         println!("      ✓ Profile synced to {}", remote_profile_path);
-        if custom_ini_content.is_some() {
-            println!("      ✓ custom.ini synced");
+        for (sf, _) in &extra_file_contents {
+            println!("      ✓ {} synced", sf.local);
         }
     }
 

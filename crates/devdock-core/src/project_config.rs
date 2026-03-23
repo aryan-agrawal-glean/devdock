@@ -44,6 +44,25 @@ pub struct RegistrySection {
     pub url: String,
 }
 
+/// A local→remote file mapping for `[remote.sync_files]`.
+///
+/// The local path is relative to the monorepo root. The remote path is relative
+/// to `[remote.workspace_path]`. Both use forward slashes.
+///
+/// Example (`devdock.toml`):
+/// ```toml
+/// [[remote.sync_files]]
+/// local  = "config/custom.ini"
+/// remote = "config/custom.ini"
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RemoteSyncFile {
+    /// Path relative to the local monorepo root.
+    pub local: String,
+    /// Destination path relative to the remote workspace root.
+    pub remote: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RemoteSection {
     #[serde(default = "default_remote_provider")]
@@ -52,6 +71,26 @@ pub struct RemoteSection {
     /// Absolute path to the monorepo root on remote workspaces.
     /// Defaults to `/home/workspace/<project_name>` when not set.
     pub workspace_path: Option<String>,
+    /// Extra directories to pre-create under the remote workspace root.
+    /// Paths are relative to `workspace_path`.
+    ///
+    /// Example:
+    /// ```toml
+    /// [remote]
+    /// extra_dirs = ["devdock/profiles/user_profiles", "logs"]
+    /// ```
+    #[serde(default)]
+    pub extra_dirs: Vec<String>,
+    /// Additional files to sync from the local repo to the remote workspace.
+    ///
+    /// Example:
+    /// ```toml
+    /// [[remote.sync_files]]
+    /// local  = "config/custom.ini"
+    /// remote = "config/custom.ini"
+    /// ```
+    #[serde(default)]
+    pub sync_files: Vec<RemoteSyncFile>,
 }
 
 impl RemoteSection {
@@ -266,7 +305,13 @@ fn default_diagnostics_reporter() -> String {
 
 impl Default for RemoteSection {
     fn default() -> Self {
-        Self { provider: default_remote_provider(), template: None, workspace_path: None }
+        Self {
+            provider: default_remote_provider(),
+            template: None,
+            workspace_path: None,
+            extra_dirs: Vec::new(),
+            sync_files: Vec::new(),
+        }
     }
 }
 impl Default for TelemetrySection {

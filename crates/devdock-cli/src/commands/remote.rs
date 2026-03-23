@@ -113,18 +113,18 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
 
     // Load devdock.toml for remote configuration
     let devdock_toml_path = std::path::Path::new(&worktree).join(".devdock/devdock.toml");
-    let (coder_template, remote_workspace_path) = if devdock_toml_path.exists() {
-        match devdock_core::ProjectConfig::load(&devdock_toml_path) {
-            Ok(pc) => {
-                let template = pc.remote.template.clone().unwrap_or_else(|| "devdock".to_string());
-                let ws_path = pc.remote.resolved_workspace_path(&pc.project.name);
-                (template, ws_path)
-            }
-            Err(_) => ("devdock".to_string(), "/home/workspace/scio".to_string()),
-        }
-    } else {
-        ("devdock".to_string(), "/home/workspace/scio".to_string())
-    };
+    let project_config = devdock_core::ProjectConfig::load(&devdock_toml_path).ok();
+    let coder_template = project_config
+        .as_ref()
+        .and_then(|pc| pc.remote.template.clone())
+        .unwrap_or_else(|| "devdock".to_string());
+    let remote_workspace_path = project_config
+        .as_ref()
+        .map(|pc| pc.remote.resolved_workspace_path(&pc.project.name))
+        .unwrap_or_else(|| "/home/workspace/scio".to_string());
+    let default_remote = devdock_core::RemoteSection::default();
+    let remote_config = project_config.as_ref().map(|pc| &pc.remote).unwrap_or(&default_remote);
+    let project_name = project_config.as_ref().map(|pc| pc.project.name.as_str()).unwrap_or("scio");
 
     // Register instance in database
     let state = StateManager::new().await?;
@@ -282,7 +282,7 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
                         workspace::cleanup_existing_devdock(
                             &workspace_name,
                             Some(logger.path()),
-                            &remote_workspace_path,
+                            &remote_workspace_path, // resolved from project_config
                         )?;
                         logger.log("Existing DevDock session cleaned up")?;
 
@@ -429,7 +429,8 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
             services.as_deref(),
             auto_forward,
             offset,
-            &remote_workspace_path,
+            remote_config,
+            project_name,
             Some(logger.path()),
             verbose,
             Some(on_config_complete),

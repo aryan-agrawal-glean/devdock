@@ -33,13 +33,9 @@ pub async fn start(full: bool, log_level: &str) -> Result<()> {
     // Resolve the remote workspace path from devdock.toml
     let remote_path = {
         let devdock_toml = std::path::Path::new(&worktree).join(".devdock/devdock.toml");
-        if devdock_toml.exists() {
-            match ProjectConfig::load(&devdock_toml) {
-                Ok(pc) => PathBuf::from(pc.remote.resolved_workspace_path(&pc.project.name)),
-                Err(_) => PathBuf::from("/home/workspace/scio"),
-            }
-        } else {
-            PathBuf::from("/home/workspace/scio")
+        match ProjectConfig::load(&devdock_toml) {
+            Ok(pc) => PathBuf::from(pc.remote.resolved_workspace_path(&pc.project.name)),
+            Err(_) => PathBuf::from("/home/workspace/scio"),
         }
     };
 
