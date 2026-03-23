@@ -150,4 +150,4 @@ plugins/
 └── examples/                   # Reference implementations
 ```
 
-Organization-specific plugins live in separate repos (e.g., [devdock-glean-plugins](https://github.com/aryan-agrawal-glean/devdock-glean-plugins)).
+Organization-specific plugins live in separate repos. Build them using the Rust SDK or any language, publish as binaries, and reference them in your `devdock.toml`.

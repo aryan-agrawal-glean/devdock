@@ -121,10 +121,16 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
     let remote_workspace_path = project_config
         .as_ref()
         .map(|pc| pc.remote.resolved_workspace_path(&pc.project.name))
-        .unwrap_or_else(|| "/home/workspace/scio".to_string());
+        .unwrap_or_else(|| {
+            warn!("No devdock.toml found; remote workspace path unknown. Set [remote] workspace_path.");
+            format!("/home/workspace/{}", worktree.split('/').next_back().unwrap_or("project"))
+        });
     let default_remote = devdock_core::RemoteSection::default();
     let remote_config = project_config.as_ref().map(|pc| &pc.remote).unwrap_or(&default_remote);
-    let project_name = project_config.as_ref().map(|pc| pc.project.name.as_str()).unwrap_or("scio");
+    let project_name = project_config
+        .as_ref()
+        .map(|pc| pc.project.name.as_str())
+        .unwrap_or_else(|| worktree.split('/').next_back().unwrap_or("project"));
 
     // Register instance in database
     let state = StateManager::new().await?;

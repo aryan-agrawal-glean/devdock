@@ -296,7 +296,7 @@ DevDock uses external plugins for cloud integrations. Plugins are standalone exe
 | `slack-notifier` | `plugins/notifications/` | `after_ready`, `on_error` |
 | `jira-reporter` | `plugins/diagnostics/` | `on_error`, `on_report` |
 
-Organization-specific plugins live in separate repos. For example, Glean's plugins are at [devdock-glean-plugins](https://github.com/aryan-agrawal-glean/devdock-glean-plugins) (private).
+Organization-specific plugins live in separate repos. For example, your org's plugins can live in a private `devdock-plugins` repo and be installed via `cargo install`.
 
 ### Install a Plugin
 

@@ -67,9 +67,7 @@ devdock --version
 
 ## Installation Methods
 
-**Note:** The repository is currently **PRIVATE**, which requires authentication.
-
-### 1. Installer Script (Recommended for Internal Users)
+### 1. Installer Script (Recommended)
 
 ```bash
 gh repo clone askscio/devdock
@@ -239,4 +237,3 @@ devdock/
 
 For questions or issues:
 - GitHub Issues: https://github.com/askscio/devdock/issues
-- Internal Slack: #devdock

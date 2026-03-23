@@ -10,7 +10,7 @@ use tracing::{debug, info, warn};
 pub const MONITORED_DIRS: &[&str] = &[
     "data/",
     "go/",
-    "python_scio/",
+    "python/",
     "typescript/",
     "java/",
     "proto/",
@@ -133,7 +133,7 @@ pub fn list_git_modified_files(repo_path: &Path) -> Result<Vec<PathBuf>> {
 
     use std::process::Command;
 
-    // For Scio, we always use origin/master as the base branch
+    // Try origin/master first, fall back to origin/main
     let output = Command::new("git")
         .args(["merge-base", "origin/master", "HEAD"])
         .current_dir(repo_path)

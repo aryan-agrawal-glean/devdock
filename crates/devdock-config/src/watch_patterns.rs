@@ -252,7 +252,7 @@ impl WatchPatternGenerator {
     ///
     /// Examples:
     /// - `//go/platform/gcp/query_endpoint:query_endpoint_binary` → `go/platform/gcp/query_endpoint/`
-    /// - `//python_scio/platform/google/app/query_parser` → `python_scio/platform/google/app/query_parser/`
+    /// - `//python/platform/app/query_parser` → `python/platform/app/query_parser/`
     /// - `//java/crawler:crawler.war` → `java/crawler/`
     fn target_to_package_pattern(&self, target: &str) -> Option<String> {
         let target = target.strip_prefix("//").unwrap_or(target);
@@ -430,8 +430,8 @@ mod tests {
         );
 
         assert_eq!(
-            gen.target_to_package_pattern("//python_scio/platform/google/app/query_parser"),
-            Some("python_scio/platform/google/app/query_parser/".to_string())
+            gen.target_to_package_pattern("//python/platform/app/query_parser"),
+            Some("python/platform/app/query_parser/".to_string())
         );
 
         assert_eq!(
@@ -465,11 +465,11 @@ mod tests {
         let patterns = gen.generate_patterns(
             "qp",
             ServiceType::Python,
-            Some("//python_scio/platform/google/app/query_parser"),
+            Some("//python/platform/app/query_parser"),
         );
 
         // Pattern comes from target extraction (not hardcoded type patterns)
-        assert!(patterns.iter().any(|p| p.starts_with("python_scio/")));
+        assert!(patterns.iter().any(|p| p.starts_with("python/")));
     }
 
     #[test]

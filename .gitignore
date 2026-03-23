@@ -1,3 +1,6 @@
+# Claude Code development assistant (organization-specific, not part of OSS)
+.claude/
+
 # Rust
 /target/
 **/*.rs.bk

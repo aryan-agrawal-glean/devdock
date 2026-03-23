@@ -103,12 +103,10 @@ def setup_pipeline(name, profile, project):
     params_str = " ".join(params_list)
 
     # Build the pipeline using Bazel
-    # Use config-specified target, or fall back to platform defaults
-    if temp_profile.get('platform', '') == 'aws':
-        default_bazel_target = "//java/com/askscio/platform/common/flink:flink_deploy.jar"
-    else:
-        default_bazel_target = "//java/com/askscio/platform/google/dataflow:dataflow_deploy.jar"
-    bazel_target = pipeline_config.get('bazel_target', default_bazel_target)
+    # bazel_target must be specified in pipeline config
+    bazel_target = pipeline_config.get('bazel_target', '')
+    if not bazel_target:
+        fail("Pipeline '{}' must specify 'bazel_target' in its pipeline config".format(pipe_name))
 
     watch_dirs = pipeline_config.get('watch_dirs', ["java"])
 

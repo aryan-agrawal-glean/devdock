@@ -35,7 +35,12 @@ pub async fn start(full: bool, log_level: &str) -> Result<()> {
         let devdock_toml = std::path::Path::new(&worktree).join(".devdock/devdock.toml");
         match ProjectConfig::load(&devdock_toml) {
             Ok(pc) => PathBuf::from(pc.remote.resolved_workspace_path(&pc.project.name)),
-            Err(_) => PathBuf::from("/home/workspace/scio"),
+            Err(_) => {
+                // Fallback: derive from the worktree directory name.
+                // Configure via [remote] workspace_path in devdock.toml for accuracy.
+                let dir_name = worktree.split('/').next_back().unwrap_or("project");
+                PathBuf::from(format!("/home/workspace/{dir_name}"))
+            }
         }
     };
 

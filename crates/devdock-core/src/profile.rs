@@ -217,7 +217,7 @@ impl Profile {
     ///
     /// Supports both the canonical format with an explicit `multi_project:` key
     /// and the shorthand format where the secondary project name is used directly
-    /// as a top-level key (e.g. `glean-apps-canary: { infra: ..., services: ... }`).
+    /// as a top-level key (e.g. `secondary-project: { infra: ..., services: ... }`).
     pub fn from_yaml(yaml: &str) -> Result<Self, serde_yaml::Error> {
         let mut value: serde_yaml::Value = serde_yaml::from_str(yaml)?;
         normalize_multi_project_key(&mut value);
@@ -465,7 +465,7 @@ multi_project:
     fn test_parse_profile_multi_project_shorthand() {
         // Shorthand format: secondary project name is the top-level YAML key.
         let yaml = r"
-project: salessavvy-test
+project: my-project
 infra:
   sql:
     type: local
@@ -476,7 +476,7 @@ services:
     type: local
   fe:
     type: local
-glean-apps-canary:
+secondary-project:
   infra:
     sql:
       type: local
@@ -484,12 +484,12 @@ glean-apps-canary:
     central_datasources:
       type: local
       env:
-        TEST_USER: steve.smith@salessavvy.net
+        TEST_USER: user@example.com
 ";
         let profile = Profile::from_yaml(yaml).unwrap();
 
         // Top-level fields
-        assert_eq!(profile.project, "salessavvy-test");
+        assert_eq!(profile.project, "my-project");
         assert!(profile.has_component("qe"));
         assert!(profile.has_component("fe"));
         assert!(profile.has_component("sql"));
@@ -497,7 +497,7 @@ glean-apps-canary:
 
         // Multi-project parsed from shorthand key
         let multi = profile.multi_project.as_ref().expect("multi_project should be present");
-        assert_eq!(multi.project, "glean-apps-canary");
+        assert_eq!(multi.project, "secondary-project");
         assert!(multi.services.contains_key("central_datasources"));
         assert!(multi.infra.contains_key("sql"));
 
