@@ -60,10 +60,15 @@ pub enum ServiceType {
     Minimal,
 }
 
-/// Entrypoint configuration
+/// Entrypoint configuration — supports both script-based and command-based formats.
+///
+/// Script-based (object): `{"script": "entrypoint.sh"}`
+/// Command-based (array): `["java", "-jar", "/app/foo.jar"]`
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct Entrypoint {
-    pub script: String,
+#[serde(untagged)]
+pub enum Entrypoint {
+    Script { script: String },
+    Command(Vec<String>),
 }
 
 /// Healthcheck configuration
@@ -149,6 +154,52 @@ mod tests {
         assert_eq!(config.service_type, ServiceType::Go);
         assert_eq!(config.dependencies.len(), 2);
         assert_eq!(config.env.get("PORT"), Some(&"7960".to_string()));
+    }
+
+    #[test]
+    fn test_parse_config_with_script_entrypoint() {
+        let json = r#"{
+            "base_image": "test:latest",
+            "type": "java",
+            "entrypoint": {"script": "entrypoint.sh"},
+            "env": {}
+        }"#;
+
+        let config: ServiceConfig = serde_json::from_str(json).unwrap();
+        match config.entrypoint.unwrap() {
+            Entrypoint::Script { script } => assert_eq!(script, "entrypoint.sh"),
+            Entrypoint::Command(_) => panic!("Expected Script variant"),
+        }
+    }
+
+    #[test]
+    fn test_parse_config_with_command_entrypoint() {
+        let json = r#"{
+            "base_image": "test:latest",
+            "type": "java",
+            "entrypoint": ["java", "-jar", "/app/foo.jar"],
+            "env": {}
+        }"#;
+
+        let config: ServiceConfig = serde_json::from_str(json).unwrap();
+        match config.entrypoint.unwrap() {
+            Entrypoint::Command(cmd) => {
+                assert_eq!(cmd, vec!["java", "-jar", "/app/foo.jar"]);
+            }
+            Entrypoint::Script { .. } => panic!("Expected Command variant"),
+        }
+    }
+
+    #[test]
+    fn test_parse_config_without_entrypoint() {
+        let json = r#"{
+            "base_image": "test:latest",
+            "type": "java",
+            "env": {}
+        }"#;
+
+        let config: ServiceConfig = serde_json::from_str(json).unwrap();
+        assert!(config.entrypoint.is_none());
     }
 
     #[test]
