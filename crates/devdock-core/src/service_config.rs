@@ -48,6 +48,14 @@ pub struct DevdockServiceConfig {
     pub env: HashMap<String, String>,
     #[serde(default)]
     pub bazel_target: Option<String>,
+    /// Generic build command for non-Bazel services (e.g. `["npm", "run", "build"]`).
+    /// Creates a `{name}-build` local_resource in Tilt.
+    #[serde(default)]
+    pub build_command: Option<Vec<String>>,
+    /// Path to the artifact produced by `build_command` (e.g. `"dist/"` or
+    /// `"target/release/my-app"`). Mounted into the Docker container.
+    #[serde(default)]
+    pub build_output: Option<String>,
     #[serde(default)]
     pub binary_mount: Option<String>,
     #[serde(default)]
@@ -113,6 +121,16 @@ impl DevdockServiceConfig {
 
     pub fn uses_bazel(&self) -> bool {
         self.bazel_target.is_some()
+    }
+
+    /// Returns true if this service uses a non-Bazel build command.
+    pub fn uses_generic_build(&self) -> bool {
+        self.build_command.is_some()
+    }
+
+    /// Returns true if this service has any local build step (Bazel or generic).
+    pub fn has_build_target(&self) -> bool {
+        self.bazel_target.is_some() || self.build_command.is_some()
     }
 
     /// Returns true if this component is of kind "infra".
@@ -279,6 +297,38 @@ mod tests {
     fn generate_compose_returns_none_without_image() {
         let c = DevdockServiceConfig::parse(r#"{"kind":"infra","port":"3306"}"#).unwrap();
         assert!(c.generate_compose("sql").is_none());
+    }
+
+    #[test]
+    fn parse_build_command() {
+        let c = DevdockServiceConfig::parse(
+            r#"{"type":"node","build_command":["npm","run","build"],"build_output":"dist/"}"#,
+        )
+        .unwrap();
+        assert_eq!(c.build_command, Some(vec!["npm".into(), "run".into(), "build".into()]));
+        assert_eq!(c.build_output, Some("dist/".into()));
+        assert!(c.uses_generic_build());
+        assert!(c.has_build_target());
+        assert!(!c.uses_bazel());
+    }
+
+    #[test]
+    fn has_build_target_bazel() {
+        let c = DevdockServiceConfig::parse(
+            r#"{"type":"java","bazel_target":"//services/api:deploy"}"#,
+        )
+        .unwrap();
+        assert!(c.has_build_target());
+        assert!(c.uses_bazel());
+        assert!(!c.uses_generic_build());
+    }
+
+    #[test]
+    fn has_build_target_false_when_neither() {
+        let c = DevdockServiceConfig::parse(r#"{"type":"python"}"#).unwrap();
+        assert!(!c.has_build_target());
+        assert!(!c.uses_bazel());
+        assert!(!c.uses_generic_build());
     }
 
     #[test]

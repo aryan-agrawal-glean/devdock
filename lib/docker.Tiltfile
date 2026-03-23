@@ -78,13 +78,14 @@ def setup_docker_build(context, dockerfile = None, compose_file = None):
     profile = read_yaml('{}/devdock/runtime_generated/temp_profile.yaml'.format(devdock_root))
     architecture = profile.get('architecture', 'unknown')
 
-    # Build bazel info command with conditional bazelrc
-    bazel_info_cmd = ["bazel"]
-    bazel_info_cmd.extend(get_bazel_flags())
-    bazel_info_cmd.extend(["info", "bazel-bin"])
-
-    # Get bazel-bin directory
-    bazel_bin = str(local(' '.join(bazel_info_cmd), quiet=True)).strip()
+    # Get bazel-bin directory (only needed for Bazel-based services)
+    if context.get("build_system", "bazel") == "bazel":
+        bazel_info_cmd = ["bazel"]
+        bazel_info_cmd.extend(get_bazel_flags())
+        bazel_info_cmd.extend(["info", "bazel-bin"])
+        bazel_bin = str(local(' '.join(bazel_info_cmd), quiet=True)).strip()
+    else:
+        bazel_bin = ""
     service_name = context["service"]
 
     # Create temp directory for the service

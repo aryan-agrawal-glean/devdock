@@ -130,8 +130,8 @@ devdock/services/
 | `healthcheck` | No | Docker healthcheck config |
 | `watch_dirs` | No | Directories to watch for hot-reload |
 
-> **Note:** If neither `bazel_target` nor `build_command` is set, the service is skipped
-> during build but can still run as a remote service.
+> **Note:** If neither `bazel_target` nor `build_command` is set, the service runs as a
+> pure Docker service (no local build step). Useful for pre-built images or remote services.
 
 ### Step 3: Create a Profile
 
