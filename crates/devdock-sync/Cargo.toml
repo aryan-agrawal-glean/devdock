@@ -21,7 +21,7 @@ dirs = { workspace = true }
 chrono = "0.4"
 
 # File watching
-notify = "6.1"
+notify = "8.2"
 ignore = "0.4"
 
 # Git operations
