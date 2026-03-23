@@ -32,11 +32,10 @@ impl SyncDaemon {
         devdock_id: String,
         workspace_name: String,
         repo_path: PathBuf,
+        remote_path: PathBuf,
         full_mode: bool,
         branch_mode: bool,
     ) -> Result<Self> {
-        let remote_path = PathBuf::from("/home/workspace/scio");
-
         let rsync_client = RsyncClient::new(workspace_name.clone(), repo_path.clone(), remote_path);
 
         let file_watcher = FileWatcher::new()?;
@@ -395,6 +394,7 @@ pub fn start_daemon_foreground(
     devdock_id: &str,
     workspace_name: &str,
     repo_path: &Path,
+    remote_path: PathBuf,
     full_mode: bool,
     branch_mode: bool,
     log_level: &str,
@@ -411,6 +411,7 @@ pub fn start_daemon_foreground(
         devdock_id.to_string(),
         workspace_name.to_string(),
         repo_path.to_path_buf(),
+        remote_path,
         full_mode,
         branch_mode,
     )?;
@@ -423,6 +424,7 @@ pub fn start_daemon(
     devdock_id: &str,
     workspace_name: &str,
     repo_path: &Path,
+    remote_path: &Path,
     full_mode: bool,
     branch_mode: bool,
     log_level: &str,
@@ -457,6 +459,7 @@ pub fn start_daemon(
         .arg(devdock_id)
         .arg(workspace_name)
         .arg(repo_path)
+        .arg(remote_path)
         .arg(if full_mode { "true" } else { "false" })
         .arg(if branch_mode { "true" } else { "false" })
         .arg(log_level);
@@ -490,6 +493,7 @@ pub fn run_daemon_process(
     devdock_id: &str,
     workspace_name: &str,
     repo_path: &Path,
+    remote_path: PathBuf,
     full_mode: bool,
     branch_mode: bool,
 ) -> Result<()> {
@@ -502,12 +506,14 @@ pub fn run_daemon_process(
     info!("DevDock ID: {devdock_id}");
     info!("Workspace: {workspace_name}");
     info!("Repo: {}", repo_path.display());
+    info!("Remote path: {}", remote_path.display());
     info!("Time: {:?}", std::time::SystemTime::now());
 
     let mut daemon = match SyncDaemon::new(
         devdock_id.clone(),
         workspace_name.clone(),
         repo_path.clone(),
+        remote_path,
         full_mode,
         branch_mode,
     ) {

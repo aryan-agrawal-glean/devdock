@@ -2,6 +2,7 @@
 
 use anyhow::{anyhow, Result};
 use colored::Colorize;
+use devdock_core::ProjectConfig;
 use devdock_state::StateManager;
 use devdock_sync::daemon as sync_daemon;
 use devdock_sync::stats;
@@ -28,10 +29,25 @@ pub async fn start(full: bool, log_level: &str) -> Result<()> {
     println!("  Mode: {}", if full { "all files" } else { "git-tracked only" });
 
     let repo_path = PathBuf::from(&worktree);
+
+    // Resolve the remote workspace path from devdock.toml
+    let remote_path = {
+        let devdock_toml = std::path::Path::new(&worktree).join(".devdock/devdock.toml");
+        if devdock_toml.exists() {
+            match ProjectConfig::load(&devdock_toml) {
+                Ok(pc) => PathBuf::from(pc.remote.resolved_workspace_path(&pc.project.name)),
+                Err(_) => PathBuf::from("/home/workspace/scio"),
+            }
+        } else {
+            PathBuf::from("/home/workspace/scio")
+        }
+    };
+
     let _pid = sync_daemon::start_daemon(
         &devdock_id,
         &workspace_name,
         &repo_path,
+        &remote_path,
         full,
         false, // branch_mode = false (manual sync always uses diff mode)
         log_level,

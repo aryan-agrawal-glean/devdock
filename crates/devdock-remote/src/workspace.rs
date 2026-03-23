@@ -7,12 +7,17 @@ use std::time::Duration;
 use tracing::info;
 
 /// Cleanup existing DevDock session on remote workspace.
-pub fn cleanup_existing_devdock(workspace: &str, log_file: Option<&Path>) -> Result<()> {
+pub fn cleanup_existing_devdock(
+    workspace: &str,
+    log_file: Option<&Path>,
+    remote_workspace_path: &str,
+) -> Result<()> {
     info!("Cleaning up existing DevDock processes on {}", workspace);
 
     // Optimized cleanup: Single SSH session with parallelized independent operations
     // This reduces 5 sequential SSH calls (~10 seconds) to 1 batched call (~2 seconds)
-    let cleanup_script = r#"
+    let cleanup_script = format!(
+        r#"
 # Parallelize independent cleanup operations for speed
 # Each operation runs in background, we wait for all to complete
 
@@ -43,12 +48,14 @@ wait $pid_tmux $pid_tilt $pid_docker $pid_files
 
 # 5. Run comprehensive devdock cleanup (sequential, after others complete)
 # This ensures all resources are cleaned before running the full cleanup
-cd /home/workspace/scio && devdock cleanup 2>/dev/null || true
+cd '{remote_workspace_path}' && devdock cleanup 2>/dev/null || true
 
 echo "Cleanup complete"
-"#;
+"#,
+        remote_workspace_path = remote_workspace_path
+    );
 
-    match ssh::ssh_exec_with_log(workspace, cleanup_script, log_file) {
+    match ssh::ssh_exec_with_log(workspace, &cleanup_script, log_file) {
         Ok(_) => {
             info!("Cleanup completed successfully");
             Ok(())
@@ -84,6 +91,7 @@ pub async fn start_remote_devdock<F>(
     services: Option<&str>,
     auto_forward: bool,
     offset: u16,
+    remote_workspace_path: &str,
     log_file: Option<&Path>,
     verbose: bool,
     on_config_complete: Option<F>,
@@ -118,6 +126,7 @@ where
         workspace,
         profile_path,
         custom_ini_path.as_deref(),
+        remote_workspace_path,
         log_file,
         verbose,
     )?;
@@ -200,11 +209,11 @@ where
 
     let start_script = if let Some(svc) = services {
         format!(
-            "{env_exports} && cd /home/workspace/scio && tmux new-session -d -s devdock 'devdock start {profile} -s {svc}'"
+            "{env_exports} && cd '{remote_workspace_path}' && tmux new-session -d -s devdock 'devdock start {profile} -s {svc}'"
         )
     } else {
         format!(
-            "{env_exports} && cd /home/workspace/scio && tmux new-session -d -s devdock 'devdock start {profile}'"
+            "{env_exports} && cd '{remote_workspace_path}' && tmux new-session -d -s devdock 'devdock start {profile}'"
         )
     };
 

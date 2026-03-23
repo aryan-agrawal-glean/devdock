@@ -485,14 +485,16 @@ enum SyncCommands {
 async fn main() {
     // Check if we're being called as the sync daemon (hidden internal command)
     let args: Vec<String> = std::env::args().collect();
-    if args.len() >= 5 && args[1] == "__sync_daemon__" {
+    if args.len() >= 6 && args[1] == "__sync_daemon__" {
         // Run as sync daemon process
+        // Args: __sync_daemon__ <id> <workspace> <repo_path> <remote_path> <full> <branch> [log_level]
         let devdock_id = &args[2];
         let workspace_name = &args[3];
         let repo_path = std::path::PathBuf::from(&args[4]);
-        let full_mode = args.get(5).is_some_and(|s| s == "true");
-        let branch_mode = args.get(6).is_some_and(|s| s == "true");
-        let log_level = args.get(7).map_or("info", |s| s.as_str());
+        let remote_path = std::path::PathBuf::from(&args[5]);
+        let full_mode = args.get(6).is_some_and(|s| s == "true");
+        let branch_mode = args.get(7).is_some_and(|s| s == "true");
+        let log_level = args.get(8).map_or("info", |s| s.as_str());
 
         // Stderr is already redirected to the log file by the parent process,
         // so initializing tracing with the default stderr writer routes all
@@ -503,6 +505,7 @@ async fn main() {
             devdock_id,
             workspace_name,
             &repo_path,
+            remote_path,
             full_mode,
             branch_mode,
         ) {

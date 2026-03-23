@@ -49,6 +49,16 @@ pub struct RemoteSection {
     #[serde(default = "default_remote_provider")]
     pub provider: String,
     pub template: Option<String>,
+    /// Absolute path to the monorepo root on remote workspaces.
+    /// Defaults to `/home/workspace/<project_name>` when not set.
+    pub workspace_path: Option<String>,
+}
+
+impl RemoteSection {
+    /// Resolve the remote workspace path, falling back to `/home/workspace/<project_name>`.
+    pub fn resolved_workspace_path(&self, project_name: &str) -> String {
+        self.workspace_path.clone().unwrap_or_else(|| format!("/home/workspace/{project_name}"))
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -256,7 +266,7 @@ fn default_diagnostics_reporter() -> String {
 
 impl Default for RemoteSection {
     fn default() -> Self {
-        Self { provider: default_remote_provider(), template: None }
+        Self { provider: default_remote_provider(), template: None, workspace_path: None }
     }
 }
 impl Default for TelemetrySection {

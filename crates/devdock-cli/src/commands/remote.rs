@@ -111,15 +111,19 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
     let loader = ProfileLoader::new();
     let loaded_profile = loader.load_from_path(&profile_path)?;
 
-    // Load devdock.toml for remote template configuration
+    // Load devdock.toml for remote configuration
     let devdock_toml_path = std::path::Path::new(&worktree).join(".devdock/devdock.toml");
-    let coder_template = if devdock_toml_path.exists() {
+    let (coder_template, remote_workspace_path) = if devdock_toml_path.exists() {
         match devdock_core::ProjectConfig::load(&devdock_toml_path) {
-            Ok(pc) => pc.remote.template.unwrap_or_else(|| "devdock".to_string()),
-            Err(_) => "devdock".to_string(),
+            Ok(pc) => {
+                let template = pc.remote.template.clone().unwrap_or_else(|| "devdock".to_string());
+                let ws_path = pc.remote.resolved_workspace_path(&pc.project.name);
+                (template, ws_path)
+            }
+            Err(_) => ("devdock".to_string(), "/home/workspace/scio".to_string()),
         }
     } else {
-        "devdock".to_string()
+        ("devdock".to_string(), "/home/workspace/scio".to_string())
     };
 
     // Register instance in database
@@ -275,7 +279,11 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
                         if verbose {
                             output::info("Cleaning up existing DevDock session...");
                         }
-                        workspace::cleanup_existing_devdock(&workspace_name, Some(logger.path()))?;
+                        workspace::cleanup_existing_devdock(
+                            &workspace_name,
+                            Some(logger.path()),
+                            &remote_workspace_path,
+                        )?;
                         logger.log("Existing DevDock session cleaned up")?;
 
                         // Note: Gcloud credentials will be re-synced in workspace::start_remote_devdock
@@ -421,6 +429,7 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
             services.as_deref(),
             auto_forward,
             offset,
+            &remote_workspace_path,
             Some(logger.path()),
             verbose,
             Some(on_config_complete),
@@ -483,10 +492,12 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
         };
 
         let repo_path = PathBuf::from(&worktree);
+        let remote_path = std::path::PathBuf::from(&remote_workspace_path);
         let sync_result = match sync_daemon::start_daemon(
             &instance_id,
             &workspace_name,
             &repo_path,
+            &remote_path,
             false,           // full_mode = false (don't sync everything)
             use_branch_mode, // branch_mode = true when --branch specified
             &log_level,

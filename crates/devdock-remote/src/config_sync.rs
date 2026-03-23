@@ -38,7 +38,10 @@ pub fn get_profile_platform(profile_path: &Path) -> Result<String> {
 
 /// Compute the remote destination path for a profile file.
 /// Returns (remote_path, remote_dir).
-fn compute_remote_profile_path(profile_path: &Path) -> Result<(String, String)> {
+fn compute_remote_profile_path(
+    profile_path: &Path,
+    workspace_path: &str,
+) -> Result<(String, String)> {
     let devdock_root = std::env::var("DEVDOCK_ROOT")
         .or_else(|_| std::env::var("PWD"))
         .unwrap_or_else(|_| ".".to_string());
@@ -60,11 +63,11 @@ fn compute_remote_profile_path(profile_path: &Path) -> Result<(String, String)> 
             .to_string()
     };
 
-    let remote_path = format!("/home/workspace/scio/devdock/profiles/{relative_path}");
+    let remote_path = format!("{workspace_path}/devdock/profiles/{relative_path}");
     let remote_dir = if let Some(parent_idx) = remote_path.rfind('/') {
         remote_path[..parent_idx].to_string()
     } else {
-        "/home/workspace/scio/devdock/profiles".to_string()
+        format!("{workspace_path}/devdock/profiles")
     };
 
     Ok((remote_path, remote_dir))
@@ -283,6 +286,7 @@ pub fn sync_all_config(
     workspace: &str,
     profile_path: &Path,
     custom_ini_path: Option<&Path>,
+    remote_workspace_path: &str,
     log_file: Option<&Path>,
     verbose: bool,
 ) -> Result<ConfigSyncStatus> {
@@ -305,7 +309,8 @@ pub fn sync_all_config(
     }
     let profile_content = std::fs::read_to_string(profile_path)
         .map_err(|e| RemoteError::ConfigSyncError(format!("Failed to read profile: {e}")))?;
-    let (remote_profile_path, remote_profile_dir) = compute_remote_profile_path(profile_path)?;
+    let (remote_profile_path, remote_profile_dir) =
+        compute_remote_profile_path(profile_path, remote_workspace_path)?;
 
     let custom_ini_content = if let Some(path) = custom_ini_path {
         if path.exists() {
@@ -361,9 +366,9 @@ pub fn sync_all_config(
     }
     script.push_str(&format!(
         "mkdir -p '{}' \
-         /home/workspace/scio/devdock/profiles/user_profiles \
-         /home/workspace/scio/devdock/profiles/integration_tests \
-         /home/workspace/scio/config/{}\n\n",
+         '{remote_workspace_path}/devdock/profiles/user_profiles' \
+         '{remote_workspace_path}/devdock/profiles/integration_tests' \
+         '{remote_workspace_path}/config'{}\n\n",
         remote_profile_dir,
         if needs_secrets_sync { " ~/.secrets-sync" } else { "" }
     ));
@@ -377,7 +382,7 @@ pub fn sync_all_config(
     // Write custom.ini via heredoc (conditional)
     if let Some(ref ini_content) = custom_ini_content {
         script.push_str(&format!(
-            "cat > /home/workspace/scio/config/custom.ini << 'DEVDOCK_INI_EOF'\n{}\nDEVDOCK_INI_EOF\n\n",
+            "cat > '{remote_workspace_path}/config/custom.ini' << 'DEVDOCK_INI_EOF'\n{}\nDEVDOCK_INI_EOF\n\n",
             ini_content
         ));
     }
