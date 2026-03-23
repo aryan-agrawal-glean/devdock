@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # DevDock Installation Script
-# Usage: curl -fsSL https://raw.githubusercontent.com/askscio/devdock/main/install.sh | bash
-#    or: git clone https://github.com/askscio/devdock && cd devdock && ./install.sh
+# Usage: curl -fsSL https://raw.githubusercontent.com/aryan-agrawal-glean/devdock/main/install.sh | bash
+#    or: git clone https://github.com/aryan-agrawal-glean/devdock && cd devdock && ./install.sh
 
 set -e
 
 # Configuration
-REPO="askscio/devdock"
+REPO="aryan-agrawal-glean/devdock"
 INSTALL_DIR="${DEVDOCK_INSTALL_DIR:-/usr/local/bin}"
 BINARY_NAME="devdock"
 
@@ -393,7 +393,7 @@ handle_error() {
     echo "  • Permission denied: Run with appropriate permissions" >&2
     echo "  • Network issues: Check GitHub connection" >&2
     echo "" >&2
-    echo "For help: https://github.com/askscio/devdock/issues" >&2
+    echo "For help: https://github.com/aryan-agrawal-glean/devdock/issues" >&2
 }
 
 main "$@"
