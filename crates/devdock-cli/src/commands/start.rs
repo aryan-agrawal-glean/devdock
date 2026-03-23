@@ -569,6 +569,14 @@ async fn generate_minimal_temp_profile(
         );
     }
 
+    // Pass through dns_kubectl if set (used by remote_service.Tiltfile to skip bastion dep)
+    if let Some(ref dns_kubectl) = profile.dns_kubectl {
+        profile_map.insert(
+            serde_yaml::Value::String("dns_kubectl".into()),
+            serde_yaml::Value::String(dns_kubectl.clone()),
+        );
+    }
+
     let yaml = serde_yaml::to_string(&profile_map)?;
     std::fs::write(runtime_dir.join("temp_profile.yaml"), &yaml)?;
 

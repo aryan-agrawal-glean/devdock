@@ -661,6 +661,7 @@ mod tests {
             env: EnvVars::new(),
             ini_overrides: vec![],
             multi_project: None,
+            dns_kubectl: None,
         }
     }
 

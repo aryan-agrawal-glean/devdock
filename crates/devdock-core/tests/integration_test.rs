@@ -50,6 +50,7 @@ fn run_pipeline(
         env: std::collections::HashMap::new(),
         ini_overrides: vec![],
         multi_project: None,
+        dns_kubectl: None,
     });
     let tiltfile =
         tiltfile_generator::generate_tiltfile(&services, &resolved, &config, &fixture, &profile);

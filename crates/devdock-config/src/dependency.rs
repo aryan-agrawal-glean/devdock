@@ -215,6 +215,7 @@ mod tests {
             env: HashMap::new(),
             ini_overrides: Vec::new(),
             multi_project: None,
+            dns_kubectl: None,
         };
 
         let resolver = DependencyResolver::new();

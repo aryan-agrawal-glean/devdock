@@ -41,6 +41,11 @@ pub struct Profile {
     /// Multi-project config — additional project with its own services/infra.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub multi_project: Option<MultiProjectConfig>,
+
+    /// DNS kubectl mode — "enabled" skips bastion dependency for remote service port-forwards.
+    /// Set to "enabled" when the k8s cluster is directly accessible (no bastion tunnel needed).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dns_kubectl: Option<String>,
 }
 
 /// Infrastructure component configuration.
@@ -204,6 +209,7 @@ const KNOWN_PROFILE_KEYS: &[&str] = &[
     "env",
     "ini_overrides",
     "multi_project",
+    "dns_kubectl",
 ];
 
 impl Profile {
