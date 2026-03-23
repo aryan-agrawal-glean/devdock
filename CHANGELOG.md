@@ -21,7 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Root cause: Code was using service type from `devdock_config.json` instead of user's profile
   - Fix: Now prioritizes profile's `deployment_type` field over devdock_config.json defaults
   - This affected all services where users explicitly set `type: local` in their profile
-- Rich logging now uses production configs from scio monorepo and logs appear correctly in Grafana
+- Rich logging now reads configs from the monorepo and logs appear correctly in Grafana
 - Profile directory structure now preserved during remote sync (e.g., `user_profiles/` subdirectory maintained)
 - Simplified config directory search (prioritizes local devdock repo, monorepo is fallback)
 

@@ -95,6 +95,9 @@ pub async fn execute(
     std::env::set_var("CLOUD_PLATFORM", &platform_str);
     std::env::set_var("DEVDOCK_SERVICES_DIR", &project_config.project.services_dir);
     std::env::set_var("DEVDOCK_INFRA_DIR", &project_config.project.infra_dir);
+    if !project_config.registry.url.is_empty() {
+        std::env::set_var("DEVDOCK_REGISTRY_URL", &project_config.registry.url);
+    }
 
     // Initialize PluginManager with lifecycle hooks + resource hooks + per-plugin config
     let mut plugin_manager = PluginManager::with_resource_hooks(
