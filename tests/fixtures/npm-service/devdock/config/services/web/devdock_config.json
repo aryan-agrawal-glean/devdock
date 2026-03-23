@@ -1,0 +1,9 @@
+{
+  "type": "node",
+  "build_command": ["npm", "run", "build"],
+  "build_output": "dist/",
+  "binary_mount": "/app/dist",
+  "watch_dirs": ["src/", "package.json"],
+  "port": "3000",
+  "dependencies": []
+}

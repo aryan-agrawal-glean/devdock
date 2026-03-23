@@ -11,6 +11,8 @@ pub enum ResourceLabel {
     RemoteService,
     RemoteInfra,
     BazelBuilds,
+    /// Generic build resources created by `generic_build()` in build.Tiltfile.
+    Builds,
     #[serde(other)]
     Unknown,
 }
@@ -24,7 +26,8 @@ impl ResourceLabel {
                 | ResourceLabel::Infra
                 | ResourceLabel::RemoteService
                 | ResourceLabel::RemoteInfra
-                | ResourceLabel::BazelBuilds // Now included for telemetry
+                | ResourceLabel::BazelBuilds
+                | ResourceLabel::Builds
         )
     }
 }
@@ -37,6 +40,7 @@ impl From<&str> for ResourceLabel {
             "remote-service" => ResourceLabel::RemoteService,
             "remote-infra" => ResourceLabel::RemoteInfra,
             "bazel-builds" => ResourceLabel::BazelBuilds,
+            "builds" => ResourceLabel::Builds,
             _ => ResourceLabel::Unknown,
         }
     }
@@ -48,6 +52,7 @@ pub enum ResourceType {
     Local,
     Remote,
     BazelBuild,
+    Build,
     Unknown,
 }
 
@@ -200,6 +205,7 @@ impl TiltResource {
                 }
                 ResourceLabel::Service | ResourceLabel::Infra => return ResourceType::Local,
                 ResourceLabel::BazelBuilds => return ResourceType::BazelBuild,
+                ResourceLabel::Builds => return ResourceType::Build,
                 _ => {}
             }
         }

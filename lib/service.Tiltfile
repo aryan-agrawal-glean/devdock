@@ -1,6 +1,7 @@
 """Service configuration and setup utilities."""
 
 load("bazel.Tiltfile", "bazel_build")
+load("build.Tiltfile", "generic_build")
 load("docker.Tiltfile", "generate_compose", "setup_docker_build")
 load('logger.Tiltfile', 'export_logs')
 load('../../services/service_hooks/Tiltfile', 'get_pre_service_hooks')
@@ -59,15 +60,29 @@ def setup_service(name, config, auto_init=True):
 
     profile = read_yaml('{}/devdock/runtime_generated/temp_profile.yaml'.format(os.getenv('DEVDOCK_ROOT')))
 
-    # Build the service using Bazel (skip if no bazel_target)
+    # Build the service: Bazel, generic build command, or no local build
     bazel_target = config.get("bazel_target", "")
-    if not bazel_target:
-        # Service without bazel target (e.g., fe) — skip build
-        binary = ""
-        binary_mount = ""
-    else:
+    build_command = config.get("build_command", [])
+    build_output = config.get("build_output", "")
+
+    if bazel_target:
+        # Bazel build — creates {name}-bazel-build resource
         binary = bazel_build(name, bazel_target, config.get("watch_dirs", []), config.get("type", ""), config.get("target_is_directory", "True"), profile.get('services', {}).get(name, {}).get('hot_reload', 'enable'), config.get("copy_runfiles", False))
         binary_mount = "{}:{}".format(binary, config.get("binary_mount", ""))
+        build_dep = '{}-bazel-build'.format(name)
+        build_system = "bazel"
+    elif build_command:
+        # Generic build (npm, cargo, make, …) — creates {name}-build resource
+        binary = build_output
+        binary_mount = "{}:{}".format(binary, config.get("binary_mount", "")) if binary and config.get("binary_mount") else ""
+        build_dep = '{}-build'.format(name)
+        build_system = "generic"
+    else:
+        # Pure Docker service: no local build step
+        binary = ""
+        binary_mount = ""
+        build_dep = None
+        build_system = "none"
 
     # Get port configuration
     port = config.get("env", {}).get("PORT", "8080")
@@ -265,6 +280,8 @@ def setup_service(name, config, auto_init=True):
         "type": config.get("type", "java"),
         "metrics_port": config.get("metrics_port", DUMMY_METRIC_PORT),
         "go_arch": go_arch,
+        # Build system used by this service: "bazel", "generic", or "none"
+        "build_system": build_system,
     }
 
     devdock_root = os.getenv('DEVDOCK_ROOT')
@@ -309,12 +326,9 @@ def setup_service(name, config, auto_init=True):
         template_dir = "{}/devdock/runtime_generated/core/templates".format(devdock_root)
         dockerfile_template = "{}/Dockerfile.tpl".format(template_dir)
 
-    # Services without bazel_target (e.g., fe) — skip build and Docker setup entirely.
-    # These services typically have their own per-service Tiltfile in the legacy flow.
-    # In the OSS flow, they're skipped — they can be set up manually or via a custom Tiltfile.
-    if not bazel_target:
-        print("⚠️ Skipping service '{}': no bazel_target configured".format(name))
-        return None
+    # Trigger generic build if configured (creates {name}-build local_resource)
+    if build_command:
+        generic_build(name, build_command, build_output, config.get("watch_dirs", []))
 
     # Set up Docker build
     docker_config = setup_docker_build(context, dockerfile=dockerfile_template)
@@ -327,7 +341,10 @@ def setup_service(name, config, auto_init=True):
     export_logs(name, name)
 
     # Then set up resource with dependencies
-    deps = config.get("dependencies", []) + ['init-gcloud-auth','{}-bazel-build'.format(name), 'log_exporter_{}'.format(name)]
+    _base_deps = ['init-gcloud-auth', 'log_exporter_{}'.format(name)]
+    if build_dep:
+        _base_deps.append(build_dep)
+    deps = config.get("dependencies", []) + _base_deps
 
     if profile.get('infra',{}).get('sql',{}).get('type', 'remote') == 'local':
         deps.append('sql-hydrator')

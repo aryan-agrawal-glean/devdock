@@ -48,7 +48,8 @@ pub fn generate_tiltfile(
     out.push_str(
         "load('./core/lib/docker.Tiltfile', 'cleanup_generated_files', 'setup_networks')\n",
     );
-    out.push_str("load('./core/lib/bazel.Tiltfile', 'bazel_build')\n\n");
+    out.push_str("load('./core/lib/bazel.Tiltfile', 'bazel_build')\n");
+    out.push_str("load('./core/lib/build.Tiltfile', 'generic_build')\n\n");
 
     // Settings
     out.push_str("update_settings(max_parallel_updates=10)\n");
@@ -252,6 +253,7 @@ pub fn extract_shipped_libs_to(workspace_root: &Path) -> std::io::Result<()> {
     write_embedded(&lib_dir, "service.Tiltfile", include_str!("../../../lib/service.Tiltfile"))?;
     write_embedded(&lib_dir, "docker.Tiltfile", include_str!("../../../lib/docker.Tiltfile"))?;
     write_embedded(&lib_dir, "bazel.Tiltfile", include_str!("../../../lib/bazel.Tiltfile"))?;
+    write_embedded(&lib_dir, "build.Tiltfile", include_str!("../../../lib/build.Tiltfile"))?;
     write_embedded(&lib_dir, "utils.Tiltfile", include_str!("../../../lib/utils.Tiltfile"))?;
     write_embedded(
         &lib_dir,
@@ -438,7 +440,9 @@ local_resource(
 const STARTUP_MONITOR_RESOURCE: &str = r#"# Startup monitor — tracks service health
 _services = profile.get('services', {})
 _infra = profile.get('infra', {})
-_monitor_deps = ['{}-bazel-build'.format(s) for s in _services.keys() if type(_services[s]) == 'dict' and _services[s].get('type', 'local') == 'local'] + [i for i in _infra.keys()]
+# Depend on local service names directly (each service already depends on its own build)
+_local_services = [s for s in _services.keys() if type(_services[s]) == 'dict' and _services[s].get('type', 'local') == 'local']
+_monitor_deps = _local_services + list(_infra.keys())
 local_resource(
     name='startup-monitor',
     labels=['devdock-core'],
@@ -697,6 +701,23 @@ mod tests {
         assert!(tf.contains("./core/lib/service.Tiltfile"));
         assert!(tf.contains("./core/lib/docker.Tiltfile"));
         assert!(tf.contains("./core/lib/bazel.Tiltfile"));
+        assert!(tf.contains("./core/lib/build.Tiltfile"));
+    }
+
+    #[test]
+    fn startup_monitor_deps_on_service_names_not_build_resources() {
+        let tf = generate_tiltfile(
+            &HashMap::new(),
+            &ResolvedDeps { services: vec![], infra: vec![] },
+            &test_config(),
+            Path::new("/tmp"),
+            &test_profile(),
+        );
+        // Should NOT hardcode {}-bazel-build
+        assert!(!tf.contains("bazel-build'.format(s)"));
+        // Should depend on service names directly
+        assert!(tf.contains("_local_services"));
+        assert!(tf.contains("_monitor_deps = _local_services"));
     }
 
     #[test]
@@ -750,6 +771,7 @@ mod tests {
         assert!(dir.path().join("devdock/runtime_generated/core/lib/service.Tiltfile").exists());
         assert!(dir.path().join("devdock/runtime_generated/core/lib/docker.Tiltfile").exists());
         assert!(dir.path().join("devdock/runtime_generated/core/lib/bazel.Tiltfile").exists());
+        assert!(dir.path().join("devdock/runtime_generated/core/lib/build.Tiltfile").exists());
         assert!(dir
             .path()
             .join("devdock/runtime_generated/core/templates/Dockerfile.python.tpl")
