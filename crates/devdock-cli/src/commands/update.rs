@@ -9,7 +9,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
-const REPO: &str = "askscio/devdock";
+const REPO: &str = "aryan-agrawal-glean/devdock";
 const BINARY_NAME: &str = "devdock";
 
 /// Version config stored in ~/.config/devdock/version.yaml

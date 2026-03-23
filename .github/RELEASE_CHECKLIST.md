@@ -38,16 +38,16 @@ Use this checklist for every DevDock release.
 
 - [ ] Test the one-line installer:
   ```bash
-  curl -fsSL https://raw.githubusercontent.com/askscio/devdock/main/install.sh | bash
+  curl -fsSL https://raw.githubusercontent.com/aryan-agrawal-glean/devdock/main/install.sh | bash
   devdock --version
   ```
 - [ ] Test manual download and verify checksums:
   ```bash
   # Download binary for your platform
-  curl -L https://github.com/askscio/devdock/releases/download/vX.Y.Z/devdock-macos-arm64-vX.Y.Z -o devdock
+  curl -L https://github.com/aryan-agrawal-glean/devdock/releases/download/vX.Y.Z/devdock-macos-arm64-vX.Y.Z -o devdock
 
   # Verify checksum
-  curl -L https://github.com/askscio/devdock/releases/download/vX.Y.Z/checksums.txt
+  curl -L https://github.com/aryan-agrawal-glean/devdock/releases/download/vX.Y.Z/checksums.txt
   shasum -a 256 devdock
   ```
 
