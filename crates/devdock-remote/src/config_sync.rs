@@ -233,6 +233,7 @@ fn scp_gcloud_to_remote(workspace: &str, temp_dir: &Path, verbose: bool) -> Resu
     }
 
     let output = Command::new("scp")
+        .arg("-O")
         .arg("-q")
         .arg("-o")
         .arg("StrictHostKeyChecking=no")
@@ -363,8 +364,8 @@ pub fn sync_all_config(
         script.push_str("rm -rf ~/.secrets-sync\n");
     }
     let extra_dirs = match (needs_secrets_sync, iap_cookies_json.is_some()) {
-        (true, true) => " ~/.secrets-sync /home/workspace/scio/experimental/users/sriram_vudayagiri_glean/erasmus/.cache",
-        (true, false) => " ~/.secrets-sync",
+        (true, true) => " ~/.secrets-sync/gcloud /home/workspace/scio/experimental/users/sriram_vudayagiri_glean/erasmus/.cache",
+        (true, false) => " ~/.secrets-sync/gcloud",
         (false, true) => " /home/workspace/scio/experimental/users/sriram_vudayagiri_glean/erasmus/.cache",
         (false, false) => "",
     };
