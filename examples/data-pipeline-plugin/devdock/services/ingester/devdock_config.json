@@ -1,0 +1,15 @@
+{
+  "type": "python",
+  "port": "8000",
+  "dependencies": ["sql", "pubsub"],
+  "env": {
+    "DATABASE_URL": "postgresql://postgres:postgres@sql.devdock.local:5432/pipeline",
+    "PUBSUB_EMULATOR_HOST": "pubsub.devdock.local:8085",
+    "PUBSUB_PROJECT_ID": "local-project",
+    "PUBSUB_TOPIC": "events",
+    "PYTHONUNBUFFERED": "1"
+  },
+  "healthcheck": {
+    "test": ["CMD", "curl", "-f", "http://localhost:8000/health"]
+  }
+}

@@ -1,0 +1,7 @@
+# DevDock generated files (runtime artifacts, not source)
+**/devdock/runtime_generated/
+**/devdock/services/*/Dockerfile
+**/devdock/services/*/docker-compose.yaml
+**/devdock/services/*/requirements.txt
+**/devdock/services/*/wheels/
+**/devdock/core/

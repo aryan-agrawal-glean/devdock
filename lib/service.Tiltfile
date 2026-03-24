@@ -84,8 +84,8 @@ def setup_service(name, config, auto_init=True):
         build_dep = None
         build_system = "none"
 
-    # Get port configuration
-    port = config.get("env", {}).get("PORT", "8080")
+    # Get port configuration — top-level "port" field takes precedence, then env.PORT
+    port = config.get("port") or config.get("env", {}).get("PORT", "8080")
 
     service_env = profile.get('services').get(name, {}).get('env', {})
 
@@ -108,10 +108,10 @@ def setup_service(name, config, auto_init=True):
 
     env_vars_compose = "\n".join(env_list) if env_list else ""
 
-    # Prepare environment variables for Dockerfile
+    # Prepare environment variables for Dockerfile (always quote values to handle spaces)
     env_vars = []
     for k, v in config.get("env", {}).items():
-        env_vars.append("ENV {}={}".format(k, v))
+        env_vars.append('ENV {}="{}"'.format(k, v))
 
     if profile.get('enable_service_metrics', 'False') == 'True':
         env_vars.append("ENV DEVDOCK_METRICS_CAPTURE_ENABLED=True")
@@ -163,29 +163,30 @@ def setup_service(name, config, auto_init=True):
             if os.path.exists(script_path):  # Only chmod if file exists
                 local('chmod +x {}'.format(script_path))
 
-            entrypoint_copy = "COPY {} /app/entrypoint.sh".format(script_path)
-            entrypoint_chmod = "RUN chmod +x /app/entrypoint.sh"
+            entrypoint_copy = "COPY {} /entrypoint.sh".format(script_path)
+            entrypoint_chmod = "RUN chmod +x /entrypoint.sh"
             entrypoint_args = entrypoint_config.get("args", [])
             args_str = ""
             for arg in entrypoint_args:
                 args_str += ', "{}"'.format(arg)
             if args_str:
-                entrypoint_cmd = 'ENTRYPOINT ["/app/entrypoint.sh"{}]'.format(args_str)
+                entrypoint_cmd = 'ENTRYPOINT ["/entrypoint.sh"{}]'.format(args_str)
             else:
-                entrypoint_cmd = 'ENTRYPOINT /app/entrypoint.sh'
+                entrypoint_cmd = 'ENTRYPOINT /entrypoint.sh'
         else:
             entrypoint_copy = ""
             entrypoint_chmod = ""
             entrypoint_cmd = ""
     else:
-        # Default Maven WAR entrypoint
+        # Default entrypoint — Maven WAR for Java, none for other types
         entrypoint_copy = ""
         entrypoint_chmod = ""
         if not entrypoint_config:
-            debug_env = 'ENV MAVEN_OPTS="-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=0.0.0.0:{}"\n'.format(debug_port) if debug_port else ""
-            entrypoint_cmd = debug_env + 'ENTRYPOINT mvn jetty:deploy-war -Djetty.http.port={} -Djetty.scanner.scanIntervalSeconds=3 --no-transfer-progress'.format(
-                config.get('env', {}).get('PORT', '8080')
-            )
+            if config.get("type", "java") == "java":
+                debug_env = 'ENV MAVEN_OPTS="-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=0.0.0.0:{}"\n'.format(debug_port) if debug_port else ""
+                entrypoint_cmd = debug_env + 'ENTRYPOINT mvn jetty:deploy-war -Djetty.http.port={} -Djetty.scanner.scanIntervalSeconds=3 --no-transfer-progress'.format(port)
+            else:
+                entrypoint_cmd = ""  # Non-java: no generated entrypoint; use base image CMD or configure via entrypoint in devdock_config.json
 
     # Initialize healthcheck with empty string
     healthcheck = ""
@@ -252,8 +253,13 @@ def setup_service(name, config, auto_init=True):
     # Determine service type early for base image handling
     service_type = config.get("type", "java")  # Default to java for backward compatibility
 
-    # Set up Docker build context
-    base_image = config.get("base_image", "eclipse-temurin:17-jdk")
+    # Set up Docker build context — use type-aware defaults when base_image not specified
+    _default_base_images = {
+        "python": "python:3.11-slim",
+        "go": "debian:bookworm-slim",
+        "node": "node:20-alpine",
+    }
+    base_image = config.get("base_image") or _default_base_images.get(service_type, "eclipse-temurin:17-jdk")
 
     # For Python services on Linux, append architecture tag if not already present
     if service_type == "python" and arch == 'linux':
@@ -316,6 +322,10 @@ def setup_service(name, config, auto_init=True):
             wheels_path = "{}/{}".format(devdock_root, wheels_dir)
             if os.path.exists(wheels_path):
                 local('rm -rf {}/wheels && cp -r {} {}/wheels'.format(service_path, wheels_path, service_path))
+
+        # Ensure Docker COPY has valid sources (create empty placeholders if not present)
+        local('[ -d {}/wheels ] || mkdir -p {}/wheels'.format(service_path, service_path))
+        local('[ -f {}/requirements.txt ] || touch {}/requirements.txt'.format(service_path, service_path))
 
         template_dir = "{}/devdock/runtime_generated/core/templates".format(devdock_root)
         dockerfile_template = "{}/Dockerfile.python.tpl".format(template_dir)

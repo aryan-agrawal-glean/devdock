@@ -1,0 +1,17 @@
+{
+  "type": "python",
+  "port": "8000",
+  "dependencies": ["sql", "redis"],
+  "env": {
+    "DJANGO_SETTINGS_MODULE": "myapp.settings.local",
+    "DATABASE_URL": "postgresql://postgres:postgres@sql.devdock.local:5432/myapp",
+    "REDIS_URL": "redis://redis.devdock.local:6379/0",
+    "CELERY_BROKER_URL": "redis://redis.devdock.local:6379/0",
+    "DEBUG": "true",
+    "SECRET_KEY": "dev-secret-key-change-in-production",
+    "ALLOWED_HOSTS": "localhost,127.0.0.1"
+  },
+  "healthcheck": {
+    "test": ["CMD", "curl", "-f", "http://localhost:8000/health/"]
+  }
+}

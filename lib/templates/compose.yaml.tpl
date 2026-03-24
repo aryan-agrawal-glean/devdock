@@ -10,8 +10,6 @@ services:
     environment:
 $compose_env
     volumes:
-      - ~/.devdock/auth/application_default_credentials.json:/tmp/.config/gcloud/application_default_credentials.json
-      - ${DEVDOCK_ROOT}/config/:/config
       - $mount_binary_path
 $extra_mounts
     restart: unless-stopped

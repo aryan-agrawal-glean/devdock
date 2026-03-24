@@ -1,0 +1,6 @@
+{
+  "type": "go",
+  "bazel_target": "//services/ping",
+  "port": "50051",
+  "dependencies": []
+}
