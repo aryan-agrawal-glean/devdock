@@ -316,7 +316,7 @@ enum PluginCommands {
         /// Plugin type: telemetry, diagnostics, storage
         #[arg(long, default_value = "telemetry")]
         r#type: String,
-        /// Language: python, go, bash
+        /// Language: python, go, bash, rust
         #[arg(long, default_value = "python")]
         language: String,
     },
