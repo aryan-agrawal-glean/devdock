@@ -1,12 +1,16 @@
 {
   "type": "go",
   "bazel_target": "//server/cmd/buildbuddy",
+  "target_is_directory": "True",
   "port": "8080",
   "debug_port": "1985",
   "dependencies": [],
   "env": {
     "BUILDBUDDY_LOCAL_CONFIG": "/workspace/config/buildbuddy.local.yaml",
     "BUILDBUDDY_LOG_LEVEL": "info"
+  },
+  "entrypoint": {
+    "script": "entrypoint.sh"
   },
   "healthcheck": {
     "test": ["CMD", "curl", "-f", "http://localhost:8080/healthz"]

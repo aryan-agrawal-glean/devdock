@@ -2,6 +2,9 @@
   "type": "python",
   "port": "8000",
   "dependencies": ["sql", "pubsub"],
+  "extra_mounts": {
+    "../../../": "/app"
+  },
   "env": {
     "POSTGRES_HOST": "sql.devdock.local",
     "POSTGRES_PORT": "5432",
@@ -12,6 +15,12 @@
     "PUBSUB_PROJECT_ID": "local-project",
     "PUBSUB_TOPIC": "events",
     "PYTHONUNBUFFERED": "1"
+  },
+  "run_commands": [
+    "WORKDIR /app"
+  ],
+  "entrypoint": {
+    "script": "entrypoint.sh"
   },
   "healthcheck": {
     "test": ["CMD", "curl", "-f", "http://localhost:8000/health"]
