@@ -119,15 +119,17 @@ impl SqlUtils {
         })
     }
 
-    /// Check if SQL instances have public IP enabled
+    /// Check if ALL SQL instances have public IP enabled
     ///
     /// Replaces: python_scio.scripts.lib.utils.sql_util.check_if_sql_instances_have_public_IP
+    ///
+    /// Returns true only when every instance has a public IP. If any instance
+    /// lacks one, returns false so the caller falls back to bastion.
     ///
     /// Note: instances parameter contains full connection strings (project:region:instance-id)
     /// We extract the instance ID before calling gcloud.
     pub async fn check_public_ip(&self, instances: &HashMap<String, String>) -> Result<bool> {
         for (instance_type, connection_string) in instances {
-            // Extract instance ID from connection string (last part after last colon)
             let instance_id = connection_string.split(':').next_back().unwrap_or(connection_string);
 
             debug!("Checking public IP for {} ({})", instance_type, instance_id);
@@ -148,14 +150,18 @@ impl SqlUtils {
 
             if output.status.success() {
                 let stdout = String::from_utf8_lossy(&output.stdout);
-                if stdout.trim().to_lowercase() == "true" {
-                    info!("Instance {} has public IP enabled", instance_id);
-                    return Ok(true);
+                if stdout.trim().to_lowercase() != "true" {
+                    info!("Instance {} does not have public IP", instance_id);
+                    return Ok(false);
                 }
+            } else {
+                warn!("Failed to check public IP for {}, assuming no public IP", instance_id);
+                return Ok(false);
             }
         }
 
-        Ok(false)
+        info!("All SQL instances have public IP enabled");
+        Ok(true)
     }
 
     /// Check if bastion VM is available in a zone

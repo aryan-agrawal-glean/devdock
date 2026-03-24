@@ -56,6 +56,8 @@ pub struct TempProfileData {
     pub debug_mode: String,
     pub vault_key: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub sql_account: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub aws_account_id: Option<String>,
     pub services: HashMap<String, ServiceProfileEntry>,
     pub infra: HashMap<String, InfraProfileEntry>,
@@ -149,6 +151,7 @@ impl TempProfileGenerator {
             k8s_service_account: None,
             debug_mode: "False".to_string(),
             vault_key: String::new(),
+            sql_account: None,
             aws_account_id: None,
             services: HashMap::new(),
             infra: HashMap::new(),
@@ -806,6 +809,12 @@ impl TempProfileGenerator {
                 // GCP: Two paths - cloud-sql-proxy or bastion
                 let curr_port_base = if is_multi_project { 3311 } else { 3307 };
 
+                // Set sql_account so the Tiltfile can populate SQL_ACCOUNT env var
+                if metadata.use_iam_auth {
+                    self.profile.sql_account =
+                        Some(crate::constants::COMPUTE_ENGINE_SERVICE_ACCOUNT.to_string());
+                }
+
                 if metadata.use_public_ip || !metadata.is_bastion_available {
                     // Path 1: Use cloud-sql-proxy
                     let mut cloud_sql_args = Vec::new();
@@ -855,9 +864,12 @@ impl TempProfileGenerator {
                     extra.insert("ports".to_string(), serde_json::json!(ports));
 
                     // Update bastion config with port forwarding
-                    if let Some(ref dynamic_ini) = self.dynamic_ini {
-                        let bastion_port_map =
-                            crate::sql::get_bastion_port_map(dynamic_ini, metadata.use_iam_auth);
+                    {
+                        let bastion_port_map = self
+                            .dynamic_ini
+                            .as_ref()
+                            .map(|ini| crate::sql::get_bastion_port_map(ini, metadata.use_iam_auth))
+                            .unwrap_or_default();
 
                         self.profile.infra.entry("bastion".to_string()).or_insert_with(|| {
                             InfraProfileEntry {
@@ -875,25 +887,25 @@ impl TempProfileGenerator {
                                 })
                                 .unwrap_or_default();
 
-                            // Add SQL port mappings in order
+                            let remote_port_base = if metadata.use_iam_auth {
+                                crate::constants::IAM_PORT_START
+                            } else {
+                                crate::constants::PORT_START
+                            };
+
                             for (i, instance_name) in instances_list.iter().enumerate() {
                                 let local_port = ports[i];
-                                if let Some(&remote_port) = bastion_port_map.get(instance_name) {
-                                    local_to_remote.push(vec![local_port, remote_port]);
-                                }
+                                let remote_port = bastion_port_map
+                                    .get(instance_name)
+                                    .copied()
+                                    .unwrap_or(remote_port_base + i as u16);
+                                local_to_remote.push(vec![local_port, remote_port]);
                             }
 
                             bastion.extra.insert(
                                 "local_to_remote_ports".to_string(),
                                 serde_json::json!(local_to_remote),
                             );
-                        }
-
-                        // Set sql_account for IAM auth
-                        if metadata.use_iam_auth {
-                            if let Some(account) = dynamic_ini.get("sql", "serviceAccount") {
-                                self.profile.vault_key = account.clone();
-                            }
                         }
                     }
                 }

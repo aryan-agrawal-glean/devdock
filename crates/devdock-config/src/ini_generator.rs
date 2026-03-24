@@ -307,12 +307,12 @@ impl IniGenerator {
                 // Public IP in test projects: use glean_local user, no IAM
                 self.config.set("sql", "useDbIAMAuth", "false");
                 self.config.set("sql", "useCloudSqlConnectorInQe", "false");
-                // Note: Don't set useSecretsManagerForPassword for public IP path
-            } else {
-                // Private IP or canary: use IAM auth
-                self.config.set("sql", "useSecretsManagerForPassword", "true");
-                self.config.set("sql", "useDbIAMAuth", "true");
             }
+            // For bastion path (private IP): don't override useDbIAMAuth or
+            // useSecretsManagerForPassword. The bastion's Cloud SQL Auth Proxy
+            // handles IAM auth at the transport level, so the JDBC driver
+            // should use standard auth. Leave these from default.ini so
+            // profile ini_overrides can control them.
 
             // Set host for remote SQL (goes through cloud-sql-proxy or bastion)
             // Instance list depends on project type (matches Python sql_service_dependency.py special cases)
