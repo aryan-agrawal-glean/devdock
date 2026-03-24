@@ -1,6 +1,9 @@
 {
   "type": "python",
   "dependencies": ["sql", "pubsub", "opensearch", "ingester"],
+  "extra_mounts": {
+    "../../../": "/app"
+  },
   "env": {
     "POSTGRES_HOST": "sql.devdock.local",
     "POSTGRES_PORT": "5432",
@@ -13,5 +16,11 @@
     "OPENSEARCH_URL": "http://opensearch.devdock.local:9200",
     "OPENSEARCH_INDEX": "events",
     "PYTHONUNBUFFERED": "1"
+  },
+  "run_commands": [
+    "WORKDIR /app"
+  ],
+  "entrypoint": {
+    "script": "entrypoint.sh"
   }
 }
