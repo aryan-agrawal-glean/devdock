@@ -9,7 +9,7 @@
     "POSTGRES_HOST": "sql.devdock.local",
     "POSTGRES_NAME": "postgres",
     "POSTGRES_USER": "postgres",
-    "POSTGRES_PASSWORD": "postgres",
+    "POSTGRES_PASSWORD": "localdev",
     "POSTGRES_PORT": "5432",
     "BROKER_URL": "redis://redis.devdock.local:6379/0",
     "RESULT_BACKEND": "redis://redis.devdock.local:6379/0",

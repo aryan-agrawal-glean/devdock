@@ -2,7 +2,11 @@
   "type": "python",
   "dependencies": ["sql", "pubsub", "opensearch", "ingester"],
   "env": {
-    "DATABASE_URL": "postgresql://postgres:postgres@sql.devdock.local:5432/pipeline",
+    "POSTGRES_HOST": "sql.devdock.local",
+    "POSTGRES_PORT": "5432",
+    "POSTGRES_DB": "pipeline",
+    "POSTGRES_USER": "postgres",
+    "POSTGRES_PASSWORD": "localdev",
     "PUBSUB_EMULATOR_HOST": "pubsub.devdock.local:8085",
     "PUBSUB_PROJECT_ID": "local-project",
     "PUBSUB_SUBSCRIPTION": "events-sub",
