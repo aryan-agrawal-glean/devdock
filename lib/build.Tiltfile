@@ -37,4 +37,5 @@ def generic_build(name, build_command, build_output, watch_dirs):
         deps=watch_dirs,
         labels=['builds'],
         allow_parallel=True,
+        dir=os.getenv('DEVDOCK_ROOT', ''),
     )

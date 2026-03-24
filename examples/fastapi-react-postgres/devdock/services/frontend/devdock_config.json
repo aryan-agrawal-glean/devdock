@@ -1,0 +1,18 @@
+{
+  "type": "node",
+  "port": "5173",
+  "dependencies": ["backend"],
+  "extra_mounts": {
+    "../../../frontend": "/app"
+  },
+  "env": {
+    "VITE_API_URL": "http://backend.devdock.local:8000"
+  },
+  "run_commands": [
+    "WORKDIR /app",
+    "RUN apk add --no-cache curl"
+  ],
+  "entrypoint": {
+    "script": "entrypoint.sh"
+  }
+}

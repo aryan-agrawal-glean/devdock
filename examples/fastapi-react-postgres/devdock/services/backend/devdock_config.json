@@ -1,0 +1,29 @@
+{
+  "type": "python",
+  "port": "8000",
+  "dependencies": ["sql"],
+  "extra_mounts": {
+    "../../../backend": "/app"
+  },
+  "env": {
+    "PROJECT_NAME": "Full Stack FastAPI",
+    "POSTGRES_SERVER": "sql.devdock.local",
+    "POSTGRES_USER": "postgres",
+    "POSTGRES_PASSWORD": "postgres",
+    "POSTGRES_DB": "app",
+    "SECRET_KEY": "dev-secret-key-change-in-production",
+    "FIRST_SUPERUSER": "admin@example.com",
+    "FIRST_SUPERUSER_PASSWORD": "changeme",
+    "PYTHONUNBUFFERED": "1",
+    "BACKEND_CORS_ORIGINS": "http://localhost,http://localhost:5173"
+  },
+  "run_commands": [
+    "RUN pip install --no-cache-dir hatchling"
+  ],
+  "entrypoint": {
+    "script": "entrypoint.sh"
+  },
+  "healthcheck": {
+    "test": ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/utils/health-check/')\""]
+  }
+}

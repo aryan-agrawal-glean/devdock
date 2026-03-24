@@ -12,14 +12,19 @@ def generate_dockerfile(template_path, context, type = 'services'):
     """Generate a Dockerfile from a template"""
     template = str(read_file(template_path))
 
-    # Build the content line by line
+    # Build the content line by line, skipping lines whose variable is None
     lines = []
     for line in template.split('\n'):
+        skip_line = False
         if '$' in line:
             for key, value in context.items():
                 if '$' + key in line:
+                    if value == None:
+                        skip_line = True
+                        break
                     line = line.replace('$' + key, str(value))
-        lines.append(line)
+        if not skip_line:
+            lines.append(line)
 
     rendered = '\n'.join(lines)
     # pipelines and test_suite write to devdock/config/{type}/{service}/
@@ -42,14 +47,19 @@ def generate_compose(template_path, context, type = 'services'):
     profile = read_yaml('{}/devdock/runtime_generated/temp_profile.yaml'.format(devdock_root))
     architecture = profile.get('architecture', 'unknown')
 
-    # Build the content line by line
+    # Build the content line by line, skipping lines whose variable is None
     lines = []
     for line in template.split('\n'):
+        skip_line = False
         if '$' in line:
             for key, value in context.items():
                 if '$' + key in line:
+                    if value == None:
+                        skip_line = True
+                        break
                     line = line.replace('$' + key, str(value))
-        lines.append(line)
+        if not skip_line:
+            lines.append(line)
 
     # Only add metrics port if not on Linux and if custom metrics port is specified
     if architecture != 'linux' and context.get('metrics_port', 10000) != 10000:
@@ -117,16 +127,32 @@ def setup_docker_build(context, dockerfile = None, compose_file = None):
     elif context.get("type") == "test_suite":
         local('chmod -R 755 ~/.devdock/{} || true'.format(service_name))
         context["mount_binary_path"] = context["mount_binary_path"]
+    elif context.get("type") in ("node", "custom"):
+        # For node/custom: if there's a build output, make the source path absolute
+        binary = context.get("binary", "")
+        mount_path = context.get("mount_binary_path", "")
+        if binary and ":" in mount_path:
+            mount_dest = mount_path.split(":", 1)[1]
+            devdock_root = os.getenv("DEVDOCK_ROOT", "")
+            context["mount_binary_path"] = "{}:{}".format(
+                "{}/{}".format(devdock_root, binary.rstrip("/")),
+                mount_dest,
+            )
+        elif not binary:
+            context["mount_binary_path"] = "~/.devdock/{service_name}:/app/{service_name}".format(service_name=service_name)
     else:
         # For Java, keep existing behavior
         local('chmod -R 755 ~/.devdock/{} || true'.format(service_name))
         war_filename = context["binary"].split("/")[-1]
-        # If a previous run left a directory placeholder (Docker creates dirs for missing bind-mount files), remove it
-        local('[ -d ~/.devdock/{}/{} ] && rm -rf ~/.devdock/{}/{} || true'.format(service_name, war_filename, service_name, war_filename))
-        # Pre-create placeholder file so Docker bind-mounts a file, not a directory
-        local('[ -f ~/.devdock/{}/{} ] || touch ~/.devdock/{}/{}'.format(service_name, war_filename, service_name, war_filename))
-        # Update binary mount to use temp directory
-        context["mount_binary_path"] = "~/.devdock/{}/{}:{}".format(service_name, war_filename, context.get("mount_binary_path", "").split(":")[1])
+        if war_filename:
+            # If a previous run left a directory placeholder (Docker creates dirs for missing bind-mount files), remove it
+            local('[ -d ~/.devdock/{}/{} ] && rm -rf ~/.devdock/{}/{} || true'.format(service_name, war_filename, service_name, war_filename))
+            # Pre-create placeholder file so Docker bind-mounts a file, not a directory
+            local('[ -f ~/.devdock/{}/{} ] || touch ~/.devdock/{}/{}'.format(service_name, war_filename, service_name, war_filename))
+            # Update binary mount to use temp directory
+            context["mount_binary_path"] = "~/.devdock/{}/{}:{}".format(service_name, war_filename, context.get("mount_binary_path", "").split(":")[1])
+        else:
+            context["mount_binary_path"] = "~/.devdock/{service_name}:/app/{service_name}".format(service_name=service_name)
         # context["binary_copy"] = "COPY {} /app/service.jar".format(context["binary"])
 
     if context.get("type") == "pipeline":

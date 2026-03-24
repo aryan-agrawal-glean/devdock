@@ -25,12 +25,16 @@ impl ProfileLoader {
             .or_else(|_| std::env::current_dir())
             .unwrap_or_default();
 
-        // Primary: devdock/profiles in DEVDOCK_ROOT
+        // Primary: .devdock/profiles in DEVDOCK_ROOT (OSS convention, hidden dir)
+        base_paths.push(devdock_root.join(".devdock/profiles"));
+
+        // Secondary: devdock/profiles in DEVDOCK_ROOT (legacy convention)
         base_paths.push(devdock_root.join("devdock/profiles"));
 
         // Fallback: current directory profiles
         if let Ok(cwd) = std::env::current_dir() {
             if cwd != devdock_root {
+                base_paths.push(cwd.join(".devdock/profiles"));
                 base_paths.push(cwd.join("devdock/profiles"));
                 base_paths.push(cwd.join("profiles"));
             }
