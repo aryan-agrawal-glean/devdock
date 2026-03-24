@@ -2,16 +2,29 @@
   "type": "python",
   "port": "8000",
   "dependencies": ["sql", "redis"],
+  "extra_mounts": {
+    "../../../": "/app"
+  },
   "env": {
-    "DJANGO_SETTINGS_MODULE": "myapp.settings.local",
-    "DATABASE_URL": "postgresql://postgres:postgres@sql.devdock.local:5432/myapp",
-    "REDIS_URL": "redis://redis.devdock.local:6379/0",
-    "CELERY_BROKER_URL": "redis://redis.devdock.local:6379/0",
-    "DEBUG": "true",
+    "DJANGO_DB": "postgresql",
+    "POSTGRES_HOST": "sql.devdock.local",
+    "POSTGRES_NAME": "postgres",
+    "POSTGRES_USER": "postgres",
+    "POSTGRES_PASSWORD": "postgres",
+    "POSTGRES_PORT": "5432",
+    "BROKER_URL": "redis://redis.devdock.local:6379/0",
+    "RESULT_BACKEND": "redis://redis.devdock.local:6379/0",
     "SECRET_KEY": "dev-secret-key-change-in-production",
-    "ALLOWED_HOSTS": "localhost,127.0.0.1"
+    "DEBUG": "true",
+    "ALLOWED_HOSTS": "localhost,127.0.0.1,0.0.0.0"
+  },
+  "run_commands": [
+    "WORKDIR /app"
+  ],
+  "entrypoint": {
+    "script": "entrypoint.sh"
   },
   "healthcheck": {
-    "test": ["CMD", "curl", "-f", "http://localhost:8000/health/"]
+    "test": ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/admin/')\""]
   }
 }

@@ -1,6 +1,13 @@
 {
   "type": "go",
   "bazel_target": "//services/ping",
+  "target_is_directory": "True",
   "port": "50051",
-  "dependencies": []
+  "dependencies": [],
+  "entrypoint": {
+    "script": "entrypoint.sh"
+  },
+  "healthcheck": {
+    "test": ["CMD-SHELL", "wget -qO- http://localhost:50051/health || exit 1"]
+  }
 }

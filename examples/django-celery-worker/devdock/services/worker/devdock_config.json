@@ -1,11 +1,25 @@
 {
   "type": "python",
   "dependencies": ["sql", "redis", "api"],
+  "extra_mounts": {
+    "../../../": "/app"
+  },
   "env": {
-    "DJANGO_SETTINGS_MODULE": "myapp.settings.local",
-    "DATABASE_URL": "postgresql://postgres:postgres@sql.devdock.local:5432/myapp",
-    "CELERY_BROKER_URL": "redis://redis.devdock.local:6379/0",
-    "CELERY_RESULT_BACKEND": "redis://redis.devdock.local:6379/0",
+    "DJANGO_DB": "postgresql",
+    "POSTGRES_HOST": "sql.devdock.local",
+    "POSTGRES_NAME": "postgres",
+    "POSTGRES_USER": "postgres",
+    "POSTGRES_PASSWORD": "postgres",
+    "POSTGRES_PORT": "5432",
+    "BROKER_URL": "redis://redis.devdock.local:6379/0",
+    "RESULT_BACKEND": "redis://redis.devdock.local:6379/0",
+    "SECRET_KEY": "dev-secret-key-change-in-production",
     "C_FORCE_ROOT": "true"
+  },
+  "run_commands": [
+    "WORKDIR /app"
+  ],
+  "entrypoint": {
+    "script": "entrypoint.sh"
   }
 }

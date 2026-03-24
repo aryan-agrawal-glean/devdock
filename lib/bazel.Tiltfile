@@ -62,21 +62,30 @@ def bazel_build(name, target, watch_dirs = None, type = None, target_is_director
 
 
     # Get bazel-bin path
-    bazel_info_cmd = ["bazel"]
-    bazel_info_cmd.extend(get_bazel_flags())
-    bazel_info_cmd.extend(["info", "bazel-bin"])
-
+    # For Go type: use the workspace-root bazel-bin symlink instead of `bazel info bazel-bin`.
+    # When cross-compiling (macOS → Linux ARM64), `bazel info bazel-bin` returns the host
+    # platform path (e.g. darwin_arm64-dbg/bin) while the actual output lives under a
+    # transition-hashed directory (e.g. darwin_arm64-dbg-ST-<hash>/bin). The workspace-root
+    # `bazel-bin` symlink is always updated by Bazel to point to the correct directory after
+    # each build, so using it is both simpler and correct.
     if type == "go":
-        bazel_info_cmd.append("--compilation_mode=dbg")
-
-    bazel_bin = str(local(' '.join(bazel_info_cmd), quiet=True)).strip()
+        bazel_bin = os.getenv('DEVDOCK_ROOT') + '/bazel-bin'
+    else:
+        bazel_info_cmd = ["bazel"]
+        bazel_info_cmd.extend(get_bazel_flags())
+        bazel_info_cmd.extend(["info", "bazel-bin"])
+        bazel_bin = str(local(' '.join(bazel_info_cmd), quiet=True)).strip()
 
     if target_is_directory == "False":
         target_path = target.replace(":", "/")
     else:
         target_path = target.split(":")[0]
 
-    binary_name = target.split(":")[-1]
+    # If no explicit ":name", derive name from last path segment (Bazel convention)
+    if ":" in target:
+        binary_name = target.split(":")[-1]
+    else:
+        binary_name = target.rstrip("/").split("/")[-1]
 
     if type == "go":
         clean_target_path = target_path.lstrip('/')
