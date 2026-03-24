@@ -1,8 +1,10 @@
 # Example: Django + Celery Worker
 
 **Pattern:** Django REST API + Celery async worker + Redis (broker) + PostgreSQL
-**Reference:** Standard Django+Celery project structure (e.g., [testdrivenio/django-celery](https://github.com/testdrivenio/django-celery))
-**Stack:** Python 3.11 · Django 4.2 · Celery 5 · Redis 7 · PostgreSQL 15
+**Reference:** [saasitive/docker-compose-django-celery-redis-postgres](https://github.com/saasitive/docker-compose-django-celery-redis-postgres)
+**Stack:** Python 3.8 · Django 4.1 · Celery 5 · Redis 7 · PostgreSQL 16
+
+> **Verified:** All services (`sql`, `redis`, `api`, `worker`) reach `runtime=ok`. Django admin accessible at http://localhost:8000/admin/ (HTTP 302). Celery worker connects to Redis and reports `celery@<id> ready.`
 
 ---
 
@@ -26,21 +28,18 @@
 
 ---
 
-## Typical Repo Layout
+## Repo Layout (saasitive reference)
 
 ```
-my-django-app/
-├── myapp/
-│   ├── settings/
-│   │   ├── base.py
-│   │   └── local.py
-│   ├── celery.py          ← Celery app init
-│   └── wsgi.py
-├── tasks/                 ← Celery task modules
-├── api/                   ← Django REST endpoints
-├── Dockerfile
-├── requirements.txt
-└── manage.py
+docker-compose-django-celery-redis-postgres/
+├── requirements.txt       ← pip deps (django, celery[redis], psycopg2-binary, etc.)
+├── backend/               ← Django project root (contains manage.py)
+│   ├── manage.py
+│   └── backend/           ← Django app (settings.py, celery.py, urls.py)
+│       ├── settings.py    ← reads DJANGO_DB, POSTGRES_*, BROKER_URL from env
+│       └── celery.py      ← Celery app: `celery -A backend worker`
+├── assignments/           ← Example Celery task module
+└── docker/                ← Original Docker configs (not used by devdock)
 ```
 
 ---
@@ -91,15 +90,13 @@ open http://localhost:10350
 
 Verify:
 ```bash
-# Django health endpoint (if you have one)
-curl http://localhost:8000/health/
+# Django admin panel — expect HTTP 302 (redirect to login)
+curl -o /dev/null -w "%{http_code}" http://localhost:8000/admin/
+# → 302
 
-# Admin panel
-open http://localhost:8000/admin/
-
-# Trigger a Celery task and watch the worker container logs in Tilt
-curl -X POST http://localhost:8000/api/tasks/ -d '{"task": "my_task"}'
-# → Tilt shows the worker container logging the task execution
+# Check Celery worker connected (in Tilt logs for 'worker')
+# → celery@<id> ready.
+docker logs devdock-worker 2>&1 | grep "ready"
 ```
 
 ---
