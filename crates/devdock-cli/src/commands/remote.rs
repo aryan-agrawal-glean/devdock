@@ -539,9 +539,12 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
         // Print success message (clean and actionable)
         println!();
 
+        let start_time = (chrono::Utc::now() - chrono::Duration::minutes(5))
+            .format("%Y-%m-%dT%H:%M:%SZ");
         let gcp_logs_url = format!(
-            "https://console.cloud.google.com/logs/query;query=labels.devdock_id%3D%22{}%22;summaryFields=labels%252Flogger_source:false:32:beginning?project={}",
+            "https://console.cloud.google.com/logs/query;query=labels.devdock_id%3D%22{}%22;summaryFields=labels%252Flogger_source:false:32:beginning;startTime={};duration=PT6H?project={}",
             instance_id,
+            start_time,
             loaded_profile.project
         );
 

@@ -159,8 +159,10 @@ pub async fn execute(
     // Track tilt up time for telemetry
     let tilt_up_time = chrono::Utc::now();
 
+    let start_time = (chrono::Utc::now() - chrono::Duration::minutes(5))
+        .format("%Y-%m-%dT%H:%M:%SZ");
     let gcp_logs_url = format!(
-        "https://console.cloud.google.com/logs/query;query=labels.devdock_id%3D%22{instance_id}%22;summaryFields=labels%252Flogger_source:false:32:beginning?project={}",
+        "https://console.cloud.google.com/logs/query;query=labels.devdock_id%3D%22{instance_id}%22;summaryFields=labels%252Flogger_source:false:32:beginning;startTime={start_time};duration=PT6H?project={}",
         profile.project
     );
 
