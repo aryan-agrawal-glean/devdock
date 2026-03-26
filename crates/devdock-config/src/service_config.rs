@@ -152,6 +152,44 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_config_with_script_entrypoint() {
+        let json = r#"{
+            "base_image": "test:latest",
+            "type": "java",
+            "entrypoint": {"script": "entrypoint.sh"},
+            "env": {}
+        }"#;
+
+        let config: ServiceConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.entrypoint.unwrap().script, "entrypoint.sh");
+    }
+
+    #[test]
+    fn test_parse_config_with_array_entrypoint_fails() {
+        let json = r#"{
+            "base_image": "test:latest",
+            "type": "java",
+            "entrypoint": ["java", "-jar", "/app/foo.jar"],
+            "env": {}
+        }"#;
+
+        let result = serde_json::from_str::<ServiceConfig>(json);
+        assert!(result.is_err(), "Array-style entrypoint should fail parsing");
+    }
+
+    #[test]
+    fn test_parse_config_without_entrypoint() {
+        let json = r#"{
+            "base_image": "test:latest",
+            "type": "java",
+            "env": {}
+        }"#;
+
+        let config: ServiceConfig = serde_json::from_str(json).unwrap();
+        assert!(config.entrypoint.is_none());
+    }
+
+    #[test]
     fn test_parse_config_with_boolean_env() {
         let json = r#"{
             "base_image": "test:latest",

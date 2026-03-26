@@ -124,6 +124,9 @@ enum Commands {
     Validate {
         /// Profile name to validate
         profile: String,
+        /// Also validate all devdock_config.json files can be parsed
+        #[arg(long)]
+        strict: bool,
     },
 
     /// Generate configuration without starting
@@ -637,7 +640,9 @@ async fn main() {
 
         Commands::List { running } => commands::list::execute(running).await,
 
-        Commands::Validate { profile } => commands::validate::execute(&profile).await,
+        Commands::Validate { profile, strict } => {
+            commands::validate::execute(&profile, strict).await
+        }
 
         Commands::Generate { profile, output } => {
             commands::generate::execute(&profile, output.as_deref()).await

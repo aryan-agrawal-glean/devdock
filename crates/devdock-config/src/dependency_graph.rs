@@ -36,6 +36,10 @@ impl DependencyGraph {
         let total_start = std::time::Instant::now();
         let mut graph = Self { nodes: HashMap::new() };
 
+        // Track services explicitly listed in the profile (not auto-resolved)
+        let explicit_services: HashSet<String> =
+            profile.services.keys().chain(profile.infra.keys()).cloned().collect();
+
         // Create an expanded profile with transitive dependencies resolved
         let step_start = std::time::Instant::now();
         let expanded = Self::expand_dependencies(profile, workspace_root).await?;
@@ -47,7 +51,7 @@ impl DependencyGraph {
 
         // Load all service configs in parallel
         let step_start = std::time::Instant::now();
-        let configs = Self::load_all_configs(&expanded, workspace_root).await?;
+        let configs = Self::load_all_configs(&expanded, workspace_root, &explicit_services).await?;
         println!(
             "      └─ Loaded {} configs in {:.2}s",
             configs.len(),
@@ -195,21 +199,26 @@ impl DependencyGraph {
     async fn load_all_configs(
         profile: &Profile,
         workspace_root: &Path,
+        explicit_services: &HashSet<String>,
     ) -> Result<HashMap<String, (ServiceConfig, ComponentType)>> {
         use devdock_core::types::DeploymentType;
 
         let mut futures = Vec::new();
 
-        // Load service configs
+        // Load service configs — return (name, Result) so name is available on error
         for (service_name, service_profile) in &profile.services {
             let workspace_root = workspace_root.to_path_buf();
             let service_name = service_name.clone();
             let is_local = service_profile.deployment_type == DeploymentType::Local;
 
             futures.push(tokio::spawn(async move {
-                let mut config = Self::load_service_config(&workspace_root, &service_name).await?;
-                config.set_deployment_local(is_local);
-                Ok::<_, anyhow::Error>((service_name, (config, ComponentType::Service)))
+                let result = Self::load_service_config(&workspace_root, &service_name).await.map(
+                    |mut config| {
+                        config.set_deployment_local(is_local);
+                        (config, ComponentType::Service)
+                    },
+                );
+                (service_name, result)
             }));
         }
 
@@ -220,36 +229,51 @@ impl DependencyGraph {
             let is_local = infra_profile.deployment_type == DeploymentType::Local;
 
             futures.push(tokio::spawn(async move {
-                let mut config = Self::load_infra_config(&workspace_root, &infra_name).await?;
-                config.set_deployment_local(is_local);
-                Ok::<_, anyhow::Error>((infra_name, (config, ComponentType::Infra)))
+                let result = Self::load_infra_config(&workspace_root, &infra_name).await.map(
+                    |mut config| {
+                        config.set_deployment_local(is_local);
+                        (config, ComponentType::Infra)
+                    },
+                );
+                (infra_name, result)
             }));
         }
 
         // Wait for all to complete
         let results = futures::future::join_all(futures).await;
 
-        // Collect results
+        // Collect results, failing fast for explicitly configured services
         let mut configs = HashMap::new();
+        let mut errors = Vec::new();
         for result in results {
             match result {
-                Ok(Ok((name, config_tuple))) => {
+                Ok((name, Ok(config_tuple))) => {
                     configs.insert(name, config_tuple);
                 }
-                Ok(Err(e)) => {
-                    // Skip warnings for known hook services that don't have config files
-                    let error_msg = e.to_string();
-                    let is_hook_service =
-                        error_msg.contains("pre_setup") || error_msg.contains("post_setup");
-
-                    if !is_hook_service {
-                        eprintln!("Warning: Failed to load config: {e}");
+                Ok((name, Err(e))) => {
+                    if name == "pre_setup" || name == "post_setup" {
+                        continue;
+                    }
+                    if explicit_services.contains(&name) {
+                        errors.push(format!("{name}: {e:#}"));
+                    } else {
+                        eprintln!(
+                            "Warning: Failed to load config for transitive dependency '{name}': {e:#}"
+                        );
                     }
                 }
                 Err(e) => {
                     eprintln!("Warning: Task failed: {e}");
                 }
             }
+        }
+
+        if !errors.is_empty() {
+            anyhow::bail!(
+                "Failed to load config for {} service(s) explicitly listed in profile:\n  - {}",
+                errors.len(),
+                errors.join("\n  - ")
+            );
         }
 
         Ok(configs)
