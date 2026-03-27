@@ -12,7 +12,12 @@ use std::process::Command;
 const CLEANUP_PORTS: &[u16] = &[8888, 8880, 7070, 8090, 7972, 3407, 3408];
 
 /// Execute the cleanup command
-pub async fn execute(soft: bool, clean_logs: bool, clean_local: bool, keep_generated: bool) -> Result<()> {
+pub async fn execute(
+    soft: bool,
+    clean_logs: bool,
+    clean_local: bool,
+    keep_generated: bool,
+) -> Result<()> {
     output::header("DevDock Cleanup");
 
     let home = std::env::var("HOME").unwrap_or_default();
