@@ -12,7 +12,7 @@ use std::process::Command;
 const CLEANUP_PORTS: &[u16] = &[8888, 8880, 7070, 8090, 7972, 3407, 3408];
 
 /// Execute the cleanup command
-pub async fn execute(soft: bool, clean_logs: bool, clean_local: bool) -> Result<()> {
+pub async fn execute(soft: bool, clean_logs: bool, clean_local: bool, keep_generated: bool) -> Result<()> {
     output::header("DevDock Cleanup");
 
     let home = std::env::var("HOME").unwrap_or_default();
@@ -46,9 +46,13 @@ pub async fn execute(soft: bool, clean_logs: bool, clean_local: bool) -> Result<
     }
 
     // Step 2: Clean up generated files
-    output::step(step, total_steps, "Cleaning generated files...");
-    clean_generated_files(&devdock_root, &devdock_dir)?;
-    output::success("Generated files cleaned");
+    if keep_generated {
+        output::info("Keeping generated Dockerfiles and docker-compose.yaml (--keep-generated)");
+    } else {
+        output::step(step, total_steps, "Cleaning generated files...");
+        clean_generated_files(&devdock_root, &devdock_dir)?;
+        output::success("Generated files cleaned");
+    }
     step += 1;
 
     // Step 3: Clean up Grafana/observability stack
