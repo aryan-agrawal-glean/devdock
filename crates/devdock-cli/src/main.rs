@@ -150,9 +150,9 @@ enum Commands {
         #[arg(long)]
         logs: bool,
 
-        /// Preserve generated Dockerfiles and docker-compose.yaml for faster restarts
+        /// Also clean generated Dockerfiles and docker-compose.yaml (default: preserved for faster restarts)
         #[arg(long)]
-        keep_generated: bool,
+        clean_generated: bool,
 
         /// Skip local cleanup steps and only clenaup remotes (default: false)
         #[arg(long = "no-local")]
@@ -652,8 +652,8 @@ async fn main() {
             commands::generate::execute(&profile, output.as_deref()).await
         }
 
-        Commands::Cleanup { soft, logs, keep_generated, no_local } => {
-            commands::cleanup::execute(soft, logs, !no_local, keep_generated).await
+        Commands::Cleanup { soft, logs, clean_generated, no_local } => {
+            commands::cleanup::execute(soft, logs, !no_local, !clean_generated).await
         }
 
         Commands::Exec { container, command } => {

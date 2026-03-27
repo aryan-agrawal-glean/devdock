@@ -47,7 +47,7 @@ pub async fn execute(soft: bool, clean_logs: bool, clean_local: bool, keep_gener
 
     // Step 2: Clean up generated files
     if keep_generated {
-        output::info("Keeping generated Dockerfiles and docker-compose.yaml (--keep-generated)");
+        output::info("Keeping generated Dockerfiles and docker-compose.yaml (use --clean-generated to remove)");
     } else {
         output::step(step, total_steps, "Cleaning generated files...");
         clean_generated_files(&devdock_root, &devdock_dir)?;
