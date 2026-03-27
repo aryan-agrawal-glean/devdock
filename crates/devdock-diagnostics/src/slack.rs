@@ -6,6 +6,7 @@ use std::process::Command;
 use tracing::{info, warn};
 
 const SLACK_CHANNEL: &str = "help-devdock";
+const INT_PLAT_ONCALL_GROUP_ID: &str = "S07CSL7HDTQ";
 
 #[derive(Debug, Serialize)]
 struct SlackMessage {
@@ -114,6 +115,13 @@ pub async fn post_to_slack(jira_key: &str, summary: &str, reporter_email: &str) 
                 text: Some(SlackText {
                     text_type: "mrkdwn".to_string(),
                     text: format!("*Summary:* {summary}"),
+                }),
+                fields: None,
+            },
+            SlackBlock::Section {
+                text: Some(SlackText {
+                    text_type: "mrkdwn".to_string(),
+                    text: format!("cc <!subteam^{INT_PLAT_ONCALL_GROUP_ID}>"),
                 }),
                 fields: None,
             },
