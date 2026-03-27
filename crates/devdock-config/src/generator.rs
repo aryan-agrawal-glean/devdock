@@ -635,7 +635,13 @@ impl ConfigGenerator {
             let multi_profile_data = self
                 .generate_multi_project_profile(profile, multi_config, dynamic_ini.as_ref())
                 .await?;
+
+            // 2. Inject multi-project services into top-level services map
+            // so they appear as first-class Tilt resources (not just nested config)
+            let top_level_services = multi_profile_data.services.clone();
+
             generator.set_multi_project(multi_profile_data);
+            generator.inject_top_level_services(top_level_services);
         }
 
         generator.generate()

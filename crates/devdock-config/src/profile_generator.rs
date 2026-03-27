@@ -739,6 +739,14 @@ impl TempProfileGenerator {
         self.profile.multi_project = Some(multi_project);
     }
 
+    /// Inject multi-project services into the top-level services map
+    /// so they appear as first-class Tilt resources.
+    pub fn inject_top_level_services(&mut self, services: HashMap<String, ServiceProfileEntry>) {
+        for (name, entry) in services {
+            self.profile.services.insert(name, entry);
+        }
+    }
+
     /// Apply remote SQL configuration to temp_profile (matches Python logic)
     fn apply_remote_sql_config(&mut self, extra: &mut HashMap<String, serde_json::Value>) {
         let Some(ref metadata) = self.sql_remote_metadata else {
@@ -1006,5 +1014,64 @@ mod tests {
             namespace, "elasticsearch-2-namespace",
             "Should use default when nodepool is empty"
         );
+    }
+
+    #[test]
+    fn test_inject_top_level_services_adds_multi_project_services() {
+        let mut generator = TempProfileGenerator::new(&PathBuf::from("/tmp"), None);
+
+        // Simulate a top-level service already present
+        generator.profile.services.insert(
+            "qe".to_string(),
+            ServiceProfileEntry {
+                service_type: "local".to_string(),
+                active: true,
+                port: None,
+                env: None,
+                hot_reload: None,
+                script: None,
+                service: None,
+                depends_on_services: None,
+                timeout: None,
+                extra: HashMap::new(),
+            },
+        );
+
+        // Inject a multi-project service (e.g., central_datasources from glean-apps-canary)
+        let mut multi_services = HashMap::new();
+        let mut env = HashMap::new();
+        env.insert("USE_DEVDOCK_INI".to_string(), "true".to_string());
+        multi_services.insert(
+            "central_datasources".to_string(),
+            ServiceProfileEntry {
+                service_type: "local".to_string(),
+                active: true,
+                port: None,
+                env: Some(env),
+                hot_reload: Some("disable".to_string()),
+                script: None,
+                service: None,
+                depends_on_services: None,
+                timeout: None,
+                extra: HashMap::new(),
+            },
+        );
+
+        generator.inject_top_level_services(multi_services);
+
+        // Both services should now be in top-level services
+        assert!(
+            generator.profile.services.contains_key("qe"),
+            "Original top-level service should still be present"
+        );
+        assert!(
+            generator.profile.services.contains_key("central_datasources"),
+            "Multi-project service should be promoted to top-level"
+        );
+
+        let cd = generator.profile.services.get("central_datasources").unwrap();
+        assert_eq!(cd.service_type, "local");
+        assert!(cd.active);
+        assert_eq!(cd.hot_reload.as_deref(), Some("disable"));
     }
 }
