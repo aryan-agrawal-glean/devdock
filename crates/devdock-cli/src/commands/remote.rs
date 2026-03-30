@@ -574,6 +574,10 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
                     "  💡 Tip: Forward ports with: {}",
                     "devdock ports forward --all".yellow()
                 );
+                println!(
+                    "         Use {} to skip port offset",
+                    "devdock ports forward --all --no-offset".yellow()
+                );
             }
 
             println!();
@@ -615,7 +619,7 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
                     "   {} {}  {}",
                     "•".cyan(),
                     "devdock ports forward --all".cyan(),
-                    "(forward service ports)".dimmed()
+                    "(forward service ports, add --no-offset to skip offset)".dimmed()
                 );
             }
 

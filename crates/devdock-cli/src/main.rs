@@ -332,6 +332,9 @@ enum PortCommands {
         /// Custom port mapping in format local:remote
         #[arg(long)]
         custom: Option<String>,
+        /// Don't apply port_base offset to local ports (use remote port as local port)
+        #[arg(long)]
+        no_offset: bool,
     },
     /// Stop port forwarding
     Stop {
@@ -680,8 +683,9 @@ async fn main() {
 
         Commands::Ports { command } => match command {
             PortCommands::List { instance } => commands::ports::list(instance).await,
-            PortCommands::Forward { all, service, custom } => {
-                commands::ports::forward(all, service.as_deref(), custom.as_deref()).await
+            PortCommands::Forward { all, service, custom, no_offset } => {
+                commands::ports::forward(all, service.as_deref(), custom.as_deref(), no_offset)
+                    .await
             }
             PortCommands::Stop { all, service } => {
                 commands::ports::stop(all, service.as_deref()).await

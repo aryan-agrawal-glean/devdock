@@ -321,23 +321,68 @@ async fn clean_stale_instances(clean_local: bool) -> Result<usize> {
         state_manager: &state_manager,
         clean_local,
         is_tilt_running,
+        prompt_remote_running: prompt_remote_running_interactive,
     })
     .await
 }
 
-struct CleanStaleInstancesParams<'a, F>
+struct CleanStaleInstancesParams<'a, F, P>
 where
     F: Fn(&devdock_state::Instance) -> Result<bool>,
+    P: Fn(&devdock_state::Instance) -> Result<RemoteRunningAction>,
 {
     state_manager: &'a StateManager,
     clean_local: bool,
     is_tilt_running: F,
+    prompt_remote_running: P,
 }
-async fn _clean_stale_instances<F>(params: CleanStaleInstancesParams<'_, F>) -> Result<usize>
+
+/// What to do with a remote instance that is actively running.
+#[derive(Debug, PartialEq)]
+enum RemoteRunningAction {
+    /// Stop the remote Tilt session but keep the Coder workspace.
+    Stop,
+    /// Delete the Coder workspace entirely.
+    Delete,
+    /// Leave it alone.
+    Skip,
+}
+
+/// Interactive prompt shown when a remote instance is actively running.
+fn prompt_remote_running_interactive(
+    instance: &devdock_state::Instance,
+) -> Result<RemoteRunningAction> {
+    let ws = instance.workspace_name.as_deref().unwrap_or("<unknown>");
+    println!(
+        "\n  ⚠️  Remote instance {} (workspace: {}, profile: {}) is still running.",
+        Instance::display_id(&instance.id),
+        ws,
+        instance.profile,
+    );
+    print!("     What would you like to do? [stop / delete / skip] (default: skip): ");
+    std::io::Write::flush(&mut std::io::stdout())?;
+
+    let mut input = String::new();
+    std::io::BufRead::read_line(&mut std::io::BufReader::new(std::io::stdin()), &mut input)?;
+
+    Ok(match input.trim().to_lowercase().as_str() {
+        "stop" | "s" => RemoteRunningAction::Stop,
+        "delete" | "d" => RemoteRunningAction::Delete,
+        _ => RemoteRunningAction::Skip,
+    })
+}
+
+async fn _clean_stale_instances<F, P>(params: CleanStaleInstancesParams<'_, F, P>) -> Result<usize>
 where
     F: Fn(&devdock_state::Instance) -> Result<bool>,
+    P: Fn(&devdock_state::Instance) -> Result<RemoteRunningAction>,
 {
-    let CleanStaleInstancesParams { state_manager, clean_local, is_tilt_running } = params;
+    let CleanStaleInstancesParams {
+        state_manager,
+        clean_local,
+        is_tilt_running,
+        prompt_remote_running,
+    } = params;
     let instances = state_manager.list_instances().await?;
 
     let mut cleaned_count = 0;
@@ -350,8 +395,33 @@ where
         // Check if instance should be cleaned up
         let should_clean = match instance.status {
             InstanceStatus::Running | InstanceStatus::Starting => {
-                // Check if Tilt is actually running in this workspace
-                !is_tilt_running(&instance)?
+                let tilt_live = is_tilt_running(&instance)?;
+
+                // For a live remote instance, ask the user what to do.
+                if tilt_live && instance.mode == "remote" {
+                    match prompt_remote_running(&instance)? {
+                        RemoteRunningAction::Stop => {
+                            let ws = instance.workspace_name.as_deref().unwrap_or("");
+                            if !ws.is_empty() {
+                                let _ = Command::new("coder")
+                                    .args(["ssh", ws, "--", "devdock stop"])
+                                    .status();
+                            }
+                            true // remove from local state
+                        }
+                        RemoteRunningAction::Delete => {
+                            let ws = instance.workspace_name.as_deref().unwrap_or("");
+                            if !ws.is_empty() {
+                                let _ =
+                                    Command::new("coder").args(["delete", ws, "--yes"]).status();
+                            }
+                            true // remove from local state
+                        }
+                        RemoteRunningAction::Skip => false,
+                    }
+                } else {
+                    !tilt_live
+                }
             }
             InstanceStatus::Stopping => {
                 // Stopping instances that never completed should be cleaned
@@ -377,6 +447,14 @@ where
                     e
                 ));
             } else {
+                // Also remove any associated port mappings.
+                if let Err(e) = state_manager.delete_port_mappings(&instance.id).await {
+                    output::warn(&format!(
+                        "  Failed to delete port mappings for {}: {}",
+                        Instance::display_id(&instance.id),
+                        e
+                    ));
+                }
                 cleaned_count += 1;
             }
         }
@@ -550,6 +628,10 @@ mod tests {
         ids
     }
 
+    fn no_prompt(_: &Instance) -> Result<RemoteRunningAction> {
+        panic!("prompt should not be called for local instances")
+    }
+
     #[tokio::test]
     async fn clean_stale_instances_keeps_running_when_tilt_running() -> Result<()> {
         let (state_manager, _db_file) = setup_state_manager().await?;
@@ -561,6 +643,7 @@ mod tests {
             state_manager: &state_manager,
             clean_local: true,
             is_tilt_running: |_| Ok(true),
+            prompt_remote_running: no_prompt,
         })
         .await?;
 
@@ -580,25 +663,7 @@ mod tests {
             state_manager: &state_manager,
             clean_local: true,
             is_tilt_running: |_| Ok(false),
-        })
-        .await?;
-
-        assert_eq!(cleaned, 1);
-        let remaining = state_manager.list_instances().await?;
-        assert!(remaining.is_empty());
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn clean_stale_instances_cleans_stopping_instances() -> Result<()> {
-        let (state_manager, _db_file) = setup_state_manager().await?;
-        let instance = make_instance("inst-0001", "local", InstanceStatus::Stopping);
-        state_manager.register_instance(&instance).await?;
-
-        let cleaned = _clean_stale_instances(CleanStaleInstancesParams {
-            state_manager: &state_manager,
-            clean_local: true,
-            is_tilt_running: |_| Ok(true),
+            prompt_remote_running: no_prompt,
         })
         .await?;
 
@@ -620,6 +685,7 @@ mod tests {
             state_manager: &state_manager,
             clean_local: true,
             is_tilt_running: |_| Ok(true),
+            prompt_remote_running: no_prompt,
         })
         .await?;
 
@@ -642,12 +708,100 @@ mod tests {
             state_manager: &state_manager,
             clean_local: false,
             is_tilt_running: |_| Ok(false),
+            prompt_remote_running: no_prompt,
         })
         .await?;
 
         assert_eq!(cleaned, 1);
         let remaining = state_manager.list_instances().await?;
         assert_eq!(instance_ids(&remaining), vec![local_id]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn remote_running_skip_leaves_instance_intact() -> Result<()> {
+        let (state_manager, _db_file) = setup_state_manager().await?;
+        let instance = make_instance("inst-remote", "remote", InstanceStatus::Running);
+        let instance_id = instance.id.clone();
+        state_manager.register_instance(&instance).await?;
+
+        let cleaned = _clean_stale_instances(CleanStaleInstancesParams {
+            state_manager: &state_manager,
+            clean_local: true,
+            is_tilt_running: |_| Ok(true),
+            prompt_remote_running: |_| Ok(RemoteRunningAction::Skip),
+        })
+        .await?;
+
+        assert_eq!(cleaned, 0);
+        let remaining = state_manager.list_instances().await?;
+        assert_eq!(instance_ids(&remaining), vec![instance_id]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn remote_running_stop_removes_from_state() -> Result<()> {
+        let (state_manager, _db_file) = setup_state_manager().await?;
+        let instance = make_instance("inst-remote", "remote", InstanceStatus::Running);
+        state_manager.register_instance(&instance).await?;
+
+        let cleaned = _clean_stale_instances(CleanStaleInstancesParams {
+            state_manager: &state_manager,
+            clean_local: true,
+            is_tilt_running: |_| Ok(true),
+            // Simulate user choosing "stop" — coder ssh is a no-op in tests
+            prompt_remote_running: |_| Ok(RemoteRunningAction::Stop),
+        })
+        .await?;
+
+        assert_eq!(cleaned, 1);
+        let remaining = state_manager.list_instances().await?;
+        assert!(remaining.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn remote_running_delete_removes_from_state() -> Result<()> {
+        let (state_manager, _db_file) = setup_state_manager().await?;
+        let instance = make_instance("inst-remote", "remote", InstanceStatus::Running);
+        state_manager.register_instance(&instance).await?;
+
+        let cleaned = _clean_stale_instances(CleanStaleInstancesParams {
+            state_manager: &state_manager,
+            clean_local: true,
+            is_tilt_running: |_| Ok(true),
+            prompt_remote_running: |_| Ok(RemoteRunningAction::Delete),
+        })
+        .await?;
+
+        assert_eq!(cleaned, 1);
+        let remaining = state_manager.list_instances().await?;
+        assert!(remaining.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cleanup_also_deletes_port_mappings() -> Result<()> {
+        let (state_manager, _db_file) = setup_state_manager().await?;
+        let instance = make_instance("inst-0001", "local", InstanceStatus::Stopped);
+        state_manager.register_instance(&instance).await?;
+        state_manager.save_port_mapping(&instance.id, "qe", "service", 7960, 7960, None).await?;
+
+        // Confirm mapping exists before cleanup
+        let before = state_manager.get_port_mappings(&instance.id).await?;
+        assert_eq!(before.len(), 1);
+
+        _clean_stale_instances(CleanStaleInstancesParams {
+            state_manager: &state_manager,
+            clean_local: true,
+            is_tilt_running: |_| Ok(false),
+            prompt_remote_running: no_prompt,
+        })
+        .await?;
+
+        // Mapping must be gone
+        let after = state_manager.get_port_mappings(&instance.id).await?;
+        assert!(after.is_empty());
         Ok(())
     }
 }
