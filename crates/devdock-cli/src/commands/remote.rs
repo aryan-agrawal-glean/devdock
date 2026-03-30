@@ -422,12 +422,16 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
         let config_duration_ref = std::sync::Arc::new(std::sync::Mutex::new(config_start));
         let config_duration_clone = config_duration_ref.clone();
         let t_config_sync_clone = t_config_sync.clone();
+        let t_current_stage_clone = t_current_stage.clone();
         let wall_start_clone = wall_start;
 
         let on_config_complete = move || {
-            // Record config_sync_secs at the moment config sync completes
+            // Record config_sync_secs and advance stage to REMOTE_DEVDOCK_START here,
+            // so that any failure inside start_remote_devdock *before* this callback
+            // fires is correctly attributed to CONFIG_SYNC, not REMOTE_DEVDOCK_START.
             *t_config_sync_clone.lock().unwrap() =
                 Some(wall_start_clone.elapsed().as_secs_f64());
+            *t_current_stage_clone.lock().unwrap() = stage::REMOTE_DEVDOCK_START;
 
             if !verbose {
                 let config_duration = config_duration_clone.lock().unwrap().elapsed().as_secs();
@@ -444,8 +448,6 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
                 *devdock_start_clone.lock().unwrap() = Instant::now();
             }
         };
-
-        *t_current_stage.lock().unwrap() = stage::REMOTE_DEVDOCK_START;
 
         // The actual config sync and devdock start happens inside workspace::start_remote_devdock
         let port_mgr = workspace::start_remote_devdock(
