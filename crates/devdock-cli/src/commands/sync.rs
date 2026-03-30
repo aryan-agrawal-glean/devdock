@@ -586,7 +586,22 @@ pub async fn force(paths: Vec<String>, workspace: Option<String>, watch: bool) -
 
         println!();
         println!("Adding patterns to daemon watch list...");
-        devdock_sync::force::save_force_patterns(&devdock_id, &paths)?;
+
+        // Convert directory paths to glob patterns so the daemon can match files inside them.
+        // e.g. "config/shards" → "config/shards/**"  (without this, the pattern never matches
+        // "config/shards/BUILD.bazel" because glob treats it as an exact-string match)
+        let watch_patterns: Vec<String> = paths
+            .iter()
+            .map(|p| {
+                let full = repo_path.join(p);
+                if full.is_dir() {
+                    format!("{}/**", p.trim_end_matches('/'))
+                } else {
+                    p.clone()
+                }
+            })
+            .collect();
+        devdock_sync::force::save_force_patterns(&devdock_id, &watch_patterns)?;
 
         println!("{} Patterns added to daemon watch list.", "✅".green());
         println!("  The daemon will now sync matching files on change, bypassing normal filters.");
