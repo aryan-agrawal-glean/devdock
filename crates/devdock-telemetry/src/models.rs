@@ -148,6 +148,35 @@ pub struct HealthTransitionEvent {
     pub duration_in_previous_state_seconds: Option<f64>,
 }
 
+/// Remote session startup metrics.
+/// Table: devdock.remote_session_stats
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RemoteSessionMetrics {
+    pub devdock_id: String,
+    pub machine_id: String,
+    pub architecture: String,
+    pub platform: String,
+    pub project: String,
+    pub profile: String,
+    pub branch: Option<String>,
+    pub workspace_name: String,
+    pub region: String,
+    pub workspace_existed: bool,
+    pub binary_version: String,
+    pub command_start_time: DateTime<Utc>,
+    pub auth_check_secs: Option<f64>,
+    pub workspace_ready_secs: Option<f64>,
+    pub config_sync_secs: Option<f64>,
+    pub tilt_up_secs: Option<f64>,
+    pub port_forward_secs: Option<f64>,
+    pub sync_daemon_secs: Option<f64>,
+    pub total_setup_secs: Option<f64>,
+    pub startup_status: String,
+    pub failed_at_stage: Option<String>,
+    pub error_message: Option<String>,
+    pub timestamp: DateTime<Utc>,
+}
+
 /// Aggregated telemetry snapshot containing all metrics.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TelemetrySnapshot {
@@ -159,6 +188,7 @@ pub struct TelemetrySnapshot {
     pub failures: Vec<FailureLogMetrics>,
     pub builds: Vec<BuildMetrics>,
     pub health_transitions: Vec<HealthTransitionEvent>,
+    pub remote_session: Option<RemoteSessionMetrics>,
 }
 
 impl TelemetrySnapshot {
@@ -175,6 +205,7 @@ impl TelemetrySnapshot {
             && self.failures.is_empty()
             && self.builds.is_empty()
             && self.health_transitions.is_empty()
+            && self.remote_session.is_none()
     }
 
     pub fn total_metrics_count(&self) -> usize {
@@ -186,5 +217,6 @@ impl TelemetrySnapshot {
             + self.failures.len()
             + self.builds.len()
             + self.health_transitions.len()
+            + usize::from(self.remote_session.is_some())
     }
 }

@@ -50,6 +50,7 @@ pub struct TableNames {
     pub host_stats: String,
     pub docker_stats: String,
     pub failure_logs: String,
+    pub remote_session_stats: String,
 }
 
 impl TableNames {
@@ -61,6 +62,7 @@ impl TableNames {
             host_stats: format!("{project}.{dataset}.host_stats"),
             docker_stats: format!("{project}.{dataset}.docker_stats"),
             failure_logs: format!("{project}.{dataset}.resource_failure_logs"),
+            remote_session_stats: format!("{project}.{dataset}.remote_session_stats"),
         }
     }
 }
@@ -297,6 +299,16 @@ impl TelemetryEmitter for BigQueryEmitter {
                 Err(e) => {
                     failure_count += snapshot.failures.len();
                     errors.push(format!("failure_logs: {e}"));
+                }
+            }
+        }
+
+        if let Some(remote_session) = &snapshot.remote_session {
+            match self.insert_rows(&self.tables.remote_session_stats, &[remote_session]).await {
+                Ok(n) => success_count += n,
+                Err(e) => {
+                    failure_count += 1;
+                    errors.push(format!("remote_session_stats: {e}"));
                 }
             }
         }

@@ -15,6 +15,15 @@ use std::path::PathBuf;
 use std::time::Instant;
 use tracing::{info, warn};
 
+/// Stage names for `failed_at_stage` telemetry field.
+mod stage {
+    pub const WORKSPACE_PROVISION: &str = "workspace_provision";
+    pub const CONFIG_SYNC: &str = "config_sync";
+    pub const REMOTE_DEVDOCK_START: &str = "remote_devdock_start";
+    pub const PORT_FORWARD: &str = "port_forward";
+    pub const SYNC_DAEMON: &str = "sync_daemon";
+}
+
 /// Configuration for starting remote DevDock.
 pub struct RemoteStartConfig {
     pub profile: String,
@@ -33,6 +42,9 @@ pub struct RemoteStartConfig {
 /// Start remote DevDock workflow.
 pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
     info!("Starting remote DevDock workflow");
+
+    let command_start_time = chrono::Utc::now();
+    let wall_start = std::time::Instant::now();
 
     // Preflight check: verify gcloud auth is valid before any remote operations
     // This fails fast with a clear error message, avoiding wasted time on workspace
@@ -61,6 +73,7 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
             }
         }
     }
+    let auth_check_secs = wall_start.elapsed().as_secs_f64();
 
     let RemoteStartConfig {
         profile,
@@ -194,16 +207,33 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
         println!();
     }
 
+    // Telemetry phase tracking (shared between outer scope and setup_result async block)
+    let t_workspace_ready: std::sync::Arc<std::sync::Mutex<Option<f64>>> =
+        std::sync::Arc::new(std::sync::Mutex::new(None));
+    let t_config_sync: std::sync::Arc<std::sync::Mutex<Option<f64>>> =
+        std::sync::Arc::new(std::sync::Mutex::new(None));
+    let t_tilt_up: std::sync::Arc<std::sync::Mutex<Option<f64>>> =
+        std::sync::Arc::new(std::sync::Mutex::new(None));
+    let t_port_forward: std::sync::Arc<std::sync::Mutex<Option<f64>>> =
+        std::sync::Arc::new(std::sync::Mutex::new(None));
+    let t_sync_daemon: std::sync::Arc<std::sync::Mutex<Option<f64>>> =
+        std::sync::Arc::new(std::sync::Mutex::new(None));
+    let t_workspace_existed: std::sync::Arc<std::sync::Mutex<bool>> =
+        std::sync::Arc::new(std::sync::Mutex::new(false));
+    // Tracks which stage is currently executing; on error, this identifies failed_at_stage.
+    let t_current_stage: std::sync::Arc<std::sync::Mutex<&'static str>> =
+        std::sync::Arc::new(std::sync::Mutex::new(stage::WORKSPACE_PROVISION));
+
     // Execute main setup logic with error handling to update status on failure
     let setup_result = async {
         // Create or start workspace
-        let workspace_name = if let Some(existing) = vm {
+        let (workspace_name, workspace_existed_flag) = if let Some(existing) = vm {
             logger.log_section("Using Existing Workspace")?;
             logger.log(&format!("Workspace: {existing}"))?;
             output::info(&format!("Using existing workspace: {existing}"));
             coder::start_workspace(&existing)?;
             logger.log("Workspace started successfully")?;
-            existing
+            (existing, true)
         } else {
             // Check if workspace already exists
             logger.log(&format!("Checking if workspace '{workspace_name}' exists..."))?;
@@ -272,7 +302,7 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
                         // Note: Gcloud credentials will be re-synced in workspace::start_remote_devdock
                         // No need to sync them here
 
-                        workspace_name.clone()
+                        (workspace_name.clone(), true)
                     }
                     "2" => {
                         logger.log_section("Deleting and Recreating Workspace")?;
@@ -310,7 +340,7 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
                         logger.log("Workspace created successfully")?;
 
                         logger.log(&format!("Workspace SSH ready: coder ssh {ws_name}"))?;
-                        ws_name
+                        (ws_name, false)
                     }
                     "3" | "" => {
                         output::info("Cancelled");
@@ -346,9 +376,13 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
                 logger.log("Workspace created successfully")?;
 
                 logger.log(&format!("Workspace SSH ready: coder ssh {ws_name}"))?;
-                ws_name
+                (ws_name, false)
             }
         };
+        let workspace_ready_secs = wall_start.elapsed().as_secs_f64();
+        *t_workspace_ready.lock().unwrap() = Some(workspace_ready_secs);
+        *t_workspace_existed.lock().unwrap() = workspace_existed_flag;
+        *t_current_stage.lock().unwrap() = stage::CONFIG_SYNC;
 
         // Start DevDock on remote with progress reporting
         println!();
@@ -387,8 +421,14 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
 
         let config_duration_ref = std::sync::Arc::new(std::sync::Mutex::new(config_start));
         let config_duration_clone = config_duration_ref.clone();
+        let t_config_sync_clone = t_config_sync.clone();
+        let wall_start_clone = wall_start;
 
         let on_config_complete = move || {
+            // Record config_sync_secs at the moment config sync completes
+            *t_config_sync_clone.lock().unwrap() =
+                Some(wall_start_clone.elapsed().as_secs_f64());
+
             if !verbose {
                 let config_duration = config_duration_clone.lock().unwrap().elapsed().as_secs();
                 if let Some(s) = spinner1 {
@@ -405,6 +445,8 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
             }
         };
 
+        *t_current_stage.lock().unwrap() = stage::REMOTE_DEVDOCK_START;
+
         // The actual config sync and devdock start happens inside workspace::start_remote_devdock
         let port_mgr = workspace::start_remote_devdock(
             &workspace_name,
@@ -419,6 +461,9 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
             Some(on_config_complete),
         )
         .await?;
+
+        *t_tilt_up.lock().unwrap() = Some(wall_start.elapsed().as_secs_f64());
+        *t_current_stage.lock().unwrap() = stage::PORT_FORWARD;
 
         // Finish DevDock start spinner
         if verbose {
@@ -455,12 +500,14 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
                 .collect();
 
             state.save_port_mappings(&instance_id, &mappings).await?;
+            *t_port_forward.lock().unwrap() = Some(wall_start.elapsed().as_secs_f64());
 
             let step2_duration = step2_start.elapsed().as_secs();
             if let Some(s) = spinner2 {
                 s.finish_with_message(format!("Ports {}", format!("✓ {step2_duration}s").green()));
             }
         }
+        *t_current_stage.lock().unwrap() = stage::SYNC_DAEMON;
 
         // Clean up stale sync files from old instances first
         cleanup_stale_sync_files(&state).await?;
@@ -489,6 +536,7 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
                     .save_sync_session(&instance_id, &workspace_name, None, false, "running")
                     .await?;
 
+                *t_sync_daemon.lock().unwrap() = Some(wall_start.elapsed().as_secs_f64());
                 let step_sync_duration = step_sync_start.elapsed().as_secs();
 
                 if let Some(s) = spinner_sync {
@@ -653,13 +701,61 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
     }
     .await;
 
+    let total_setup_secs = wall_start.elapsed().as_secs_f64();
+
     // Handle result and update status accordingly
     match setup_result {
         Ok(()) => {
-            // Success - status already updated to Running above
+            // Emit success telemetry
+            let metrics = build_remote_metrics(
+                &instance_id,
+                &profile,
+                &workspace_name,
+                &region,
+                &loaded_profile.project,
+                Some(&branch_for_workspace),
+                command_start_time,
+                auth_check_secs,
+                &t_workspace_ready,
+                &t_config_sync,
+                &t_tilt_up,
+                &t_port_forward,
+                &t_sync_daemon,
+                &t_workspace_existed,
+                total_setup_secs,
+                "success",
+                None,
+                None,
+            );
+            emit_remote_telemetry(metrics).await;
             Ok(())
         }
         Err(e) => {
+            let failed_stage = *t_current_stage.lock().unwrap();
+
+            // Emit failure telemetry
+            let metrics = build_remote_metrics(
+                &instance_id,
+                &profile,
+                &workspace_name,
+                &region,
+                &loaded_profile.project,
+                Some(&branch_for_workspace),
+                command_start_time,
+                auth_check_secs,
+                &t_workspace_ready,
+                &t_config_sync,
+                &t_tilt_up,
+                &t_port_forward,
+                &t_sync_daemon,
+                &t_workspace_existed,
+                total_setup_secs,
+                "failed",
+                Some(failed_stage),
+                Some(&e.to_string()),
+            );
+            emit_remote_telemetry(metrics).await;
+
             // Failed - update status to Stopped
             info!("Setup failed, updating instance status to Stopped");
             if let Err(status_err) =
@@ -681,6 +777,113 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
             Err(e)
         }
     }
+}
+
+/// Build a `RemoteSessionMetrics` from all the tracked timing fields.
+#[allow(clippy::too_many_arguments)]
+fn build_remote_metrics(
+    devdock_id: &str,
+    profile: &str,
+    workspace_name: &str,
+    region: &str,
+    project: &str,
+    branch: Option<&str>,
+    command_start_time: chrono::DateTime<chrono::Utc>,
+    auth_check_secs: f64,
+    t_workspace_ready: &std::sync::Arc<std::sync::Mutex<Option<f64>>>,
+    t_config_sync: &std::sync::Arc<std::sync::Mutex<Option<f64>>>,
+    t_tilt_up: &std::sync::Arc<std::sync::Mutex<Option<f64>>>,
+    t_port_forward: &std::sync::Arc<std::sync::Mutex<Option<f64>>>,
+    t_sync_daemon: &std::sync::Arc<std::sync::Mutex<Option<f64>>>,
+    t_workspace_existed: &std::sync::Arc<std::sync::Mutex<bool>>,
+    total_setup_secs: f64,
+    startup_status: &str,
+    failed_at_stage: Option<&str>,
+    error_message: Option<&str>,
+) -> devdock_telemetry::RemoteSessionMetrics {
+    let machine_id = get_machine_id();
+    devdock_telemetry::RemoteSessionMetrics {
+        devdock_id: devdock_id.to_string(),
+        machine_id,
+        architecture: std::env::consts::ARCH.to_string(),
+        platform: std::env::consts::OS.to_string(),
+        project: project.to_string(),
+        profile: profile.to_string(),
+        branch: branch.map(|b| b.to_string()),
+        workspace_name: workspace_name.to_string(),
+        region: region.to_string(),
+        workspace_existed: *t_workspace_existed.lock().unwrap(),
+        binary_version: env!("CARGO_PKG_VERSION").to_string(),
+        command_start_time,
+        auth_check_secs: Some(auth_check_secs),
+        workspace_ready_secs: *t_workspace_ready.lock().unwrap(),
+        config_sync_secs: *t_config_sync.lock().unwrap(),
+        tilt_up_secs: *t_tilt_up.lock().unwrap(),
+        port_forward_secs: *t_port_forward.lock().unwrap(),
+        sync_daemon_secs: *t_sync_daemon.lock().unwrap(),
+        total_setup_secs: Some(total_setup_secs),
+        startup_status: startup_status.to_string(),
+        failed_at_stage: failed_at_stage.map(|s| s.to_string()),
+        error_message: error_message.map(|s| s.to_string()),
+        timestamp: chrono::Utc::now(),
+    }
+}
+
+/// Fire-and-forget telemetry emission for remote startup metrics.
+async fn emit_remote_telemetry(metrics: devdock_telemetry::RemoteSessionMetrics) {
+    use devdock_telemetry::{BigQueryConfig, BigQueryEmitter, TelemetryEmitter, TelemetrySnapshot};
+
+    let snapshot = TelemetrySnapshot { remote_session: Some(metrics), ..Default::default() };
+
+    let config = BigQueryConfig {
+        project_id: "dev-sandbox-334901".to_string(),
+        dataset: "devdock".to_string(),
+        use_adc: true,
+        ..Default::default()
+    };
+
+    match BigQueryEmitter::new(config) {
+        Ok(emitter) => match emitter.emit(&snapshot).await {
+            Ok(result) => {
+                if result.is_success() {
+                    tracing::info!("Remote telemetry emitted to BigQuery");
+                } else {
+                    tracing::warn!(
+                        "Partial remote telemetry emission: {} errors",
+                        result.failure_count
+                    );
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Failed to emit remote telemetry to BigQuery: {}", e);
+            }
+        },
+        Err(e) => {
+            tracing::debug!(
+                "BigQuery telemetry not available: {} (this is normal for local dev)",
+                e
+            );
+        }
+    }
+}
+
+/// Get a stable machine identifier.
+fn get_machine_id() -> String {
+    use std::ffi::CStr;
+
+    #[cfg(unix)]
+    {
+        let mut name = [0 as libc::c_char; 256];
+        unsafe {
+            if libc::gethostname(name.as_mut_ptr(), 256) == 0 {
+                if let Ok(hostname) = CStr::from_ptr(name.as_ptr()).to_str() {
+                    return hostname.to_string();
+                }
+            }
+        }
+    }
+
+    std::env::var("USER").unwrap_or_else(|_| "unknown".to_string())
 }
 
 /// Get current git worktree path.
