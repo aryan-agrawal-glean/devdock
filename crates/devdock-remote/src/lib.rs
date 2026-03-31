@@ -6,7 +6,6 @@
 
 pub mod coder;
 pub mod config_sync;
-pub mod iap_cookies;
 pub mod port_forward;
 pub mod ssh;
 pub mod workspace;
