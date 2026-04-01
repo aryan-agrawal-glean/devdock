@@ -1,0 +1,7 @@
+[plugin]
+name = "prometheus-telemetry"
+version = "0.1.0"
+type = "telemetry"
+language = "python"
+entrypoint = "plugin.py"
+description = "Push DevDock telemetry metrics to Prometheus push gateway"

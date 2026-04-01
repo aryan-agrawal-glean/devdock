@@ -1,0 +1,726 @@
+//! DevDock CLI entry point.
+
+mod commands;
+mod logging;
+mod output;
+
+use clap::{Parser, Subcommand};
+use colored::Colorize;
+use std::process;
+
+#[derive(Parser)]
+#[command(name = "devdock")]
+#[command(version = concat!(env!("CARGO_PKG_VERSION"), env!("DEV_VERSION_SUFFIX")), about = "Standalone development environment orchestrator", long_about = None)]
+struct Cli {
+    /// Increase logging verbosity (-v, -vv, -vvv)
+    #[arg(short, long, action = clap::ArgAction::Count)]
+    verbose: u8,
+
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Start DevDock with a profile
+    Start {
+        /// Profile name (e.g., default_profile)
+        profile: String,
+
+        /// Specific services to start (comma-separated)
+        #[arg(short, long)]
+        services: Option<String>,
+
+        /// CI mode (non-interactive)
+        #[arg(long)]
+        ci_mode: bool,
+
+        /// Start mode: local or remote
+        #[arg(short = 'm', long, default_value = "local")]
+        mode: String,
+
+        /// Use existing Coder workspace
+        #[arg(long)]
+        vm: Option<String>,
+
+        /// Custom workspace name (default: branch name)
+        #[arg(long)]
+        workspace_name: Option<String>,
+
+        /// Target branch for remote workspace (default: current behavior)
+        #[arg(long)]
+        branch: Option<String>,
+
+        /// GCP region for Coder workspace
+        #[arg(long, default_value = "us-east4-a")]
+        region: String,
+
+        /// Custom port base (remote only)
+        #[arg(long)]
+        port_base: Option<u16>,
+
+        /// Auto-forward all service ports (opt-in for remote)
+        #[arg(long)]
+        auto_forward: bool,
+
+        /// Show detailed progress (all substeps)
+        #[arg(long)]
+        verbose: bool,
+
+        /// Enable startup monitor to wait for all resources to become healthy
+        #[arg(long)]
+        monitor: bool,
+
+        /// Startup monitor timeout in seconds (default: 1200 = 20 minutes)
+        #[arg(long)]
+        monitor_timeout: Option<u64>,
+
+        /// Disable telemetry/metrics export to BigQuery
+        #[arg(long)]
+        no_telemetry: bool,
+
+        /// Dry-run mode: execute all startup logic but don't start Tilt (for benchmarking)
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Enable rich logging (Grafana/Loki stack) before starting
+        #[arg(long)]
+        enable_logs: bool,
+    },
+
+    /// Stop DevDock instance
+    Stop {
+        /// Instance ID or service name
+        target: Option<String>,
+
+        /// Force stop without cleanup
+        #[arg(short, long)]
+        force: bool,
+
+        /// Delete the Coder workspace (non-interactive)
+        #[arg(long)]
+        delete: bool,
+    },
+
+    /// Show DevDock status
+    Status {
+        /// Show detailed status
+        #[arg(short, long)]
+        detailed: bool,
+    },
+
+    /// List all DevDock instances
+    List {
+        /// Show only running instances
+        #[arg(short, long)]
+        running: bool,
+    },
+
+    /// Validate a profile
+    Validate {
+        /// Profile name to validate
+        profile: String,
+    },
+
+    /// Generate configuration without starting
+    Generate {
+        /// Profile name
+        profile: String,
+
+        /// Output directory
+        #[arg(short, long)]
+        output: Option<String>,
+    },
+
+    /// Initialize DevDock for the current project
+    Init {},
+
+    /// Infrastructure management (sql, opensearch, etc.)
+    Infra {
+        #[command(subcommand)]
+        command: InfraCommands,
+    },
+
+    /// Full cleanup of containers, networks, and files
+    #[command(alias = "-c")]
+    Cleanup {
+        /// Only clean service containers (not infra)
+        #[arg(long)]
+        soft: bool,
+
+        /// Also clean old logs
+        #[arg(long)]
+        logs: bool,
+
+        /// Skip local cleanup steps and only clenaup remotes (default: false)
+        #[arg(long = "no-local")]
+        no_local: bool,
+    },
+
+    /// Execute command in a container
+    Exec {
+        /// Container name (e.g., qe, sql, mysql)
+        container: String,
+
+        /// Command to execute (default: sh, mysql for sql container)
+        #[arg(default_value = "")]
+        command: String,
+    },
+
+    /// Docker management (images, networks, etc.)
+    Docker {
+        #[command(subcommand)]
+        command: DockerCommands,
+    },
+
+    /// Initial setup of DevDock
+    Setup {
+        /// Setup for remote DevDock (Coder workspaces)
+        #[arg(long)]
+        remote: bool,
+    },
+
+    /// Service management
+    Service {
+        #[command(subcommand)]
+        command: ServiceCommands,
+    },
+
+    /// Profile management
+    Profile {
+        #[command(subcommand)]
+        command: ProfileCommands,
+    },
+
+    /// Plugin management
+    Plugin {
+        #[command(subcommand)]
+        command: PluginCommands,
+    },
+
+    /// Rich logging management (Grafana/Loki stack)
+    Logs {
+        #[command(subcommand)]
+        command: LogsCommands,
+    },
+
+    /// Port management for remote DevDock
+    Ports {
+        #[command(subcommand)]
+        command: PortCommands,
+    },
+
+    /// File sync management (for remote DevDock)
+    Sync {
+        #[command(subcommand)]
+        command: SyncCommands,
+    },
+
+    /// Report a bug to Jira (interactive)
+    Report {
+        /// Brief summary of the issue (skip interactive prompt)
+        #[arg(long)]
+        summary: Option<String>,
+
+        /// Detailed description of the issue (skip interactive prompt)
+        #[arg(long)]
+        description: Option<String>,
+
+        /// Command that was run when the issue occurred (skip interactive prompt)
+        #[arg(long)]
+        command: Option<String>,
+    },
+
+    /// Monitor startup resources until all healthy (or timeout)
+    Monitor {
+        /// Timeout in seconds (default: 1200 = 20 minutes)
+        #[arg(short, long)]
+        timeout: Option<u64>,
+
+        /// Polling interval in seconds (default: 2)
+        #[arg(short, long)]
+        interval: Option<u64>,
+
+        /// Disable desktop notifications
+        #[arg(long)]
+        no_notify: bool,
+
+        /// Profile name (for telemetry)
+        #[arg(long)]
+        profile: Option<String>,
+    },
+
+    /// MCP server for AI agent integration
+    Mcp {
+        #[command(subcommand)]
+        command: McpCommands,
+    },
+
+    /// Update devdock to latest or specific version
+    Update {
+        /// Version to install (e.g., '0.2.7', '@0.2.7', or 'latest')
+        /// Omit to update to latest version
+        /// Using a specific version will pin it
+        version: Option<String>,
+
+        /// Only check for updates without installing
+        #[arg(long)]
+        check: bool,
+
+        /// Force update even if pinned
+        #[arg(long)]
+        force: bool,
+
+        /// List available versions
+        #[arg(long)]
+        list: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum ServiceCommands {
+    /// Enable a service
+    Enable { name: String },
+    /// Disable a service
+    Disable { name: String },
+    /// View service logs
+    Logs {
+        name: String,
+        #[arg(short, long)]
+        follow: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum ProfileCommands {
+    /// List available profiles
+    List,
+    /// Show profile details
+    Show { name: String },
+    /// Create a new profile interactively
+    Create,
+}
+
+#[derive(Subcommand)]
+enum PluginCommands {
+    /// List installed plugins and available backends
+    List,
+    /// Install a plugin
+    Install { name: String },
+    /// Remove a plugin
+    Remove { name: String },
+    /// Create a new external plugin from template
+    Create {
+        /// Plugin name
+        name: String,
+        /// Plugin type: telemetry, diagnostics, storage
+        #[arg(long, default_value = "telemetry")]
+        r#type: String,
+        /// Language: python, go, bash
+        #[arg(long, default_value = "python")]
+        language: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum PortCommands {
+    /// List port mappings (alias for compatibility)
+    List {
+        /// Show ports for specific instance ID
+        #[arg(long)]
+        instance: Option<String>,
+    },
+    /// Enable auto port forwarding for remote DevDock
+    Forward {
+        /// Forward all common service ports
+        #[arg(long)]
+        all: bool,
+        /// Forward specific service port (e.g., qe, fe, tilt)
+        #[arg(long)]
+        service: Option<String>,
+        /// Custom port mapping in format local:remote
+        #[arg(long)]
+        custom: Option<String>,
+    },
+    /// Stop port forwarding
+    Stop {
+        /// Stop all port forwards
+        #[arg(long)]
+        all: bool,
+        /// Stop specific service port forward
+        #[arg(long)]
+        service: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum DockerCommands {
+    /// Check if Docker is running
+    Check,
+
+    /// Setup Docker networks
+    Networks,
+
+    /// Pull/update Docker images
+    Pull {
+        /// Only pull Python images
+        #[arg(long)]
+        python_only: bool,
+
+        /// Save images to cache after pulling
+        #[arg(long)]
+        cache: bool,
+    },
+
+    /// Login to Google Container Registry
+    Login,
+
+    /// Remove dangling images
+    Prune,
+}
+
+#[derive(Subcommand)]
+enum LogsCommands {
+    /// Enable rich logging (Grafana/Loki/Alloy stack)
+    Enable,
+
+    /// Disable rich logging and cleanup
+    Disable,
+
+    /// Show rich logging status
+    Status,
+}
+
+#[derive(Subcommand)]
+enum InfraCommands {
+    /// SQL infrastructure management
+    Sql {
+        #[command(subcommand)]
+        command: SqlCommands,
+    },
+    /// OpenSearch infrastructure management
+    Opensearch {
+        #[command(subcommand)]
+        command: OpensearchCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum SqlCommands {
+    /// Hydrate local SQL database from remote
+    Setup {
+        /// GCP/AWS project ID
+        #[arg(long)]
+        project: String,
+        /// Cloud platform (google, aws, azure)
+        #[arg(long, default_value = "google")]
+        platform: String,
+        /// Cloud region
+        #[arg(long, default_value = "us-central1")]
+        region: String,
+        /// Database tables to copy (format: "db:Table1,Table2;db2:Table3")
+        #[arg(long)]
+        db_tables: String,
+        /// Copy mode: fast or latest
+        #[arg(long, default_value = "fast")]
+        mode: String,
+        /// Full cleanup before hydration
+        #[arg(long)]
+        full_cleanup: bool,
+        /// Copy KeyVal table (default: true)
+        #[arg(long, default_value = "true")]
+        copy_keyval: String,
+        /// Use full instance export
+        #[arg(long)]
+        use_full_instance: bool,
+        /// Use MySQL seed instead of remote copy
+        #[arg(long)]
+        use_mysql_seed: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum OpensearchCommands {
+    /// Copy OpenSearch indexes from remote
+    Copy,
+}
+
+#[derive(Subcommand)]
+enum McpCommands {
+    /// Start MCP server (stdin/stdout)
+    Serve,
+}
+
+#[derive(Subcommand)]
+enum SyncCommands {
+    /// Start file sync (auto-started with remote mode)
+    Start {
+        /// Sync all files instead of git-tracked only
+        #[arg(long)]
+        full: bool,
+    },
+
+    /// Stop file sync
+    Stop,
+
+    /// Show sync status
+    Status,
+
+    /// Show sync history
+    History {
+        /// Number of recent entries to show
+        #[arg(long, short = 'n')]
+        tail: Option<usize>,
+    },
+
+    /// Show sync errors
+    Errors {
+        /// Number of recent errors to show
+        #[arg(long, short = 'n')]
+        tail: Option<usize>,
+    },
+}
+
+#[tokio::main]
+async fn main() {
+    // Check if we're being called as the sync daemon (hidden internal command)
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() >= 6 && args[1] == "__sync_daemon__" {
+        // Run as sync daemon process
+        // Args: __sync_daemon__ <id> <workspace> <repo_path> <remote_path> <full> <branch> [log_level]
+        let devdock_id = &args[2];
+        let workspace_name = &args[3];
+        let repo_path = std::path::PathBuf::from(&args[4]);
+        let remote_path = std::path::PathBuf::from(&args[5]);
+        let full_mode = args.get(6).is_some_and(|s| s == "true");
+        let branch_mode = args.get(7).is_some_and(|s| s == "true");
+        let log_level = args.get(8).map_or("info", |s| s.as_str());
+
+        // Stderr is already redirected to the log file by the parent process,
+        // so initializing tracing with the default stderr writer routes all
+        // tracing output (debug!, info!, warn!, error!) into the log file.
+        tracing_subscriber::fmt().with_env_filter(log_level).with_target(false).init();
+
+        if let Err(e) = devdock_sync::daemon::run_daemon_process(
+            devdock_id,
+            workspace_name,
+            &repo_path,
+            remote_path,
+            full_mode,
+            branch_mode,
+        ) {
+            eprintln!("Daemon process error: {e}");
+            process::exit(1);
+        }
+        process::exit(0);
+    }
+
+    let cli = Cli::parse();
+
+    // Check for updates on startup (unless running update command itself)
+    if !matches!(cli.command, Commands::Update { .. }) {
+        let _ = commands::update::check_on_startup().await;
+    }
+
+    // Set up logging
+    let log_level = match cli.verbose {
+        0 => "warn",
+        1 => "info",
+        2 => "debug",
+        _ => "trace",
+    };
+
+    tracing_subscriber::fmt().with_env_filter(log_level).with_target(false).init();
+
+    // Run command
+    let result = match cli.command {
+        Commands::Start {
+            profile,
+            services,
+            ci_mode,
+            mode,
+            vm,
+            workspace_name,
+            branch,
+            region,
+            port_base,
+            auto_forward,
+            verbose,
+            monitor,
+            monitor_timeout,
+            no_telemetry,
+            dry_run,
+            enable_logs,
+        } => {
+            if mode == "remote" {
+                commands::remote::start_remote(commands::remote::RemoteStartConfig {
+                    profile,
+                    workspace_name,
+                    branch,
+                    region,
+                    port_base,
+                    vm,
+                    auto_forward,
+                    services,
+                    verbose,
+                    log_level: devdock_sync::daemon::verbosity_to_log_level(cli.verbose)
+                        .to_string(),
+                })
+                .await
+            } else {
+                commands::start::execute(
+                    &profile,
+                    services.as_deref(),
+                    ci_mode,
+                    monitor, // monitoring disabled by default (opt-in with --monitor)
+                    monitor_timeout,
+                    !no_telemetry, // telemetry enabled by default
+                    dry_run,
+                    enable_logs,
+                )
+                .await
+            }
+        }
+
+        Commands::Stop { target, force, delete } => {
+            commands::stop::execute(target.as_deref(), force, delete).await
+        }
+
+        Commands::Status { detailed } => commands::status::execute(detailed).await,
+
+        Commands::List { running } => commands::list::execute(running).await,
+
+        Commands::Validate { profile } => commands::validate::execute(&profile).await,
+
+        Commands::Generate { profile, output } => {
+            commands::generate::execute(&profile, output.as_deref()).await
+        }
+
+        Commands::Init {} => commands::init::execute().await,
+
+        Commands::Infra { command } => match command {
+            InfraCommands::Sql { command } => match command {
+                SqlCommands::Setup {
+                    project,
+                    platform,
+                    region,
+                    db_tables,
+                    mode,
+                    full_cleanup,
+                    copy_keyval,
+                    use_full_instance,
+                    use_mysql_seed,
+                } => {
+                    let copy_keyval_bool = copy_keyval != "false";
+                    commands::infra::sql_setup(
+                        &project,
+                        &platform,
+                        &region,
+                        &db_tables,
+                        &mode,
+                        full_cleanup,
+                        copy_keyval_bool,
+                        use_full_instance,
+                        use_mysql_seed,
+                    )
+                    .await
+                }
+            },
+            InfraCommands::Opensearch { command } => match command {
+                OpensearchCommands::Copy => commands::infra::opensearch_copy().await,
+            },
+        },
+
+        Commands::Cleanup { soft, logs, no_local } => {
+            commands::cleanup::execute(soft, logs, !no_local).await
+        }
+
+        Commands::Exec { container, command } => {
+            commands::exec::execute(&container, &command).await
+        }
+
+        Commands::Docker { command } => match command {
+            DockerCommands::Check => commands::docker::check().await,
+            DockerCommands::Networks => commands::docker::networks().await,
+            DockerCommands::Pull { python_only, cache } => {
+                commands::docker::pull(python_only, cache).await
+            }
+            DockerCommands::Login => commands::docker::login().await,
+            DockerCommands::Prune => commands::docker::prune().await,
+        },
+
+        Commands::Setup { remote } => commands::setup::execute(remote).await,
+
+        Commands::Logs { command } => match command {
+            LogsCommands::Enable => commands::logs::enable().await,
+            LogsCommands::Disable => commands::logs::disable().await,
+            LogsCommands::Status => commands::logs::status().await,
+        },
+
+        Commands::Ports { command } => match command {
+            PortCommands::List { instance } => commands::ports::list(instance).await,
+            PortCommands::Forward { all, service, custom } => {
+                commands::ports::forward(all, service.as_deref(), custom.as_deref()).await
+            }
+            PortCommands::Stop { all, service } => {
+                commands::ports::stop(all, service.as_deref()).await
+            }
+        },
+
+        Commands::Sync { command } => match command {
+            SyncCommands::Start { full } => {
+                let log_level = devdock_sync::daemon::verbosity_to_log_level(cli.verbose);
+                commands::sync::start(full, log_level).await
+            }
+            SyncCommands::Stop => commands::sync::stop().await,
+            SyncCommands::Status => commands::sync::status().await,
+            SyncCommands::History { tail } => commands::sync::history(tail).await,
+            SyncCommands::Errors { tail } => commands::sync::errors(tail).await,
+        },
+
+        Commands::Report { summary, description, command } => match (summary, description, command)
+        {
+            (Some(s), Some(d), Some(c)) => commands::report::report_bug_with_details(s, d, c).await,
+            _ => commands::report::report_bug().await,
+        },
+
+        Commands::Monitor { timeout, interval, no_notify, profile } => {
+            commands::monitor::execute(timeout, interval, no_notify, profile).await
+        }
+
+        Commands::Mcp { command } => match command {
+            McpCommands::Serve => devdock_mcp::server::run().await.map_err(Into::into),
+        },
+
+        Commands::Update { version, check, force, list } => {
+            commands::update::execute(version, check, force, list).await
+        }
+
+        Commands::Service { command } => match command {
+            ServiceCommands::Enable { name } => commands::service::enable(&name).await,
+            ServiceCommands::Disable { name } => commands::service::disable(&name).await,
+            ServiceCommands::Logs { name, follow } => commands::service::logs(&name, follow).await,
+        },
+
+        Commands::Profile { command } => match command {
+            ProfileCommands::List => commands::profile::list().await,
+            ProfileCommands::Show { name } => commands::profile::show(&name).await,
+            ProfileCommands::Create => commands::profile::create().await,
+        },
+
+        Commands::Plugin { command } => match command {
+            PluginCommands::List => commands::plugin::list().await,
+            PluginCommands::Install { name } => commands::plugin::install(&name).await,
+            PluginCommands::Remove { name } => commands::plugin::remove(&name).await,
+            PluginCommands::Create { name, r#type, language } => {
+                commands::plugin::create(&name, &r#type, &language).await
+            }
+        },
+    };
+
+    // Handle result
+    if let Err(e) = result {
+        eprintln!("{} {}", "Error:".red().bold(), e);
+        process::exit(1);
+    }
+}

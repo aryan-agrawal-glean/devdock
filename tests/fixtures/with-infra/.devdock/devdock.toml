@@ -1,0 +1,5 @@
+[project]
+name = "with-infra"
+
+[cloud]
+platform = "none"

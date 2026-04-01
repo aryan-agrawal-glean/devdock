@@ -1,0 +1,29 @@
+services:
+  sql:
+    image: mysql:8.0
+    container_name: devdock-mysql
+    ports:
+      - "3306:3306"
+    environment:
+      MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-uroot"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      devdock_network:
+        aliases:
+          - sql.devdock.local
+      devdock_infra:
+        aliases:
+          - sql.infra.local
+    labels:
+      devdock.service: "sql"
+      devdock.type: "infra"
+
+networks:
+  devdock_network:
+    external: true
+  devdock_infra:
+    external: true

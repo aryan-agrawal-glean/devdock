@@ -1,0 +1,7 @@
+[plugin]
+name = "slack-notifications"
+version = "0.1.0"
+type = "diagnostics"
+language = "python"
+entrypoint = "plugin.py"
+description = "Send DevDock notifications to Slack"

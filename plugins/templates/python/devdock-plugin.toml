@@ -1,0 +1,7 @@
+[plugin]
+name = "{{name}}"
+version = "0.1.0"
+type = "{{type}}"
+language = "python"
+entrypoint = "plugin.py"
+description = "Custom {{type}} plugin"

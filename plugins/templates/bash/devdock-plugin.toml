@@ -1,0 +1,7 @@
+[plugin]
+name = "{{name}}"
+version = "0.1.0"
+type = "{{type}}"
+language = "bash"
+entrypoint = "plugin.sh"
+description = "Custom {{type}} plugin"

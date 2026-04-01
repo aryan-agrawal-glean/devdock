@@ -1,0 +1,7 @@
+[plugin]
+name = "{{name}}"
+version = "0.1.0"
+type = "{{type}}"
+language = "go"
+entrypoint = "plugin.go"
+description = "Custom {{type}} plugin"

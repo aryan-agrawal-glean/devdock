@@ -1,0 +1,5 @@
+project: minimal-python
+
+services:
+  api:
+    type: local

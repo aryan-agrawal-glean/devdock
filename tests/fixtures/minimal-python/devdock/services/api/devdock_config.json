@@ -1,0 +1,6 @@
+{
+  "type": "python",
+  "port": "8080",
+  "env": { "PORT": "8080" },
+  "healthcheck": { "test": ["CMD", "curl", "-f", "http://localhost:8080/health"] }
+}

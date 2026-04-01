@@ -1,0 +1,8 @@
+[project]
+name = "minimal-python"
+
+[telemetry]
+enabled = false
+
+[cloud]
+platform = "none"

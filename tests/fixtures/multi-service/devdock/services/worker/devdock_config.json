@@ -1,0 +1,1 @@
+{ "type": "python", "port": "8081", "dependencies": ["sql", "redis", "api"] }
