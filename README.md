@@ -1,6 +1,6 @@
 # DevDock
 
-[![CI](https://github.com/askscio/devdock/actions/workflows/ci.yml/badge.svg)](https://github.com/askscio/devdock/actions/workflows/ci.yml)
+[![CI](https://github.com/aryan-agrawal-glean/devdock/actions/workflows/ci.yml/badge.svg)](https://github.com/aryan-agrawal-glean/devdock/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE-MIT)
 [![MSRV](https://img.shields.io/badge/MSRV-1.74-orange.svg)](https://www.rust-lang.org)
 
@@ -8,18 +8,29 @@ A fast, extensible CLI for managing local and remote development environments. W
 
 ## Why DevDock?
 
-Setting up a dev environment for a monorepo with dozens of services typically involves:
-- Running multiple shell scripts and Python setup tools
-- Manually configuring databases, caches, and search indexes
-- Waiting 2+ minutes for everything to start
+Local development tooling tends to collapse under three forces:
 
-DevDock replaces all of this with a single command:
+1. **Complexity accumulates** — custom Bash scripts, Python wrappers, and hand-maintained Docker Compose files become a second codebase that nobody owns. 30+ configuration combinations and 2+ minute cold starts follow.
+2. **Environments drift** — local, remote, and CI each have their own setup path. The same service behaves differently in each target.
+3. **Shared clusters become load-bearing** — engineers stop trusting their local stack and validate changes against shared test environments, creating queues, flakiness, and tight coupling.
+
+DevDock replaces all of this with a single profile and a single command:
 
 ```bash
 devdock start <profile>
 ```
 
-Sub-60 second startup. No scripts. No manual configuration.
+Sub-30 second cold start. No scripts. No manual configuration. The same profile runs your stack locally, on a remote cloud workspace, and in CI sandboxes — same commands, same behavior, everywhere.
+
+> Used by 400+ engineers across 50+ services in a polyglot monorepo. Environment-related issues reduced by 75%. Onboarding time: under 10 minutes.
+
+### Why Not Docker Compose / Telepresence / Garden?
+
+- **Docker Compose** — works for simple stacks but doesn't compose across teams, has no remote mode, and requires hand-authoring configs for every service. No profile inheritance or plugin model.
+- **Telepresence** — excellent for intercepting live cluster traffic, but presupposes a running cluster and doesn't help spin one up reproducibly per developer or per CI run.
+- **Garden** — powerful, but introduces a large new abstraction layer with its own graph model and significant operational complexity.
+
+DevDock's approach: generate Tiltfiles and defer orchestration to Tilt, which already solves dependency ordering, live reload, and service health. DevDock adds the profile layer, remote/CI modes, and plugin system on top of a proven foundation rather than replacing it.
 
 ## Architecture
 
@@ -94,7 +105,7 @@ YOUR REPO (committed):                  DEVDOCK BINARY (shipped):
 
 ```bash
 # From source
-git clone https://github.com/askscio/devdock.git
+git clone https://github.com/aryan-agrawal-glean/devdock.git
 cd devdock
 cargo install --path crates/devdock-cli
 ```
@@ -296,6 +307,8 @@ DevDock uses external plugins for cloud integrations. Plugins are standalone exe
 | `slack-notifier` | `plugins/notifications/` | `after_ready`, `on_error` |
 | `jira-reporter` | `plugins/diagnostics/` | `on_error`, `on_report` |
 
+Community-maintained plugins are available in the **[devdock-plugins-library](https://github.com/aryan-agrawal-glean/devdock-plugins-library)** — a curated collection of plugins for common infrastructure (databases, queues, caches, observability stacks, notification systems). See the plugin library for the full catalog and contribution guide.
+
 Organization-specific plugins live in separate repos. For example, your org's plugins can live in a private `devdock-plugins` repo and be installed via `cargo install`.
 
 ### Install a Plugin
@@ -482,7 +495,7 @@ The devdock binary has **zero cloud-specific code**. It contains:
 cargo install --path crates/devdock-cli
 
 # Or download pre-built binary from GitHub Releases
-curl -L https://github.com/askscio/devdock/releases/latest/download/devdock-$(uname -s)-$(uname -m) -o devdock
+curl -L https://github.com/aryan-agrawal-glean/devdock/releases/latest/download/devdock-$(uname -s)-$(uname -m) -o devdock
 chmod +x devdock
 ```
 
