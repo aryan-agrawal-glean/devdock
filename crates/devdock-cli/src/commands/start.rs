@@ -49,6 +49,10 @@ pub async fn execute(
     }
     output::success("Profile validated");
 
+    // Set DEVDOCK_PROFILE environment variable so downstream consumers (config generation,
+    // integration tests / conftest, Slack notifications) can identify the active profile.
+    std::env::set_var("DEVDOCK_PROFILE", profile_name);
+
     // Set CLOUD_PLATFORM environment variable based on profile platform
     // This is needed for platform-specific config loading (e.g., devdock_config_aws.json)
     // Python code expects uppercase values: "AWS", "GOOGLE", "AZURE"
@@ -154,7 +158,7 @@ pub async fn execute(
     write_profile_state(profile_name)?;
 
     output::info("Starting Tilt...");
-    let tilt_process = start_tilt(services, profile_name)?;
+    let tilt_process = start_tilt(services)?;
 
     // Track tilt up time for telemetry
     let tilt_up_time = chrono::Utc::now();
@@ -372,7 +376,7 @@ fn cleanup_startup_state_files() -> Result<()> {
 }
 
 /// Start Tilt process
-fn start_tilt(services: Option<&str>, profile_name: &str) -> Result<Child> {
+fn start_tilt(services: Option<&str>) -> Result<Child> {
     // Find monorepo root (where devdock directory is)
     let workspace_root = find_workspace_root()?;
     let devdock_dir = workspace_root.join("devdock");
@@ -389,9 +393,6 @@ fn start_tilt(services: Option<&str>, profile_name: &str) -> Result<Child> {
 
     // Set DEVDOCK_RUST_BINARY to indicate the Rust implementation is being used
     std::env::set_var("DEVDOCK_RUST_BINARY", "true");
-
-    // Set DEVDOCK_PROFILE for telemetry in monitor command
-    std::env::set_var("DEVDOCK_PROFILE", profile_name);
 
     // Build tilt command
     let mut cmd = Command::new("tilt");
