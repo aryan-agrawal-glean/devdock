@@ -637,7 +637,7 @@ pub async fn sql_setup(
             let (db, _tables, query) = devdock_config::ini_parser::parse_db_tables_query(entry);
             let is_fast = query.is_none()
                 && fast_export_config.projects.contains(project)
-                && fast_export_config.dbs.contains(&db)
+                && fast_export_config.is_db_eligible(project, &db)
                 && mode == "fast";
 
             if is_fast {

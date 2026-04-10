@@ -894,7 +894,7 @@ impl SqlOperationsManager {
         let fast_export_config = self.get_fast_export_config();
 
         let project_ok = fast_export_config.projects.contains(&self.project);
-        let db_ok = fast_export_config.dbs.contains(&db);
+        let db_ok = fast_export_config.is_db_eligible(&self.project, &db);
         let mode_ok = mode == "fast";
         let query_ok = query.is_none();
 
@@ -1480,15 +1480,23 @@ impl SqlOperationsManager {
 pub struct FastExportConfig {
     pub projects: HashSet<String>,
     pub dbs: HashSet<String>,
+    pub project_dbs: std::collections::HashMap<String, HashSet<String>>,
 }
 
 impl FastExportConfig {
+    /// Returns true if `db` is fast-export eligible for `project` (global or per-project).
+    pub fn is_db_eligible(&self, project: &str, db: &str) -> bool {
+        self.dbs.contains(db) || self.project_dbs.get(project).is_some_and(|s| s.contains(db))
+    }
+
     /// Parse from YAML content
     fn from_yaml(content: &str) -> Result<Self> {
         #[derive(serde::Deserialize)]
         struct YamlConfig {
             projects: Vec<String>,
             dbs: Vec<String>,
+            #[serde(default)]
+            project_dbs: std::collections::HashMap<String, Vec<String>>,
         }
 
         let yaml: YamlConfig =
@@ -1497,6 +1505,11 @@ impl FastExportConfig {
         Ok(Self {
             projects: yaml.projects.into_iter().collect(),
             dbs: yaml.dbs.into_iter().collect(),
+            project_dbs: yaml
+                .project_dbs
+                .into_iter()
+                .map(|(k, v)| (k, v.into_iter().collect()))
+                .collect(),
         })
     }
 }
