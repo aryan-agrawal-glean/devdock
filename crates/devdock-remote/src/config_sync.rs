@@ -595,6 +595,17 @@ else
     echo "DEVDOCK_ADC:invalid"
 fi
 
+# Authenticate Docker with GCP Artifact Registry using the synced gcloud credentials
+if command -v docker >/dev/null 2>&1; then
+    if gcloud auth print-access-token 2>/dev/null | docker login -u oauth2accesstoken --password-stdin https://us-central1-docker.pkg.dev >/dev/null 2>&1; then
+        echo "DEVDOCK_DOCKER_LOGIN:success"
+    else
+        echo "DEVDOCK_DOCKER_LOGIN:failed"
+    fi
+else
+    echo "DEVDOCK_DOCKER_LOGIN:skipped"
+fi
+
 rm -rf ~/.secrets-sync
 
 # Verify gcloud auth (with timeout to avoid hangs)
@@ -673,6 +684,27 @@ fi
                 eprintln!("     2. gcloud auth login");
                 eprintln!("     3. gcloud auth application-default login");
                 eprintln!();
+            }
+        }
+
+        if let Some(status) = line.strip_prefix("DEVDOCK_DOCKER_LOGIN:") {
+            match status {
+                "success" => {
+                    info!("Docker login to GCP Artifact Registry succeeded");
+                    if verbose {
+                        println!("      (docker login to us-central1-docker.pkg.dev: ok)");
+                    }
+                }
+                "failed" => {
+                    debug!("Docker login to GCP Artifact Registry failed");
+                    if verbose {
+                        println!("      (docker login to us-central1-docker.pkg.dev: failed — images may fail to pull)");
+                    }
+                }
+                "skipped" => {
+                    debug!("Docker not available on remote, skipping docker login");
+                }
+                _ => {}
             }
         }
 
