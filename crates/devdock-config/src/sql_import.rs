@@ -905,6 +905,9 @@ impl SqlOperationsManager {
         if can_use_fast {
             println!("  ⚡ FAST EXPORT: {db} (downloading from GCS bucket)");
             self.fast_export(&db, target_dir).await?;
+            if !tables.is_empty() {
+                Self::filter_sql_dump_tables(&db, &tables, target_dir)?;
+            }
             println!("  ✅ Fast export complete for {db}");
         } else if let Some(ref where_clause) = query {
             // Query-based export requires proxy connection + mysqldump
@@ -1266,6 +1269,60 @@ impl SqlOperationsManager {
             }
             _ => anyhow::bail!("Unsupported platform: {}", self.platform),
         }
+    }
+
+    /// Filter a mysqldump SQL file to only include the specified tables.
+    ///
+    /// mysqldump files use `-- Table structure for table \`X\`` as section delimiters.
+    /// This function keeps the preamble (SET statements, etc.) and only the sections
+    /// for the requested tables, discarding all other table data.
+    pub fn filter_sql_dump_tables(db: &str, tables_csv: &str, directory: &Path) -> Result<()> {
+        let file_path = directory.join(format!("{db}.sql"));
+        if !file_path.exists() {
+            return Ok(());
+        }
+
+        let requested: HashSet<String> = tables_csv
+            .split(',')
+            .map(|t| t.trim().to_string())
+            .filter(|t| !t.is_empty())
+            .collect();
+
+        if requested.is_empty() {
+            return Ok(());
+        }
+
+        let content = std::fs::read_to_string(&file_path)?;
+        let mut output = String::with_capacity(content.len());
+        let mut in_wanted_table = false;
+        let mut in_any_table = false;
+
+        // The table section marker in mysqldump output
+        let table_marker = "-- Table structure for table `";
+
+        for line in content.lines() {
+            if let Some(rest) = line.strip_prefix(table_marker) {
+                // Extract table name from "-- Table structure for table `TableName`"
+                if let Some(name_end) = rest.find('`') {
+                    let table_name = &rest[..name_end];
+                    in_any_table = true;
+                    in_wanted_table = requested.contains(table_name);
+                }
+            }
+
+            if !in_any_table || in_wanted_table {
+                output.push_str(line);
+                output.push('\n');
+            }
+        }
+
+        std::fs::write(&file_path, output)?;
+        println!(
+            "     ✂ Filtered {db}.sql to {} table(s): {tables_csv}",
+            requested.len()
+        );
+
+        Ok(())
     }
 
     /// Modify SQL dump to add CREATE DATABASE and USE statements

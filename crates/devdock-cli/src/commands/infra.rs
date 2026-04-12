@@ -630,48 +630,78 @@ pub async fn sql_setup(
         // Separate fast exports (GCS downloads) from slow exports (gcloud sql)
         // Fast exports can be fully parallelized, slow exports are rate-limited
         let fast_export_config = manager.get_fast_export_config_public();
-        let mut fast_entries = Vec::new();
+        // For fast exports, collect all requested tables per DB to:
+        // 1. Deduplicate downloads (fast export downloads the entire DB dump from GCS)
+        // 2. Filter the dump post-download to only include the requested tables
+        // None = all tables (no filter), Some(vec) = specific tables only
+        let mut fast_db_tables: std::collections::HashMap<String, Option<Vec<String>>> =
+            std::collections::HashMap::new();
+        let mut fast_dbs_ordered: Vec<String> = Vec::new();
         let mut slow_entries = Vec::new();
 
         for entry in &entries {
-            let (db, _tables, query) = devdock_config::ini_parser::parse_db_tables_query(entry);
+            let (db, tables, query) = devdock_config::ini_parser::parse_db_tables_query(entry);
             let is_fast = query.is_none()
                 && fast_export_config.projects.contains(project)
                 && fast_export_config.is_db_eligible(project, &db)
                 && mode == "fast";
 
             if is_fast {
-                fast_entries.push(*entry);
+                if !fast_db_tables.contains_key(&db) {
+                    fast_dbs_ordered.push(db.clone());
+                }
+                let table_filter = fast_db_tables.entry(db).or_insert_with(|| Some(Vec::new()));
+                if tables.is_empty() {
+                    // Bare DB name (e.g., "identity") means all tables — no filtering
+                    *table_filter = None;
+                } else if let Some(ref mut list) = table_filter {
+                    for t in tables.split(',') {
+                        let t = t.trim().to_string();
+                        if !t.is_empty() && !list.contains(&t) {
+                            list.push(t);
+                        }
+                    }
+                }
             } else {
                 slow_entries.push(*entry);
             }
         }
 
         // Run exports with optimal parallelism:
-        // - Fast exports (GCS downloads): fully parallel
+        // - Fast exports (GCS downloads): fully parallel, deduplicated by DB
         // - Slow exports (gcloud sql): SEQUENTIAL (Cloud SQL only allows one export per instance)
         output::info(&format!(
             "🚀 Running {} fast exports (parallel) + {} slow exports (sequential)",
-            fast_entries.len(),
+            fast_dbs_ordered.len(),
             slow_entries.len()
         ));
 
-        // Run fast exports in parallel (GCS downloads are independent)
+        // Run fast exports in parallel (GCS downloads are independent, one per unique DB)
         let fast_future = async {
-            if fast_entries.is_empty() {
+            if fast_dbs_ordered.is_empty() {
                 return Ok::<(), anyhow::Error>(());
             }
 
-            let fast_futures: Vec<_> = fast_entries
+            let fast_futures: Vec<_> = fast_dbs_ordered
                 .iter()
-                .map(|entry| {
+                .map(|db| {
                     let manager = &manager;
                     let export_dir = &export_dir;
+                    let table_filter = &fast_db_tables[db];
                     async move {
-                        output::info(&format!("  ⚡ Fast: {entry}"));
-                        let result = manager.export_from_cloud(entry, export_dir, mode).await;
+                        let tables_desc = match table_filter {
+                            None => "all tables".to_string(),
+                            Some(tables) => tables.join(","),
+                        };
+                        output::info(&format!("  ⚡ Fast: {db} ({tables_desc})"));
+                        let entry = match table_filter {
+                            None => db.to_string(),
+                            Some(tables) => format!("{db}:{}", tables.join(",")),
+                        };
+                        let result =
+                            manager.export_from_cloud(&entry, export_dir, mode).await;
                         if result.is_ok() {
-                            output::success(&format!("  ✅ Fast done: {entry}"));
+                            output::success(&format!("  ✅ Fast done: {db} ({tables_desc})"));
                         }
                         result
                     }
@@ -682,7 +712,10 @@ pub async fn sql_setup(
             for result in results {
                 result?;
             }
-            output::success(&format!("✅ {} fast exports complete", fast_entries.len()));
+            output::success(&format!(
+                "✅ {} fast exports complete",
+                fast_dbs_ordered.len()
+            ));
             Ok(())
         };
 
@@ -751,7 +784,7 @@ pub async fn sql_setup(
 
         output::success(&format!(
             "✅ All {} exports complete",
-            fast_entries.len() + slow_entries.len()
+            fast_dbs_ordered.len() + slow_entries.len()
         ));
 
         // Import exported dumps (sequential - MySQL handles one write connection best)
