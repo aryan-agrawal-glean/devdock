@@ -698,8 +698,7 @@ pub async fn sql_setup(
                             None => db.to_string(),
                             Some(tables) => format!("{db}:{}", tables.join(",")),
                         };
-                        let result =
-                            manager.export_from_cloud(&entry, export_dir, mode).await;
+                        let result = manager.export_from_cloud(&entry, export_dir, mode).await;
                         if result.is_ok() {
                             output::success(&format!("  ✅ Fast done: {db} ({tables_desc})"));
                         }
@@ -712,10 +711,7 @@ pub async fn sql_setup(
             for result in results {
                 result?;
             }
-            output::success(&format!(
-                "✅ {} fast exports complete",
-                fast_dbs_ordered.len()
-            ));
+            output::success(&format!("✅ {} fast exports complete", fast_dbs_ordered.len()));
             Ok(())
         };
 

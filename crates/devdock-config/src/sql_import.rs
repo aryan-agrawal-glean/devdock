@@ -1282,11 +1282,8 @@ impl SqlOperationsManager {
             return Ok(());
         }
 
-        let requested: HashSet<String> = tables_csv
-            .split(',')
-            .map(|t| t.trim().to_string())
-            .filter(|t| !t.is_empty())
-            .collect();
+        let requested: HashSet<String> =
+            tables_csv.split(',').map(|t| t.trim().to_string()).filter(|t| !t.is_empty()).collect();
 
         if requested.is_empty() {
             return Ok(());
@@ -1317,10 +1314,7 @@ impl SqlOperationsManager {
         }
 
         std::fs::write(&file_path, output)?;
-        println!(
-            "     ✂ Filtered {db}.sql to {} table(s): {tables_csv}",
-            requested.len()
-        );
+        println!("     ✂ Filtered {db}.sql to {} table(s): {tables_csv}", requested.len());
 
         Ok(())
     }
