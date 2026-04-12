@@ -533,7 +533,11 @@ pub async fn sql_setup(
     let manager = SqlOperationsManager::new(project, platform, region, config);
 
     // Handle project change
-    if project != prev_project && !prev_project.is_empty() {
+    if prev_project.is_empty() {
+        // First run or state was cleared — record the project and force a full export
+        update_project = true;
+        update_tables = true;
+    } else if project != prev_project {
         output::info(&format!("Project changed from {prev_project} to {project}, cleaning up..."));
         state.clear_scripts()?;
         manager.clean_sql("")?;
