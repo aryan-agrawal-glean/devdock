@@ -214,11 +214,29 @@ impl ConfigGenerator {
         if !self.skip_file_writes {
             println!("⏩ Writing config files...");
             let step_start = std::time::Instant::now();
+
+            // Each write is wrapped so a bare ENOENT names the offending
+            // path (e.g. when workspace_root is misdetected and config/
+            // doesn't exist under it).
+            let paths = [
+                self.workspace_root.join("devdock/devdock.ini"),
+                self.workspace_root.join("config/devdock.ini"),
+                self.workspace_root.join("config/run_local.ini"),
+                runtime_gen.join("temp_profile.yaml"),
+            ];
+            let write = |path: PathBuf, contents: &str| {
+                let contents = contents.to_string();
+                async move {
+                    tokio::fs::write(&path, &contents)
+                        .await
+                        .with_context(|| format!("writing {}", path.display()))
+                }
+            };
             tokio::try_join!(
-                tokio::fs::write(self.workspace_root.join("devdock/devdock.ini"), &devdock_ini),
-                tokio::fs::write(self.workspace_root.join("config/devdock.ini"), &devdock_ini),
-                tokio::fs::write(self.workspace_root.join("config/run_local.ini"), &devdock_ini),
-                tokio::fs::write(runtime_gen.join("temp_profile.yaml"), &temp_profile),
+                write(paths[0].clone(), &devdock_ini),
+                write(paths[1].clone(), &devdock_ini),
+                write(paths[2].clone(), &devdock_ini),
+                write(paths[3].clone(), &temp_profile),
             )?;
 
             println!(
@@ -506,11 +524,47 @@ impl ConfigGenerator {
         }
     }
 
+    /// Load a project-specific dynamic.ini from GCS.
+    ///
+    /// Used by the multi-project (glean-apps-canary) path so it can read that
+    /// project's own SQL instance names rather than the primary profile's.
+    /// GCP-only for now because multi-project currently hardcodes `google`.
+    async fn load_dynamic_ini_for_project(&self, project: &str) -> Option<ParsedIniConfig> {
+        if !self.fetch_dynamic_config {
+            return None;
+        }
+
+        match DynamicIniLoader::new(project, self.workspace_root.clone()).await {
+            Ok(loader) => match loader.fetch_dynamic_ini().await {
+                Ok(config) => {
+                    if config.is_some() {
+                        println!("✅ Fetched dynamic.ini from GCS for project '{}'", project);
+                    }
+                    config
+                }
+                Err(e) => {
+                    eprintln!(
+                        "Warning: Failed to fetch dynamic.ini for project '{}' from GCS: {}",
+                        project, e
+                    );
+                    None
+                }
+            },
+            Err(e) => {
+                eprintln!(
+                    "Warning: Failed to create GCS INI loader for project '{}': {}",
+                    project, e
+                );
+                None
+            }
+        }
+    }
+
     /// Fetch SQL metadata if SQL is remote and dynamic_ini is present
     async fn fetch_sql_metadata_if_needed(
         &self,
         profile: &Profile,
-        platform: &dyn Platform,
+        _platform: &dyn Platform,
         dynamic_ini: Option<&ParsedIniConfig>,
         context_name: &str,
     ) -> Option<crate::sql::SqlRemoteMetadata> {
@@ -520,7 +574,6 @@ impl ConfigGenerator {
                     match crate::sql::SqlUtils::fetch_remote_metadata(
                         &profile.project,
                         &profile.platform.to_string(),
-                        platform.zone(),
                         ini,
                     )
                     .await
@@ -654,7 +707,10 @@ impl ConfigGenerator {
         multi_config: &devdock_core::profile::MultiProjectConfig,
         dynamic_ini: Option<&ParsedIniConfig>,
     ) -> Result<crate::profile_generator::MultiProjectProfile> {
-        use crate::profile_generator::{InfraProfileEntry, MultiProjectProfile};
+        use crate::profile_generator::{
+            apply_bastion_port_forwards, build_remote_sql_config, InfraProfileEntry,
+            MultiProjectProfile,
+        };
 
         let multi_project_name = "glean-apps-canary";
 
@@ -667,8 +723,22 @@ impl ConfigGenerator {
         )
         .await?;
 
-        // Only nest SQL infra under glean_apps_canary (matches Python behavior)
-        let mut infra = HashMap::new();
+        // Build the nested infra map.
+        //
+        // Python's SqlServiceDependency.update_temp_profile rebinds the target dict
+        // to temp_profile['glean_apps_canary'] when multi_project=True and then
+        // populates infra.sql (cloud_sql_args / bastion+instances+ports+use_iam_auth)
+        // and infra.bastion (local_to_remote_ports). The Rust path previously just
+        // shallow-copied the source YAML config, so the nested SQL block came out
+        // empty and no bastion port forwards were set up — meaning host.docker.internal
+        // :3311/3312 had nothing listening for multi-project services like
+        // debug_endpoint. This restores that behavior.
+        let mut infra: HashMap<String, InfraProfileEntry> = HashMap::new();
+        // Zone discovered from the bastion (may differ from dynamic.ini's
+        // primaryZone — e.g. glean-apps-canary bastion lives in
+        // us-central1-c while primaryZone is us-central1-a). Propagated
+        // to the emitted profile so the bastion Tiltfile SSHes correctly.
+        let mut discovered_bastion_zone: Option<String> = None;
         if let Some(sql_config) = multi_config.infra.get("sql") {
             let infra_type = match sql_config.deployment_type {
                 devdock_core::types::DeploymentType::Local => "local",
@@ -676,10 +746,78 @@ impl ConfigGenerator {
             }
             .to_string();
 
-            infra.insert(
-                "sql".to_string(),
-                InfraProfileEntry { infra_type, extra: sql_config.config.clone() },
-            );
+            let mut sql_extras = sql_config.config.clone();
+
+            if sql_config.deployment_type == devdock_core::types::DeploymentType::Remote {
+                // Strip local-only keys and apply the remote-SQL logic.
+                sql_extras.retain(|k, _| {
+                    !matches!(
+                        k.as_str(),
+                        "copy_tables"
+                            | "mode"
+                            | "full_cleanup"
+                            | "copy_keyval"
+                            | "copy_where_queries"
+                    )
+                });
+
+                // The multi-project has its own SQL instance names (e.g.
+                // `glean-apps-canary:us-central1:...`) stored in a different GCS
+                // bucket's dynamic.ini. Using the primary project's dynamic.ini
+                // here would emit the wrong connection strings. Fetch the
+                // multi-project's own dynamic.ini and fall back to the primary
+                // one only if that load fails.
+                let multi_ini = self.load_dynamic_ini_for_project(multi_project_name).await;
+                let effective_ini = multi_ini.as_ref().or(dynamic_ini);
+
+                if let Some(ini) = effective_ini {
+                    match crate::sql::SqlUtils::fetch_remote_metadata(
+                        multi_project_name,
+                        "google",
+                        ini,
+                    )
+                    .await
+                    {
+                        Ok(metadata) => {
+                            discovered_bastion_zone.clone_from(&metadata.bastion_zone);
+                            let outputs = build_remote_sql_config(
+                                &metadata,
+                                Some(ini),
+                                "google",
+                                true, // is_multi_project
+                            );
+                            for (k, v) in outputs.sql_extras {
+                                sql_extras.insert(k, v);
+                            }
+                            if !outputs.bastion_port_forwards.is_empty() {
+                                let entry =
+                                    infra.entry("bastion".to_string()).or_insert_with(|| {
+                                        InfraProfileEntry {
+                                            infra_type: "local".to_string(),
+                                            extra: HashMap::new(),
+                                        }
+                                    });
+                                apply_bastion_port_forwards(
+                                    &mut entry.extra,
+                                    &outputs.bastion_port_forwards,
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!(
+                                "Warning: Failed to fetch SQL metadata for multi-project nested profile ({}): {}",
+                                multi_project_name, e
+                            );
+                        }
+                    }
+                } else {
+                    eprintln!(
+                        "Warning: dynamic.ini not available; skipping remote SQL expansion for multi-project nested profile"
+                    );
+                }
+            }
+
+            infra.insert("sql".to_string(), InfraProfileEntry { infra_type, extra: sql_extras });
         }
 
         // Build service entries for multi-project services
@@ -689,6 +827,17 @@ impl ConfigGenerator {
         let temp_profile = crate::platform::TempProfile::default();
         let mut temp_profile_mut = temp_profile;
         multi_platform.update_temp_profile(&mut temp_profile_mut);
+
+        // Override zone/region with the discovered bastion zone, when present.
+        // The bastion Tiltfile reads `profile['glean_apps_canary']['zone']`
+        // to build `gcloud compute ssh --zone <zone> bastion`; with an
+        // incorrect zone we get a 404 and the tunnel never comes up.
+        if let Some(zone) = discovered_bastion_zone {
+            let region =
+                if zone.len() > 2 { zone[..zone.len() - 2].to_string() } else { zone.clone() };
+            temp_profile_mut.zone = zone;
+            temp_profile_mut.region = region;
+        }
 
         Ok(MultiProjectProfile {
             project: temp_profile_mut.project,

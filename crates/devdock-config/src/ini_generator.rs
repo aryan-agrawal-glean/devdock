@@ -314,12 +314,30 @@ impl IniGenerator {
             // should use standard auth. Leave these from default.ini so
             // profile ini_overrides can control them.
 
-            // Set host for remote SQL (goes through cloud-sql-proxy or bastion)
-            // Instance list depends on project type (matches Python sql_service_dependency.py special cases)
+            // Canary's bastion runs `cloud-sql-proxy --auto-iam-authn` as
+            // `bastion@glean-apps-canary.iam.gserviceaccount.com`, so the
+            // proxy authenticates to Cloud SQL as the DB user `bastion`.
+            // The canary ini otherwise ships `db.user=root / db.password=
+            // scio`, which Cloud SQL will reject for the proxy-injected
+            // session. Override user to the proxy's IAM identity; the
+            // password is ignored by the proxy but blanked for clarity.
+            let is_bastion_available =
+                self.context.sql_metadata.as_ref().is_some_and(|m| m.is_bastion_available);
+            let is_canary_iam_bastion = self.context.multi_project
+                && self.context.project == "glean-apps-canary"
+                && !use_public_ip
+                && is_bastion_available;
+
+            // Set host for remote SQL (goes through cloud-sql-proxy or bastion).
+            // For canary/scio-apps the canary bastion launches the proxy as
+            // `sql-1?port=3311` (frontendInstance) then `sql-internal?port=
+            // 3312` (internal); the order here must match so
+            // `SqlFrontendKeyValStore` (frontendInstance) actually hits
+            // sql-1 where `keyval` lives.
             let instances: &[&str] = if self.context.project == "glean-apps-canary"
                 || self.context.project == "scio-apps"
             {
-                &["internal", "frontendInstance"]
+                &["frontendInstance", "internal"]
             } else {
                 &["frontendInstance", "backendInstance"]
             };
@@ -333,7 +351,6 @@ impl IniGenerator {
                 );
                 self.config.set("sql", &format!("{}.googlecloud.instanceName", instance), "");
 
-                // Set db.user for public IP instances
                 if use_public_ip
                     && !matches!(
                         self.context.project.as_str(),
@@ -342,16 +359,27 @@ impl IniGenerator {
                 {
                     self.config.set("sql", &format!("{}.db.user", instance), "glean_local");
                 }
+
+                if is_canary_iam_bastion {
+                    self.config.set("sql", &format!("{}.db.user", instance), "bastion");
+                    self.config.set("sql", &format!("{}.db.password", instance), "");
+                }
             }
 
-            // Special handling for glean-apps-canary and scio-apps
             if self.context.project == "glean-apps-canary" || self.context.project == "scio-apps" {
-                self.config.set(
-                    "sql",
-                    "db.host",
-                    format!("host.docker.internal:{}", curr_port + 1),
-                );
+                // Unprefixed `sql.db.*` routes to the same instance as
+                // `frontendInstance` (canary/scio-apps ini maps both
+                // `sql.googlecloud.instanceName` and
+                // `sql.frontendInstance.googlecloud.instanceName` to sql-1).
+                // DBs without an explicit `*.db.instance` (e.g. `keyval`)
+                // fall back here, so they MUST hit the primary port, not
+                // `sql-internal`.
+                self.config.set("sql", "db.host", format!("host.docker.internal:{}", curr_port));
                 self.config.set("sql", "googlecloud.instanceName", "");
+                if is_canary_iam_bastion {
+                    self.config.set("sql", "db.user", "bastion");
+                    self.config.set("sql", "db.password", "");
+                }
             }
         }
     }

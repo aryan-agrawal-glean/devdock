@@ -38,6 +38,14 @@ pub struct SqlRemoteMetadata {
     pub use_public_ip: bool,
     /// Whether bastion VM is available
     pub is_bastion_available: bool,
+    /// Discovered zone of the `bastion` VM in this project, if one exists.
+    ///
+    /// Populated by `is_bastion_available` via `gcloud compute instances list`
+    /// so callers (profile emitter, Tiltfile) use the *actual* zone rather
+    /// than whatever the project's `primaryZone` says. In glean-apps-canary
+    /// the bastion lives in `us-central1-c` even though primaryZone is
+    /// `us-central1-a`; without this, `gcloud compute ssh` 404s.
+    pub bastion_zone: Option<String>,
     /// Whether to use IAM authentication
     pub use_iam_auth: bool,
     /// Platform (google, aws, azure)
@@ -164,29 +172,53 @@ impl SqlUtils {
         Ok(true)
     }
 
-    /// Check if bastion VM is available in a zone
+    /// Check if a `bastion` VM exists in this project and return its zone.
     ///
     /// Replaces: python_scio.scripts.lib.utils.bastion_util.is_bastion_available
-    pub async fn is_bastion_available(&self, zone: &str) -> bool {
+    ///
+    /// We list instances by name across every zone (`gcloud compute
+    /// instances list --filter=name=bastion`) instead of describing a
+    /// hard-coded zone so we discover the real location. This matters
+    /// for multi-projects like glean-apps-canary where the bastion
+    /// lives in `us-central1-c` while `primaryZone` is `us-central1-a`.
+    /// The discovered zone is propagated to the generated profile so the
+    /// Tiltfile's `gcloud compute ssh` targets the right host.
+    pub async fn is_bastion_available(&self) -> (bool, Option<String>) {
         let result = Command::new("gcloud")
             .args([
                 "compute",
                 "instances",
-                "describe",
-                "bastion",
-                "--zone",
-                zone,
+                "list",
                 "--project",
                 &self.project,
+                "--filter",
+                "name=bastion",
+                "--format",
+                "value(zone)",
             ])
             .output()
             .await;
 
         match result {
-            Ok(output) => output.status.success(),
+            Ok(output) if output.status.success() => {
+                let zone = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if zone.is_empty() {
+                    (false, None)
+                } else {
+                    // Multiple matches would be newline-separated; take the first.
+                    let zone = zone.lines().next().unwrap_or("").trim().to_string();
+                    debug!("Discovered bastion in {} (project {})", zone, self.project);
+                    (true, Some(zone))
+                }
+            }
+            Ok(output) => {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                warn!("gcloud compute instances list failed for {}: {}", self.project, stderr);
+                (false, None)
+            }
             Err(e) => {
                 warn!("Failed to check bastion availability: {}", e);
-                false
+                (false, None)
             }
         }
     }
@@ -197,7 +229,6 @@ impl SqlUtils {
     pub async fn fetch_remote_metadata(
         project: &str,
         platform: &str,
-        zone: &str,
         dynamic_ini: &ParsedIniConfig,
     ) -> Result<SqlRemoteMetadata> {
         let sql_utils = SqlUtils::new(project);
@@ -206,7 +237,7 @@ impl SqlUtils {
         let instances = sql_utils.get_instance_name_map(dynamic_ini, false);
 
         // 2. Determine platform-specific behavior
-        let (use_public_ip, is_bastion_available) = match platform {
+        let (use_public_ip, is_bastion_available, bastion_zone) = match platform {
             "google" => {
                 // For GCP, check actual infrastructure
                 let use_public_ip = if !instances.is_empty() {
@@ -214,14 +245,14 @@ impl SqlUtils {
                 } else {
                     false
                 };
-                let bastion_available = sql_utils.is_bastion_available(zone).await;
-                (use_public_ip, bastion_available)
+                let (bastion_available, zone) = sql_utils.is_bastion_available().await;
+                (use_public_ip, bastion_available, zone)
             }
             "aws" | "azure" => {
                 // AWS/Azure always use their own connectivity patterns
-                (false, false)
+                (false, false, None)
             }
-            _ => (false, false),
+            _ => (false, false, None),
         };
 
         // 3. Determine IAM auth setting
@@ -242,6 +273,7 @@ impl SqlUtils {
             instances,
             use_public_ip,
             is_bastion_available,
+            bastion_zone,
             use_iam_auth,
             platform: platform.to_string(),
             project: project.to_string(),
