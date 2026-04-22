@@ -833,7 +833,8 @@ impl ConfigGenerator {
         // to build `gcloud compute ssh --zone <zone> bastion`; with an
         // incorrect zone we get a 404 and the tunnel never comes up.
         if let Some(zone) = discovered_bastion_zone {
-            let region = if zone.len() > 2 { zone[..zone.len() - 2].to_string() } else { zone.clone() };
+            let region =
+                if zone.len() > 2 { zone[..zone.len() - 2].to_string() } else { zone.clone() };
             temp_profile_mut.zone = zone;
             temp_profile_mut.region = region;
         }

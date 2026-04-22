@@ -374,11 +374,7 @@ impl IniGenerator {
                 // DBs without an explicit `*.db.instance` (e.g. `keyval`)
                 // fall back here, so they MUST hit the primary port, not
                 // `sql-internal`.
-                self.config.set(
-                    "sql",
-                    "db.host",
-                    format!("host.docker.internal:{}", curr_port),
-                );
+                self.config.set("sql", "db.host", format!("host.docker.internal:{}", curr_port));
                 self.config.set("sql", "googlecloud.instanceName", "");
                 if is_canary_iam_bastion {
                     self.config.set("sql", "db.user", "bastion");
