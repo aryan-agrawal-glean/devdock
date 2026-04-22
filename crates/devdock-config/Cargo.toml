@@ -37,6 +37,10 @@ zstd = "0.13"      # Zstandard decompression for .tar.zst
 flate2 = "1.0"     # Gzip decompression for .sql.gz
 tar = "0.4"        # Tar extraction
 
+# Process group cleanup for spawned proxy / bastion tunnel subprocesses
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
+
 [dev-dependencies]
 tempfile.workspace = true
 pretty_assertions.workspace = true
