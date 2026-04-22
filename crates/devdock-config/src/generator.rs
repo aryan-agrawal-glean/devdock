@@ -506,6 +506,42 @@ impl ConfigGenerator {
         }
     }
 
+    /// Load a project-specific dynamic.ini from GCS.
+    ///
+    /// Used by the multi-project (glean-apps-canary) path so it can read that
+    /// project's own SQL instance names rather than the primary profile's.
+    /// GCP-only for now because multi-project currently hardcodes `google`.
+    async fn load_dynamic_ini_for_project(&self, project: &str) -> Option<ParsedIniConfig> {
+        if !self.fetch_dynamic_config {
+            return None;
+        }
+
+        match DynamicIniLoader::new(project, self.workspace_root.clone()).await {
+            Ok(loader) => match loader.fetch_dynamic_ini().await {
+                Ok(config) => {
+                    if config.is_some() {
+                        println!("✅ Fetched dynamic.ini from GCS for project '{}'", project);
+                    }
+                    config
+                }
+                Err(e) => {
+                    eprintln!(
+                        "Warning: Failed to fetch dynamic.ini for project '{}' from GCS: {}",
+                        project, e
+                    );
+                    None
+                }
+            },
+            Err(e) => {
+                eprintln!(
+                    "Warning: Failed to create GCS INI loader for project '{}': {}",
+                    project, e
+                );
+                None
+            }
+        }
+    }
+
     /// Fetch SQL metadata if SQL is remote and dynamic_ini is present
     async fn fetch_sql_metadata_if_needed(
         &self,
@@ -654,7 +690,10 @@ impl ConfigGenerator {
         multi_config: &devdock_core::profile::MultiProjectConfig,
         dynamic_ini: Option<&ParsedIniConfig>,
     ) -> Result<crate::profile_generator::MultiProjectProfile> {
-        use crate::profile_generator::{InfraProfileEntry, MultiProjectProfile};
+        use crate::profile_generator::{
+            apply_bastion_port_forwards, build_remote_sql_config, InfraProfileEntry,
+            MultiProjectProfile,
+        };
 
         let multi_project_name = "glean-apps-canary";
 
@@ -667,8 +706,17 @@ impl ConfigGenerator {
         )
         .await?;
 
-        // Only nest SQL infra under glean_apps_canary (matches Python behavior)
-        let mut infra = HashMap::new();
+        // Build the nested infra map.
+        //
+        // Python's SqlServiceDependency.update_temp_profile rebinds the target dict
+        // to temp_profile['glean_apps_canary'] when multi_project=True and then
+        // populates infra.sql (cloud_sql_args / bastion+instances+ports+use_iam_auth)
+        // and infra.bastion (local_to_remote_ports). The Rust path previously just
+        // shallow-copied the source YAML config, so the nested SQL block came out
+        // empty and no bastion port forwards were set up — meaning host.docker.internal
+        // :3311/3312 had nothing listening for multi-project services like
+        // debug_endpoint. This restores that behavior.
+        let mut infra: HashMap<String, InfraProfileEntry> = HashMap::new();
         if let Some(sql_config) = multi_config.infra.get("sql") {
             let infra_type = match sql_config.deployment_type {
                 devdock_core::types::DeploymentType::Local => "local",
@@ -676,9 +724,79 @@ impl ConfigGenerator {
             }
             .to_string();
 
+            let mut sql_extras = sql_config.config.clone();
+
+            if sql_config.deployment_type == devdock_core::types::DeploymentType::Remote {
+                // Strip local-only keys and apply the remote-SQL logic.
+                sql_extras.retain(|k, _| {
+                    !matches!(
+                        k.as_str(),
+                        "copy_tables"
+                            | "mode"
+                            | "full_cleanup"
+                            | "copy_keyval"
+                            | "copy_where_queries"
+                    )
+                });
+
+                // The multi-project has its own SQL instance names (e.g.
+                // `glean-apps-canary:us-central1:...`) stored in a different GCS
+                // bucket's dynamic.ini. Using the primary project's dynamic.ini
+                // here would emit the wrong connection strings. Fetch the
+                // multi-project's own dynamic.ini and fall back to the primary
+                // one only if that load fails.
+                let multi_ini = self.load_dynamic_ini_for_project(multi_project_name).await;
+                let effective_ini = multi_ini.as_ref().or(dynamic_ini);
+
+                if let Some(ini) = effective_ini {
+                    match crate::sql::SqlUtils::fetch_remote_metadata(
+                        multi_project_name,
+                        "google",
+                        multi_platform.zone(),
+                        ini,
+                    )
+                    .await
+                    {
+                        Ok(metadata) => {
+                            let outputs = build_remote_sql_config(
+                                &metadata,
+                                Some(ini),
+                                "google",
+                                true, // is_multi_project
+                            );
+                            for (k, v) in outputs.sql_extras {
+                                sql_extras.insert(k, v);
+                            }
+                            if !outputs.bastion_port_forwards.is_empty() {
+                                let entry = infra
+                                    .entry("bastion".to_string())
+                                    .or_insert_with(|| InfraProfileEntry {
+                                        infra_type: "local".to_string(),
+                                        extra: HashMap::new(),
+                                    });
+                                apply_bastion_port_forwards(
+                                    &mut entry.extra,
+                                    &outputs.bastion_port_forwards,
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!(
+                                "Warning: Failed to fetch SQL metadata for multi-project nested profile ({}): {}",
+                                multi_project_name, e
+                            );
+                        }
+                    }
+                } else {
+                    eprintln!(
+                        "Warning: dynamic.ini not available; skipping remote SQL expansion for multi-project nested profile"
+                    );
+                }
+            }
+
             infra.insert(
                 "sql".to_string(),
-                InfraProfileEntry { infra_type, extra: sql_config.config.clone() },
+                InfraProfileEntry { infra_type, extra: sql_extras },
             );
         }
 

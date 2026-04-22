@@ -167,18 +167,18 @@ impl SqlUtils {
     /// Check if bastion VM is available in a zone
     ///
     /// Replaces: python_scio.scripts.lib.utils.bastion_util.is_bastion_available
+    ///
+    /// Intentionally omits `--project`: Python's reference passes only `zone`,
+    /// so gcloud falls back to the currently-configured default project (the
+    /// *primary* one set earlier in startup). Multi-projects like
+    /// glean-apps-canary don't own a bastion VM themselves — they rely on
+    /// the primary project's bastion for tunneling — so hardcoding
+    /// `--project=self.project` here incorrectly reports "bastion unavailable"
+    /// and pushes us onto the cloud-sql-proxy path that the Tiltfile doesn't
+    /// wire up for multi-projects.
     pub async fn is_bastion_available(&self, zone: &str) -> bool {
         let result = Command::new("gcloud")
-            .args([
-                "compute",
-                "instances",
-                "describe",
-                "bastion",
-                "--zone",
-                zone,
-                "--project",
-                &self.project,
-            ])
+            .args(["compute", "instances", "describe", "bastion", "--zone", zone])
             .output()
             .await;
 
