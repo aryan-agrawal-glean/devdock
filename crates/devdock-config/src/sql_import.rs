@@ -12,11 +12,58 @@ use crate::ini_parser::ParsedIniConfig;
 use crate::sql::SqlUtils;
 use anyhow::{Context, Result};
 use std::collections::HashSet;
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 use tokio::process::Command as TokioCommand;
 use tracing::{debug, info, warn};
+
+/// Grace period to let a proxy subprocess exit after SIGTERM before we
+/// escalate to SIGKILL.
+const PROXY_TERM_GRACE: Duration = Duration::from_millis(500);
+
+/// How long we'll wait for a port to become free after cleanup. If this
+/// elapses we assume something is stuck and surface it so the next spawn
+/// doesn't silently reuse a stale tunnel.
+const PORT_FREE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Put a spawned proxy / tunnel process in its own process group so we can
+/// tear down the whole group (gcloud + its ssh child, cloud-sql-proxy, aws
+/// ssm session-manager-plugin, etc.) on cleanup. Without this, `kill()` only
+/// hits the direct child and ssh/session-manager can stay alive holding the
+/// forwarded port. Noop on non-unix.
+#[allow(unused_mut)]
+fn apply_process_group(mut cmd: Command) -> Command {
+    #[cfg(unix)]
+    {
+        cmd.process_group(0);
+    }
+    cmd
+}
+
+/// Terminate a spawned proxy subprocess and every process in its group.
+/// SIGTERM first to give ssh/proxy a chance to release the port cleanly,
+/// then SIGKILL after a short grace period. Finally reap the direct child
+/// so we don't leak a zombie.
+fn kill_proxy_group(mut process: std::process::Child) {
+    #[cfg(unix)]
+    {
+        let pid = process.id() as libc::pid_t;
+        // pgid == pid because we spawned with process_group(0). Negative pid
+        // to killpg-via-kill targets the whole group.
+        unsafe {
+            libc::kill(-pid, libc::SIGTERM);
+        }
+        std::thread::sleep(PROXY_TERM_GRACE);
+        unsafe {
+            libc::kill(-pid, libc::SIGKILL);
+        }
+    }
+    let _ = process.kill();
+    let _ = process.wait();
+}
 
 /// SQL bucket URL pattern
 const SQL_BUCKET_PATTERN: &str = "gs://sql-{project}/devdock";
@@ -41,8 +88,9 @@ pub trait SqlPlatformManager: Send + Sync {
         port: u16,
     ) -> Result<()>;
 
-    /// Clean up proxy process
-    fn cleanup_proxy(&self, process: std::process::Child);
+    /// Clean up proxy process and wait for `port` to be released so the next
+    /// spawn on the same port cannot accidentally hijack a leftover tunnel.
+    fn cleanup_proxy(&self, process: std::process::Child, port: u16);
 }
 
 /// Google Cloud SQL Manager
@@ -113,11 +161,21 @@ impl GoogleSqlManager {
         let connection_name = format!("{}:{}:{}", self.project, self.region, instance_id);
         println!("     📡 Connection: {connection_name}");
 
+        // Guard against a previous tunnel/proxy still holding this port. If
+        // we don't check, wait_for_port below will see *any* listener and
+        // falsely report success, and mysqldump will silently talk to the
+        // wrong instance.
+        Self::ensure_port_free(port).context(
+            "Port is still bound from a previous proxy/tunnel. \
+             Leftover bastion ssh or cloud-sql-proxy process?",
+        )?;
+
         // Note: NOT using --auto-iam-authn here, we use devdock_user with password
-        let child = Command::new("cloud-sql-proxy")
-            .args([&connection_name, "-p", &port.to_string(), "--address", "0.0.0.0"])
+        let mut cmd = Command::new("cloud-sql-proxy");
+        cmd.args([&connection_name, "-p", &port.to_string(), "--address", "0.0.0.0"])
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            .stderr(Stdio::piped());
+        let child = apply_process_group(cmd)
             .spawn()
             .context(
                 "Failed to start cloud-sql-proxy. Is it installed? brew install cloud-sql-proxy",
@@ -150,23 +208,30 @@ impl GoogleSqlManager {
 
         println!("     📡 Tunneling localhost:{local_port} -> bastion:127.0.0.1:{remote_port}");
 
-        let child = Command::new("gcloud")
-            .args([
-                "compute",
-                "ssh",
-                "bastion",
-                "--project",
-                &self.project,
-                "--zone",
-                "us-central1-a",
-                "--tunnel-through-iap",
-                "--",
-                "-N",
-                "-L",
-                &format!("0.0.0.0:{local_port}:127.0.0.1:{remote_port}"),
-            ])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+        // See note in setup_cloud_sql_proxy: guard against a leftover listener.
+        Self::ensure_port_free(local_port).context(
+            "Port is still bound from a previous proxy/tunnel. \
+             Leftover bastion ssh or cloud-sql-proxy process?",
+        )?;
+
+        let mut cmd = Command::new("gcloud");
+        cmd.args([
+            "compute",
+            "ssh",
+            "bastion",
+            "--project",
+            &self.project,
+            "--zone",
+            "us-central1-a",
+            "--tunnel-through-iap",
+            "--",
+            "-N",
+            "-L",
+            &format!("0.0.0.0:{local_port}:127.0.0.1:{remote_port}"),
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+        let child = apply_process_group(cmd)
             .spawn()
             .context("Failed to start bastion tunnel")?;
 
@@ -177,23 +242,56 @@ impl GoogleSqlManager {
         Ok(child)
     }
 
-    /// Wait for a port to become available
+    /// Wait for a port to become available (i.e. something is listening).
+    ///
+    /// CAVEAT: this only proves *some* process is bound to the port. Callers
+    /// that care about *which* process must pair this with an `ensure_port_free`
+    /// check before spawn so we don't mistake a leftover tunnel for a
+    /// freshly-started proxy.
     fn wait_for_port(port: u16, timeout: Duration) -> Result<()> {
         let start = std::time::Instant::now();
 
         while start.elapsed() < timeout {
-            let output = Command::new("lsof").args(["-i", &format!(":{port}")]).output();
-
-            if let Ok(out) = output {
-                if out.status.success() && !out.stdout.is_empty() {
-                    return Ok(());
-                }
+            if Self::is_port_bound(port) {
+                return Ok(());
             }
-
             std::thread::sleep(Duration::from_secs(1));
         }
 
         anyhow::bail!("Timeout waiting for port {port} to be ready")
+    }
+
+    /// Wait for a port to be released (nothing listening). Used after
+    /// tearing down a proxy/tunnel so the next spawn can bind cleanly.
+    fn wait_for_port_free(port: u16, timeout: Duration) -> Result<()> {
+        let start = std::time::Instant::now();
+
+        while start.elapsed() < timeout {
+            if !Self::is_port_bound(port) {
+                return Ok(());
+            }
+            std::thread::sleep(Duration::from_millis(250));
+        }
+
+        anyhow::bail!("Timeout waiting for port {port} to be released")
+    }
+
+    /// Fail fast if `port` is still bound. Use this immediately before
+    /// spawning a new proxy/tunnel on a port we expect to own.
+    fn ensure_port_free(port: u16) -> Result<()> {
+        if Self::is_port_bound(port) {
+            anyhow::bail!(
+                "Port {port} is already in use. Run `lsof -i :{port}` to find the offender."
+            );
+        }
+        Ok(())
+    }
+
+    fn is_port_bound(port: u16) -> bool {
+        match Command::new("lsof").args(["-i", &format!(":{port}")]).output() {
+            Ok(out) => out.status.success() && !out.stdout.is_empty(),
+            Err(_) => false,
+        }
     }
 
     /// Run mysqldump with appropriate auth based on connection type
@@ -342,10 +440,15 @@ impl SqlPlatformManager for GoogleSqlManager {
         self.run_mysqldump(db_name, tables, query, output_path, port)
     }
 
-    fn cleanup_proxy(&self, mut process: std::process::Child) {
+    fn cleanup_proxy(&self, process: std::process::Child, port: u16) {
         println!("     🧹 Cleaning up proxy process...");
-        let _ = process.kill();
-        let _ = process.wait();
+        kill_proxy_group(process);
+        // gcloud's ssh child and cloud-sql-proxy may both outlive their
+        // parent's SIGKILL for a moment. Block here until the port is truly
+        // free so the next slow export can bind without hijacking.
+        if let Err(e) = Self::wait_for_port_free(port, PORT_FREE_TIMEOUT) {
+            println!("     ⚠️  {e}");
+        }
     }
 }
 
@@ -584,23 +687,28 @@ impl SqlPlatformManager for AwsSqlManager {
             "host": [host_to_use]
         });
 
-        let child = Command::new("aws")
-            .args([
-                "ssm",
-                "start-session",
-                "--target",
-                &bastion_id,
-                "--document-name",
-                "AWS-StartPortForwardingSessionToRemoteHost",
-                "--parameters",
-                &payload.to_string(),
-                "--region",
-                &self.region,
-            ])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .context("Failed to start SSM session")?;
+        // Guard against leftover tunnel holding the port from a prior run.
+        GoogleSqlManager::ensure_port_free(3309).context(
+            "Port 3309 is still bound from a previous SSM session. \
+             Leftover session-manager-plugin process?",
+        )?;
+
+        let mut cmd = Command::new("aws");
+        cmd.args([
+            "ssm",
+            "start-session",
+            "--target",
+            &bastion_id,
+            "--document-name",
+            "AWS-StartPortForwardingSessionToRemoteHost",
+            "--parameters",
+            &payload.to_string(),
+            "--region",
+            &self.region,
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+        let child = apply_process_group(cmd).spawn().context("Failed to start SSM session")?;
 
         // Wait for port
         println!("     ⏳ Waiting for SSM tunnel to be ready...");
@@ -709,10 +817,15 @@ impl SqlPlatformManager for AwsSqlManager {
         Ok(())
     }
 
-    fn cleanup_proxy(&self, mut process: std::process::Child) {
+    fn cleanup_proxy(&self, process: std::process::Child, port: u16) {
         println!("     🧹 Cleaning up SSM session...");
-        let _ = process.kill();
-        let _ = process.wait();
+        kill_proxy_group(process);
+        // session-manager-plugin spawned by `aws ssm start-session` can keep
+        // the forwarded port held briefly after SIGKILL. Wait for it to
+        // release so callers that reuse the port don't hit spurious binds.
+        if let Err(e) = GoogleSqlManager::wait_for_port_free(port, PORT_FREE_TIMEOUT) {
+            println!("     ⚠️  {e}");
+        }
     }
 }
 
@@ -1120,8 +1233,12 @@ impl SqlOperationsManager {
             Ok(())
         })();
 
-        // Always cleanup proxy
-        manager.cleanup_proxy(proxy_process);
+        // Always cleanup proxy - pass the port so the cleanup waits for it
+        // to be released before returning. Critical: the slow-export loop
+        // reuses this same port for the next db/instance, and the next
+        // `setup_proxy` will silently talk to a leftover tunnel if the port
+        // is still held.
+        manager.cleanup_proxy(proxy_process, port);
 
         result
     }
@@ -1244,7 +1361,7 @@ impl SqlOperationsManager {
                 );
 
                 if let Some(p) = proxy {
-                    manager.cleanup_proxy(p);
+                    manager.cleanup_proxy(p, 3308);
                 }
 
                 result
@@ -1262,7 +1379,7 @@ impl SqlOperationsManager {
                 );
 
                 if let Some(p) = proxy {
-                    manager.cleanup_proxy(p);
+                    manager.cleanup_proxy(p, 3309);
                 }
 
                 result
