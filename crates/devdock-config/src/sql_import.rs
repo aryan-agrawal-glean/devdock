@@ -175,11 +175,9 @@ impl GoogleSqlManager {
         cmd.args([&connection_name, "-p", &port.to_string(), "--address", "0.0.0.0"])
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        let child = apply_process_group(cmd)
-            .spawn()
-            .context(
-                "Failed to start cloud-sql-proxy. Is it installed? brew install cloud-sql-proxy",
-            )?;
+        let child = apply_process_group(cmd).spawn().context(
+            "Failed to start cloud-sql-proxy. Is it installed? brew install cloud-sql-proxy",
+        )?;
 
         // Wait for proxy to be ready
         Self::wait_for_port(port, Duration::from_secs(30))?;
@@ -231,9 +229,7 @@ impl GoogleSqlManager {
         ])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-        let child = apply_process_group(cmd)
-            .spawn()
-            .context("Failed to start bastion tunnel")?;
+        let child = apply_process_group(cmd).spawn().context("Failed to start bastion tunnel")?;
 
         // Wait for tunnel to be ready
         Self::wait_for_port(local_port, Duration::from_secs(60))?;
