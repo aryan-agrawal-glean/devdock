@@ -415,7 +415,24 @@ fn start_tilt(services: Option<&str>) -> Result<Child> {
 }
 
 /// Find workspace root (directory containing devdock/)
+///
+/// Prefers `DEVDOCK_ROOT` when set so a user invoking `devdock` from a
+/// sibling checkout (e.g. the devdock tooling repo) doesn't get silently
+/// routed to the wrong monorepo. Falls back to walking up from the cwd.
 fn find_workspace_root() -> Result<PathBuf> {
+    if let Ok(root) = std::env::var("DEVDOCK_ROOT") {
+        if !root.is_empty() {
+            let p = PathBuf::from(&root);
+            if p.join("devdock").is_dir() {
+                return Ok(p);
+            }
+            anyhow::bail!(
+                "DEVDOCK_ROOT={} does not contain a devdock/ directory.\n\
+                 Either unset it or point it at the Scio monorepo root.",
+                p.display()
+            );
+        }
+    }
     find_workspace_root_from(&std::env::current_dir()?)
 }
 

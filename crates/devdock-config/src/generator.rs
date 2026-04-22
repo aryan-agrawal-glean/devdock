@@ -214,11 +214,29 @@ impl ConfigGenerator {
         if !self.skip_file_writes {
             println!("⏩ Writing config files...");
             let step_start = std::time::Instant::now();
+
+            // Each write is wrapped so a bare ENOENT names the offending
+            // path (e.g. when workspace_root is misdetected and config/
+            // doesn't exist under it).
+            let paths = [
+                self.workspace_root.join("devdock/devdock.ini"),
+                self.workspace_root.join("config/devdock.ini"),
+                self.workspace_root.join("config/run_local.ini"),
+                runtime_gen.join("temp_profile.yaml"),
+            ];
+            let write = |path: PathBuf, contents: &str| {
+                let contents = contents.to_string();
+                async move {
+                    tokio::fs::write(&path, &contents)
+                        .await
+                        .with_context(|| format!("writing {}", path.display()))
+                }
+            };
             tokio::try_join!(
-                tokio::fs::write(self.workspace_root.join("devdock/devdock.ini"), &devdock_ini),
-                tokio::fs::write(self.workspace_root.join("config/devdock.ini"), &devdock_ini),
-                tokio::fs::write(self.workspace_root.join("config/run_local.ini"), &devdock_ini),
-                tokio::fs::write(runtime_gen.join("temp_profile.yaml"), &temp_profile),
+                write(paths[0].clone(), &devdock_ini),
+                write(paths[1].clone(), &devdock_ini),
+                write(paths[2].clone(), &devdock_ini),
+                write(paths[3].clone(), &temp_profile),
             )?;
 
             println!(
@@ -546,7 +564,7 @@ impl ConfigGenerator {
     async fn fetch_sql_metadata_if_needed(
         &self,
         profile: &Profile,
-        platform: &dyn Platform,
+        _platform: &dyn Platform,
         dynamic_ini: Option<&ParsedIniConfig>,
         context_name: &str,
     ) -> Option<crate::sql::SqlRemoteMetadata> {
@@ -556,7 +574,6 @@ impl ConfigGenerator {
                     match crate::sql::SqlUtils::fetch_remote_metadata(
                         &profile.project,
                         &profile.platform.to_string(),
-                        platform.zone(),
                         ini,
                     )
                     .await
@@ -717,6 +734,11 @@ impl ConfigGenerator {
         // :3311/3312 had nothing listening for multi-project services like
         // debug_endpoint. This restores that behavior.
         let mut infra: HashMap<String, InfraProfileEntry> = HashMap::new();
+        // Zone discovered from the bastion (may differ from dynamic.ini's
+        // primaryZone — e.g. glean-apps-canary bastion lives in
+        // us-central1-c while primaryZone is us-central1-a). Propagated
+        // to the emitted profile so the bastion Tiltfile SSHes correctly.
+        let mut discovered_bastion_zone: Option<String> = None;
         if let Some(sql_config) = multi_config.infra.get("sql") {
             let infra_type = match sql_config.deployment_type {
                 devdock_core::types::DeploymentType::Local => "local",
@@ -752,12 +774,12 @@ impl ConfigGenerator {
                     match crate::sql::SqlUtils::fetch_remote_metadata(
                         multi_project_name,
                         "google",
-                        multi_platform.zone(),
                         ini,
                     )
                     .await
                     {
                         Ok(metadata) => {
+                            discovered_bastion_zone.clone_from(&metadata.bastion_zone);
                             let outputs = build_remote_sql_config(
                                 &metadata,
                                 Some(ini),
@@ -805,6 +827,16 @@ impl ConfigGenerator {
         let temp_profile = crate::platform::TempProfile::default();
         let mut temp_profile_mut = temp_profile;
         multi_platform.update_temp_profile(&mut temp_profile_mut);
+
+        // Override zone/region with the discovered bastion zone, when present.
+        // The bastion Tiltfile reads `profile['glean_apps_canary']['zone']`
+        // to build `gcloud compute ssh --zone <zone> bastion`; with an
+        // incorrect zone we get a 404 and the tunnel never comes up.
+        if let Some(zone) = discovered_bastion_zone {
+            let region = if zone.len() > 2 { zone[..zone.len() - 2].to_string() } else { zone.clone() };
+            temp_profile_mut.zone = zone;
+            temp_profile_mut.region = region;
+        }
 
         Ok(MultiProjectProfile {
             project: temp_profile_mut.project,
