@@ -768,11 +768,12 @@ impl ConfigGenerator {
                                 sql_extras.insert(k, v);
                             }
                             if !outputs.bastion_port_forwards.is_empty() {
-                                let entry = infra
-                                    .entry("bastion".to_string())
-                                    .or_insert_with(|| InfraProfileEntry {
-                                        infra_type: "local".to_string(),
-                                        extra: HashMap::new(),
+                                let entry =
+                                    infra.entry("bastion".to_string()).or_insert_with(|| {
+                                        InfraProfileEntry {
+                                            infra_type: "local".to_string(),
+                                            extra: HashMap::new(),
+                                        }
                                     });
                                 apply_bastion_port_forwards(
                                     &mut entry.extra,
@@ -794,10 +795,7 @@ impl ConfigGenerator {
                 }
             }
 
-            infra.insert(
-                "sql".to_string(),
-                InfraProfileEntry { infra_type, extra: sql_extras },
-            );
+            infra.insert("sql".to_string(), InfraProfileEntry { infra_type, extra: sql_extras });
         }
 
         // Build service entries for multi-project services

@@ -757,23 +757,20 @@ impl TempProfileGenerator {
         let platform = self.profile.platform.as_str();
         // Primary-project path never runs as multi-project: the nested glean_apps_canary
         // case is handled separately by `build_remote_sql_config` in generator.rs.
-        let outputs =
-            build_remote_sql_config(metadata, self.dynamic_ini.as_ref(), platform, false);
+        let outputs = build_remote_sql_config(metadata, self.dynamic_ini.as_ref(), platform, false);
 
         for (k, v) in outputs.sql_extras {
             extra.insert(k, v);
         }
 
         if !outputs.bastion_port_forwards.is_empty() {
-            self.profile.infra.entry("bastion".to_string()).or_insert_with(|| {
-                InfraProfileEntry { infra_type: "local".to_string(), extra: HashMap::new() }
+            self.profile.infra.entry("bastion".to_string()).or_insert_with(|| InfraProfileEntry {
+                infra_type: "local".to_string(),
+                extra: HashMap::new(),
             });
 
             if let Some(bastion) = self.profile.infra.get_mut("bastion") {
-                apply_bastion_port_forwards(
-                    &mut bastion.extra,
-                    &outputs.bastion_port_forwards,
-                );
+                apply_bastion_port_forwards(&mut bastion.extra, &outputs.bastion_port_forwards);
             }
         }
 
@@ -954,8 +951,7 @@ pub(crate) fn apply_bastion_port_forwards(
         .and_then(|v| serde_json::from_value::<Vec<Vec<u16>>>(v.clone()).ok())
         .unwrap_or_default();
     local_to_remote.extend(forwards.iter().cloned());
-    bastion_extra
-        .insert("local_to_remote_ports".to_string(), serde_json::json!(local_to_remote));
+    bastion_extra.insert("local_to_remote_ports".to_string(), serde_json::json!(local_to_remote));
 }
 
 #[cfg(test)]
