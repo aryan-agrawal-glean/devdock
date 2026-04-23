@@ -299,6 +299,7 @@ impl ConfigGenerator {
             env: HashMap::new(),
             ini_overrides: Vec::new(),
             multi_project: None,
+            sync: Default::default(),
         };
 
         let multi_graph = DependencyGraph::build(&multi_profile, &self.workspace_root).await?;
@@ -870,6 +871,7 @@ impl ConfigGenerator {
             env: HashMap::new(),
             ini_overrides: Vec::new(),
             multi_project: None,
+            sync: Default::default(),
         };
 
         let multi_graph = DependencyGraph::build(&multi_profile, &self.workspace_root).await?;

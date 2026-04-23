@@ -41,6 +41,31 @@ pub struct Profile {
     /// Multi-project config (e.g., glean-apps-canary).
     #[serde(rename = "glean-apps-canary", default, skip_serializing_if = "Option::is_none")]
     pub multi_project: Option<MultiProjectConfig>,
+
+    /// Sync-related configuration (only consulted by the sync daemon in remote mode).
+    #[serde(default, skip_serializing_if = "SyncProfileConfig::is_empty")]
+    pub sync: SyncProfileConfig,
+}
+
+/// Profile-level overrides for the file sync daemon.
+///
+/// These settings are only consulted when the sync daemon is started (remote mode or
+/// explicit `devdock sync start`). In local mode the daemon is never invoked, so these
+/// fields are effectively a no-op.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SyncProfileConfig {
+    /// Glob patterns that should always be force-synced, bypassing the normal
+    /// MONITORED_DIRS / SYNC_EXTENSIONS filters. Team-level defaults live here so each
+    /// developer doesn't have to re-run `devdock sync force --watch` after restarting
+    /// the instance.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub force_patterns: Vec<String>,
+}
+
+impl SyncProfileConfig {
+    fn is_empty(&self) -> bool {
+        self.force_patterns.is_empty()
+    }
 }
 
 /// Infrastructure component configuration.
@@ -380,5 +405,35 @@ glean-apps-canary:
         assert_eq!(multi.services.len(), 1);
         assert_eq!(multi.infra.len(), 1);
         assert!(multi.services.contains_key("internal_admin"));
+    }
+
+    #[test]
+    fn test_parse_profile_with_sync_force_patterns() {
+        let yaml = r#"
+project: test-project
+services:
+  qe:
+    type: local
+sync:
+  force_patterns:
+    - "config/shards/**"
+    - "**/BUILD.bazel"
+"#;
+        let profile: Profile = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(profile.sync.force_patterns.len(), 2);
+        assert_eq!(profile.sync.force_patterns[0], "config/shards/**");
+        assert_eq!(profile.sync.force_patterns[1], "**/BUILD.bazel");
+    }
+
+    #[test]
+    fn test_profile_without_sync_block_defaults_empty() {
+        let yaml = r"
+project: test-project
+services:
+  qe:
+    type: local
+";
+        let profile: Profile = serde_yaml::from_str(yaml).unwrap();
+        assert!(profile.sync.force_patterns.is_empty());
     }
 }

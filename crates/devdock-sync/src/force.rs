@@ -136,6 +136,34 @@ pub fn force_patterns_path(devdock_id: &str) -> PathBuf {
     sync_dir.join(format!("{devdock_id}.force_patterns.json"))
 }
 
+/// Environment variable that lets a user add force-sync patterns without touching the
+/// profile YAML or running `sync force --watch`. Comma-separated globs.
+pub const FORCE_PATTERNS_ENV_VAR: &str = "DEVDOCK_FORCE_SYNC_PATTERNS";
+
+/// Parse `DEVDOCK_FORCE_SYNC_PATTERNS` (comma-separated globs) into a pattern list.
+/// Empty / missing var yields an empty vec. Whitespace around entries is trimmed, and
+/// empty entries (e.g. `,,`) are dropped.
+pub fn patterns_from_env() -> Vec<String> {
+    std::env::var(FORCE_PATTERNS_ENV_VAR)
+        .ok()
+        .map(|raw| raw.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
+        .unwrap_or_default()
+}
+
+/// Merge force-sync pattern sources into a deduplicated list while preserving insertion
+/// order. Sources are layered: persisted file (from `sync force --watch`) first, then
+/// profile-level patterns, then env-var patterns. Later duplicates are dropped.
+pub fn merge_patterns(persisted: Vec<String>, profile: &[String], env: &[String]) -> Vec<String> {
+    let mut out = Vec::with_capacity(persisted.len() + profile.len() + env.len());
+    let mut seen = std::collections::HashSet::new();
+    for p in persisted.into_iter().chain(profile.iter().cloned()).chain(env.iter().cloned()) {
+        if seen.insert(p.clone()) {
+            out.push(p);
+        }
+    }
+    out
+}
+
 /// Check if a string contains glob metacharacters.
 fn is_glob_pattern(s: &str) -> bool {
     s.contains('*') || s.contains('?') || s.contains('[')
@@ -161,4 +189,48 @@ fn collect_files_recursive(dir: &Path, base: &Path, files: &mut Vec<PathBuf>) ->
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn merge_deduplicates_and_preserves_layer_order() {
+        let persisted = vec!["a".to_string(), "b".to_string()];
+        let profile = vec!["b".to_string(), "c".to_string()];
+        let env = vec!["c".to_string(), "d".to_string()];
+
+        let merged = merge_patterns(persisted, &profile, &env);
+
+        assert_eq!(merged, vec!["a", "b", "c", "d"]);
+    }
+
+    #[test]
+    fn merge_handles_all_empty_sources() {
+        let merged = merge_patterns(Vec::new(), &[], &[]);
+        assert!(merged.is_empty());
+    }
+
+    #[test]
+    fn merge_with_only_env() {
+        let merged = merge_patterns(Vec::new(), &[], &["config/**".to_string()]);
+        assert_eq!(merged, vec!["config/**"]);
+    }
+
+    #[test]
+    fn patterns_from_env_parses_comma_separated() {
+        // Isolate test from environment pollution.
+        std::env::set_var(FORCE_PATTERNS_ENV_VAR, "  config/shards/** , **/BUILD.bazel ,,");
+        let got = patterns_from_env();
+        std::env::remove_var(FORCE_PATTERNS_ENV_VAR);
+
+        assert_eq!(got, vec!["config/shards/**", "**/BUILD.bazel"]);
+    }
+
+    #[test]
+    fn patterns_from_env_returns_empty_when_unset() {
+        std::env::remove_var(FORCE_PATTERNS_ENV_VAR);
+        assert!(patterns_from_env().is_empty());
+    }
 }

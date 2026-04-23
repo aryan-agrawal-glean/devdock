@@ -26,16 +26,25 @@ pub struct SyncDaemon {
     branch_mode: bool,
     force_patterns: Vec<String>,
     force_patterns_mtime: Option<SystemTime>,
+    /// Profile-level patterns remembered so hot-reload can re-merge all three sources
+    /// without losing profile/env overlays.
+    extra_force_patterns: Vec<String>,
 }
 
 impl SyncDaemon {
     /// Create a new sync daemon.
+    ///
+    /// `extra_force_patterns` are merged in on top of the per-instance persisted file
+    /// (from `sync force --watch`) and the `DEVDOCK_FORCE_SYNC_PATTERNS` env var. The
+    /// caller is expected to supply profile-level patterns here; env-var patterns are
+    /// read internally so every entry point picks them up uniformly.
     pub fn new(
         devdock_id: String,
         workspace_name: String,
         repo_path: PathBuf,
         full_mode: bool,
         branch_mode: bool,
+        extra_force_patterns: Vec<String>,
     ) -> Result<Self> {
         let remote_path = PathBuf::from("/home/workspace/scio");
 
@@ -45,14 +54,22 @@ impl SyncDaemon {
         let health_monitor = HealthMonitor::new(workspace_name.clone());
         let stats_tracker = SyncStatsTracker::new(&devdock_id)?;
 
-        // Load persisted force-watch patterns
-        let force_patterns = crate::force::load_force_patterns(&devdock_id)
+        // Load persisted force-watch patterns, then layer profile + env on top.
+        let persisted = crate::force::load_force_patterns(&devdock_id)
             .map(|fp| fp.patterns)
             .unwrap_or_default();
+        let env_patterns = crate::force::patterns_from_env();
+        let force_patterns =
+            crate::force::merge_patterns(persisted, &extra_force_patterns, &env_patterns);
         let force_patterns_mtime = Self::read_force_patterns_mtime(&devdock_id);
 
         if !force_patterns.is_empty() {
-            info!("Loaded {} force-watch patterns", force_patterns.len());
+            info!(
+                "Loaded {} force-watch patterns (profile: {}, env: {})",
+                force_patterns.len(),
+                extra_force_patterns.len(),
+                env_patterns.len()
+            );
         }
 
         Ok(Self {
@@ -67,6 +84,7 @@ impl SyncDaemon {
             branch_mode,
             force_patterns,
             force_patterns_mtime,
+            extra_force_patterns,
         })
     }
 
@@ -390,7 +408,8 @@ impl SyncDaemon {
         }
     }
 
-    /// Reload force-watch patterns if the file has been modified.
+    /// Reload force-watch patterns if the persisted file has been modified, re-merging
+    /// with the profile-level patterns and env var on every reload.
     fn reload_force_patterns_if_changed(&mut self) {
         let patterns_path = crate::force::force_patterns_path(&self.devdock_id);
         if let Ok(meta) = fs::metadata(&patterns_path) {
@@ -398,7 +417,12 @@ impl SyncDaemon {
                 if self.force_patterns_mtime.map_or(true, |m| modified > m) {
                     info!("Force patterns file changed, reloading...");
                     if let Ok(fp) = crate::force::load_force_patterns(&self.devdock_id) {
-                        self.force_patterns = fp.patterns;
+                        let env_patterns = crate::force::patterns_from_env();
+                        self.force_patterns = crate::force::merge_patterns(
+                            fp.patterns,
+                            &self.extra_force_patterns,
+                            &env_patterns,
+                        );
                         self.watch_force_pattern_dirs();
                     }
                     self.force_patterns_mtime = Some(modified);
@@ -479,6 +503,7 @@ pub fn start_daemon_foreground(
     full_mode: bool,
     branch_mode: bool,
     log_level: &str,
+    extra_force_patterns: Vec<String>,
 ) -> Result<()> {
     info!("Log level: {}", log_level);
     info!("Starting sync daemon in FOREGROUND");
@@ -494,6 +519,7 @@ pub fn start_daemon_foreground(
         repo_path.to_path_buf(),
         full_mode,
         branch_mode,
+        extra_force_patterns,
     )?;
 
     daemon.start()
@@ -507,6 +533,7 @@ pub fn start_daemon(
     full_mode: bool,
     branch_mode: bool,
     log_level: &str,
+    extra_force_patterns: &[String],
 ) -> Result<u32> {
     use std::fs::OpenOptions;
     use std::process::Command;
@@ -542,6 +569,19 @@ pub fn start_daemon(
         .arg(if branch_mode { "true" } else { "false" })
         .arg(log_level);
 
+    // Profile-level patterns ride as an env var so the subprocess picks them up without
+    // changing the positional arg layout. Any pre-existing `DEVDOCK_FORCE_SYNC_PATTERNS`
+    // in the caller's env is preserved and merged back in by the daemon.
+    if !extra_force_patterns.is_empty() {
+        let existing = std::env::var(crate::force::FORCE_PATTERNS_ENV_VAR).unwrap_or_default();
+        let merged = if existing.trim().is_empty() {
+            extra_force_patterns.join(",")
+        } else {
+            format!("{},{}", existing, extra_force_patterns.join(","))
+        };
+        cmd.env(crate::force::FORCE_PATTERNS_ENV_VAR, merged);
+    }
+
     // Redirect stdin/stdout/stderr to log file
     cmd.stdin(std::process::Stdio::null())
         .stdout(
@@ -567,6 +607,9 @@ pub fn start_daemon(
 }
 
 /// Run the sync daemon (called by hidden __sync_daemon__ command).
+///
+/// The subprocess inherits env, so `DEVDOCK_FORCE_SYNC_PATTERNS` (set by the parent to
+/// carry profile-level patterns) is read via `SyncDaemon::new`'s env merge.
 pub fn run_daemon_process(
     devdock_id: &str,
     workspace_name: &str,
@@ -591,6 +634,9 @@ pub fn run_daemon_process(
         repo_path.clone(),
         full_mode,
         branch_mode,
+        // Subprocess: profile patterns arrive via DEVDOCK_FORCE_SYNC_PATTERNS, so no
+        // extra layer is needed here.
+        Vec::new(),
     ) {
         Ok(d) => {
             info!("Sync daemon created successfully");

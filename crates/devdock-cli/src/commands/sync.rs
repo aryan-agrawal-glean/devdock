@@ -2,11 +2,13 @@
 
 use anyhow::{anyhow, Result};
 use colored::Colorize;
+use devdock_config::ProfileLoader;
 use devdock_state::StateManager;
 use devdock_sync::daemon as sync_daemon;
 use devdock_sync::stats;
 use serde::Deserialize;
 use std::path::PathBuf;
+use tracing::warn;
 
 #[derive(Debug, Deserialize)]
 struct QueueData {
@@ -24,8 +26,16 @@ pub async fn start(full: bool, log_level: &str) -> Result<()> {
     let (devdock_id, workspace_name) = get_current_instance(&state).await?;
     let worktree = get_current_worktree()?;
 
+    // Look up the profile the instance was started with and extract any profile-level
+    // force-sync patterns. These survive instance recreation because they live in the
+    // repo, not in ~/.devdock/sync/<id>.force_patterns.json.
+    let force_patterns = load_profile_force_patterns(&state, &devdock_id).await;
+
     println!("Starting file sync...");
     println!("  Mode: {}", if full { "all files" } else { "git-tracked only" });
+    if !force_patterns.is_empty() {
+        println!("  Profile force-sync patterns: {}", force_patterns.len().to_string().cyan());
+    }
 
     let repo_path = PathBuf::from(&worktree);
     let _pid = sync_daemon::start_daemon(
@@ -35,6 +45,7 @@ pub async fn start(full: bool, log_level: &str) -> Result<()> {
         full,
         false, // branch_mode = false (manual sync always uses diff mode)
         log_level,
+        &force_patterns,
     )?;
 
     // Update database
@@ -461,6 +472,31 @@ fn get_current_worktree() -> Result<String> {
     }
 
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// Look up the instance's profile name in state and read its `sync.force_patterns`.
+///
+/// Best-effort: any failure (instance gone, profile missing, YAML malformed) returns an
+/// empty vec rather than aborting sync startup. The persisted per-instance file and
+/// env-var paths still work in that case.
+async fn load_profile_force_patterns(state: &StateManager, devdock_id: &str) -> Vec<String> {
+    let instance = match state.get_instance(devdock_id).await {
+        Ok(Some(i)) => i,
+        Ok(None) => return Vec::new(),
+        Err(e) => {
+            warn!("Could not look up instance for force-sync patterns: {e}");
+            return Vec::new();
+        }
+    };
+
+    let loader = ProfileLoader::new();
+    match loader.load(&instance.profile) {
+        Ok(profile) => profile.sync.force_patterns,
+        Err(e) => {
+            warn!("Could not load profile '{}' for force-sync patterns: {e}", instance.profile);
+            Vec::new()
+        }
+    }
 }
 
 /// Show sync history.

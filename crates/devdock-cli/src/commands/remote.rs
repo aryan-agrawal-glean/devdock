@@ -532,6 +532,7 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
             false,           // full_mode = false (don't sync everything)
             use_branch_mode, // branch_mode = true when --branch specified
             &log_level,
+            &loaded_profile.sync.force_patterns,
         ) {
             Ok(_) => {
                 state

@@ -215,6 +215,7 @@ mod tests {
             env: HashMap::new(),
             ini_overrides: Vec::new(),
             multi_project: None,
+            sync: Default::default(),
         };
 
         let resolver = DependencyResolver::new();
