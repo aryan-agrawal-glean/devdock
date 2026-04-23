@@ -12,10 +12,12 @@ use crate::ini_parser::ParsedIniConfig;
 use crate::sql::SqlUtils;
 use anyhow::{Context, Result};
 use std::collections::HashSet;
+use std::io::Read;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::process::Command as TokioCommand;
 use tracing::{debug, info, warn};
@@ -63,6 +65,37 @@ fn kill_proxy_group(mut process: std::process::Child) {
     }
     let _ = process.kill();
     let _ = process.wait();
+}
+
+/// Cap on captured stderr/stdout from a proxy subprocess. We only need the
+/// tail for diagnostics; bound memory so a chatty proxy can't OOM us.
+const PROXY_LOG_CAP: usize = 64 * 1024;
+
+/// Drain a child pipe into a shared buffer until EOF. Trims from the front
+/// if we exceed `PROXY_LOG_CAP` so we retain the most recent output (which
+/// is usually the error that matters).
+fn drain_pipe_into<R: Read + Send + 'static>(mut reader: R, buf: Arc<Mutex<Vec<u8>>>) {
+    std::thread::spawn(move || {
+        let mut tmp = [0u8; 4096];
+        loop {
+            match reader.read(&mut tmp) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    if let Ok(mut g) = buf.lock() {
+                        g.extend_from_slice(&tmp[..n]);
+                        if g.len() > PROXY_LOG_CAP {
+                            let drop_n = g.len() - PROXY_LOG_CAP;
+                            g.drain(0..drop_n);
+                        }
+                    }
+                }
+            }
+        }
+    });
+}
+
+fn snapshot(buf: &Arc<Mutex<Vec<u8>>>) -> String {
+    buf.lock().map(|g| String::from_utf8_lossy(&g).to_string()).unwrap_or_default()
 }
 
 /// SQL bucket URL pattern
@@ -172,15 +205,13 @@ impl GoogleSqlManager {
 
         // Note: NOT using --auto-iam-authn here, we use devdock_user with password
         let mut cmd = Command::new("cloud-sql-proxy");
-        cmd.args([&connection_name, "-p", &port.to_string(), "--address", "0.0.0.0"])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        let child = apply_process_group(cmd).spawn().context(
-            "Failed to start cloud-sql-proxy. Is it installed? brew install cloud-sql-proxy",
-        )?;
-
-        // Wait for proxy to be ready
-        Self::wait_for_port(port, Duration::from_secs(30))?;
+        cmd.args([&connection_name, "-p", &port.to_string(), "--address", "0.0.0.0"]);
+        let child =
+            Self::start_proxy_and_wait("cloud-sql-proxy", cmd, port, Duration::from_secs(30))
+                .context(
+                    "cloud-sql-proxy failed to start. \
+             Is it installed (brew install cloud-sql-proxy) and do you have access to the project?",
+                )?;
 
         println!("     ✅ Cloud SQL Proxy ready on port {port}");
         Ok(child)
@@ -226,35 +257,76 @@ impl GoogleSqlManager {
             "-N",
             "-L",
             &format!("0.0.0.0:{local_port}:127.0.0.1:{remote_port}"),
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-        let child = apply_process_group(cmd).spawn().context("Failed to start bastion tunnel")?;
-
-        // Wait for tunnel to be ready
-        Self::wait_for_port(local_port, Duration::from_secs(60))?;
+        ]);
+        let child = Self::start_proxy_and_wait(
+            "bastion tunnel (gcloud compute ssh)",
+            cmd,
+            local_port,
+            Duration::from_secs(60),
+        )?;
 
         println!("     ✅ Bastion tunnel ready on port {local_port}");
         Ok(child)
     }
 
-    /// Wait for a port to become available (i.e. something is listening).
+    /// Spawn a proxy/tunnel subprocess and wait for `port` to open.
     ///
-    /// CAVEAT: this only proves *some* process is bound to the port. Callers
-    /// that care about *which* process must pair this with an `ensure_port_free`
-    /// check before spawn so we don't mistake a leftover tunnel for a
-    /// freshly-started proxy.
-    fn wait_for_port(port: u16, timeout: Duration) -> Result<()> {
-        let start = std::time::Instant::now();
+    /// Pipes stdout+stderr of the child into bounded buffers, so that:
+    /// - If `port` never opens within `timeout`, we surface the child's
+    ///   stderr tail in the error (the real reason — bad auth, missing
+    ///   binary arg, no access to project — almost always ends up there).
+    /// - If the child exits early before `port` opens, we detect that
+    ///   eagerly instead of grinding through the full `timeout`.
+    /// - If the proxy comes up cleanly, the drain threads keep running
+    ///   until the child is killed by `cleanup_proxy`, so the pipe never
+    ///   fills up and blocks the subprocess.
+    fn start_proxy_and_wait(
+        label: &str,
+        mut cmd: Command,
+        port: u16,
+        timeout: Duration,
+    ) -> Result<std::process::Child> {
+        cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+        let mut child =
+            apply_process_group(cmd).spawn().with_context(|| format!("Failed to start {label}"))?;
 
-        while start.elapsed() < timeout {
+        let stderr_buf: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+        let stdout_buf: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+        if let Some(stderr) = child.stderr.take() {
+            drain_pipe_into(stderr, Arc::clone(&stderr_buf));
+        }
+        if let Some(stdout) = child.stdout.take() {
+            drain_pipe_into(stdout, Arc::clone(&stdout_buf));
+        }
+
+        let start = std::time::Instant::now();
+        loop {
             if Self::is_port_bound(port) {
-                return Ok(());
+                return Ok(child);
+            }
+            if let Ok(Some(status)) = child.try_wait() {
+                // Give drain threads a moment to flush the final pipe contents.
+                std::thread::sleep(Duration::from_millis(100));
+                anyhow::bail!(
+                    "{label} exited early (status={status}) before port {port} was ready.\n\
+                     --- {label} stderr ---\n{}\n--- {label} stdout ---\n{}",
+                    snapshot(&stderr_buf).trim(),
+                    snapshot(&stdout_buf).trim(),
+                );
+            }
+            if start.elapsed() >= timeout {
+                let stderr = snapshot(&stderr_buf);
+                let stdout = snapshot(&stdout_buf);
+                kill_proxy_group(child);
+                anyhow::bail!(
+                    "Timeout ({timeout:?}) waiting for {label} to open port {port}.\n\
+                     --- {label} stderr ---\n{}\n--- {label} stdout ---\n{}",
+                    stderr.trim(),
+                    stdout.trim(),
+                );
             }
             std::thread::sleep(Duration::from_secs(1));
         }
-
-        anyhow::bail!("Timeout waiting for port {port} to be ready")
     }
 
     /// Wait for a port to be released (nothing listening). Used after
@@ -701,14 +773,15 @@ impl SqlPlatformManager for AwsSqlManager {
             &payload.to_string(),
             "--region",
             &self.region,
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-        let child = apply_process_group(cmd).spawn().context("Failed to start SSM session")?;
+        ]);
 
-        // Wait for port
         println!("     ⏳ Waiting for SSM tunnel to be ready...");
-        GoogleSqlManager::wait_for_port(3309, Duration::from_secs(60))?;
+        let child = GoogleSqlManager::start_proxy_and_wait(
+            "aws ssm start-session",
+            cmd,
+            3309,
+            Duration::from_secs(60),
+        )?;
 
         println!("     ✅ SSM tunnel ready on port 3309");
         Ok(Some(child))
