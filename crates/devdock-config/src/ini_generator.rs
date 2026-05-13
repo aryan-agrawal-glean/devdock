@@ -444,6 +444,7 @@ impl IniGenerator {
 
         self.config.set("queryapi", "baseURL", &glean_base_url);
         self.config.set("queryapi", "baseInternalURL", &glean_base_url);
+        self.config.set("queryapi", "baseExternalURL", "https://local.glean.com:8321");
         // Note: preferClusterBaseUrl is set by deployment_wizard, not QE
 
         // AWS-specific timeouts for local QE (matches Python behavior)
