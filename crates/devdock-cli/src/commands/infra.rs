@@ -534,7 +534,20 @@ pub async fn sql_setup(
 
     // Handle project change
     if prev_project.is_empty() {
-        // First run or state was cleared — record the project and force a full export
+        // First run on this data disk. The state file is missing, but the dbdata
+        // Docker volume can still carry a stale schema (e.g. from a pre-baked
+        // packer image or a cloned Coder prebuild). When the caller asked for a
+        // full cleanup — or we're on Coder, where the CODER env-var override at
+        // the top of this fn already promoted full_cleanup to true — drop and
+        // recreate so schema scripts run against an empty database.
+        if full_cleanup {
+            output::info(
+                "First run with full cleanup requested, dropping pre-existing databases...",
+            );
+            state.clear_scripts()?;
+            manager.clean_sql("")?;
+            state.set_full_cleanup(true)?;
+        }
         update_project = true;
         update_tables = true;
     } else if project != prev_project {
