@@ -107,7 +107,7 @@ pub fn get_jira_token() -> Result<String> {
             "secrets",
             "versions",
             "access",
-            "1",
+            "latest",
             "--secret=ONCALL_USER_JIRA_TOKEN",
         ])
         .output()

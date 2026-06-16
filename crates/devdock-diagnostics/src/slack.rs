@@ -59,7 +59,7 @@ pub fn get_slack_bot_token() -> Result<String> {
             "secrets",
             "versions",
             "access",
-            "1",
+            "latest",
             "--secret=GLEAN_AUTOMATION_SLACK_BOT_TOKEN",
         ])
         .output()
