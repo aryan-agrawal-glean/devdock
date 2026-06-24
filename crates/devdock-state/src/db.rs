@@ -245,6 +245,21 @@ impl StateManager {
         Ok(())
     }
 
+    /// Update instance profile.
+    pub async fn update_profile(&self, id: &str, profile: &str) -> Result<()> {
+        let now =
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs() as i64;
+
+        sqlx::query("UPDATE instances SET profile = ?, updated_at = ? WHERE id = ?")
+            .bind(profile)
+            .bind(now)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+
+        Ok(())
+    }
+
     /// Delete an instance.
     pub async fn delete_instance(&self, id: &str) -> Result<()> {
         sqlx::query("DELETE FROM instances WHERE id = ?").bind(id).execute(&self.pool).await?;

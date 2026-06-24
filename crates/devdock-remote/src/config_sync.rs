@@ -70,6 +70,48 @@ fn compute_remote_profile_path(profile_path: &Path) -> Result<(String, String)> 
     Ok((remote_path, remote_dir))
 }
 
+/// Sync only the selected profile file to a remote workspace.
+pub fn sync_profile_file(workspace: &str, profile_path: &Path, verbose: bool) -> Result<()> {
+    if !profile_path.exists() {
+        return Err(RemoteError::ConfigSyncError(format!("Profile not found: {profile_path:?}")));
+    }
+
+    let profile_content = std::fs::read_to_string(profile_path)
+        .map_err(|e| RemoteError::ConfigSyncError(format!("Failed to read profile: {e}")))?;
+    let (remote_profile_path, remote_profile_dir) = compute_remote_profile_path(profile_path)?;
+
+    if verbose {
+        println!("    → Syncing profile file to remote...");
+    }
+
+    let script = format!(
+        "set -e\nmkdir -p '{}'\ncat > '{}' << 'DEVDOCK_PROFILE_EOF'\n{}\nDEVDOCK_PROFILE_EOF\n",
+        remote_profile_dir, remote_profile_path, profile_content
+    );
+
+    let output = Command::new("coder")
+        .arg("ssh")
+        .arg(workspace)
+        .arg("--")
+        .arg(&script)
+        .output()
+        .map_err(|e| RemoteError::ConfigSyncError(format!("Profile sync SSH failed: {e}")))?;
+
+    if !output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(RemoteError::ConfigSyncError(format!(
+            "Failed to sync profile file:\nstdout:\n{stdout}\nstderr:\n{stderr}"
+        )));
+    }
+
+    if verbose {
+        println!("      ✓ Profile synced to {remote_profile_path}");
+    }
+
+    Ok(())
+}
+
 // ─── AWS credentials (local validation only, no SSH) ───────────────────────────
 
 /// Validate AWS credentials via environment variables.

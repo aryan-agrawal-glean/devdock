@@ -299,6 +299,36 @@ enum ProfileCommands {
     List,
     /// Show profile details
     Show { name: String },
+    /// Apply profile changes to the running DevDock without tearing it down
+    Apply {
+        /// Profile name to apply. Defaults to the running instance's profile.
+        #[arg(long)]
+        profile: Option<String>,
+
+        /// Target instance ID. Defaults to the instance for the current workspace.
+        #[arg(long)]
+        instance: Option<String>,
+
+        /// Active services to preserve/use (comma-separated). Defaults to current temp_profile active services.
+        #[arg(short, long)]
+        services: Option<String>,
+
+        /// Apply in the current environment only; used internally by remote apply and Tilt helpers.
+        #[arg(long, hide = true)]
+        local_only: bool,
+
+        /// Preview target/delta without writing files or triggering resources.
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Do not trigger sql-hydrator even when local SQL is configured.
+        #[arg(long)]
+        no_sql_refresh: bool,
+
+        /// Skip confirmation prompts, including backing project switches.
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
     /// Create a new profile interactively
     Create,
 }
@@ -729,6 +759,26 @@ async fn main() {
         Commands::Profile { command } => match command {
             ProfileCommands::List => commands::profile::list().await,
             ProfileCommands::Show { name } => commands::profile::show(&name).await,
+            ProfileCommands::Apply {
+                profile,
+                instance,
+                services,
+                local_only,
+                dry_run,
+                no_sql_refresh,
+                yes,
+            } => {
+                commands::profile::apply(commands::profile::ApplyOptions {
+                    profile,
+                    instance,
+                    services,
+                    local_only,
+                    dry_run,
+                    no_sql_refresh,
+                    yes,
+                })
+                .await
+            }
             ProfileCommands::Create => commands::profile::create().await,
         },
 

@@ -286,7 +286,7 @@ fn get_git_branch() -> Result<String> {
 }
 
 /// Generate configurations using Rust (parallel)
-async fn generate_configs_rust(
+pub(crate) async fn generate_configs_rust(
     workspace_root: &Path,
     profile: &devdock_core::profile::Profile,
     services: Option<&str>,
@@ -419,7 +419,7 @@ fn start_tilt(services: Option<&str>) -> Result<Child> {
 /// Prefers `DEVDOCK_ROOT` when set so a user invoking `devdock` from a
 /// sibling checkout (e.g. the devdock tooling repo) doesn't get silently
 /// routed to the wrong monorepo. Falls back to walking up from the cwd.
-fn find_workspace_root() -> Result<PathBuf> {
+pub(crate) fn find_workspace_root() -> Result<PathBuf> {
     if let Ok(root) = std::env::var("DEVDOCK_ROOT") {
         if !root.is_empty() {
             let p = PathBuf::from(&root);
