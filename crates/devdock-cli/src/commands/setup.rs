@@ -155,8 +155,9 @@ async fn setup_remote() -> Result<()> {
     println!();
     output::info("Next steps:");
     output::info("  1. Start a remote DevDock: devdock start <profile> --remote");
-    output::info("  2. Or use slim mode: devdock start <profile> --remote --slim");
-    output::info("  3. File sync will be started automatically in slim mode");
+    output::info("     Equivalent legacy form: devdock start <profile> -m remote");
+    output::info("  2. File sync starts automatically for remote DevDock");
+    output::info("  3. For intent-based help: devdock guide remote-start");
 
     Ok(())
 }

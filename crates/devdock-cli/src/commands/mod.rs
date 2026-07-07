@@ -4,6 +4,7 @@ pub mod cleanup;
 pub mod docker;
 pub mod exec;
 pub mod generate;
+pub mod guide;
 pub mod infra;
 pub mod list;
 pub mod logs;

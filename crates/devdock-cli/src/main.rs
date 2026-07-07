@@ -4,7 +4,7 @@ mod commands;
 mod logging;
 mod output;
 
-use clap::{ArgAction, Parser, Subcommand};
+use clap::{ArgAction, Parser, Subcommand, ValueEnum};
 use colored::Colorize;
 use std::process;
 
@@ -18,6 +18,39 @@ struct Cli {
 
     #[command(subcommand)]
     command: Commands,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum StartMode {
+    Local,
+    Remote,
+}
+
+impl std::fmt::Display for StartMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Local => write!(f, "local"),
+            Self::Remote => write!(f, "remote"),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum GuideIntent {
+    /// Start or reuse a remote Coder-backed DevDock
+    RemoteStart,
+    /// Add or change active services in a running DevDock
+    AddService,
+    /// Hydrate or repair local SQL data
+    SqlHydration,
+    /// Inspect or force remote file sync
+    FileSync,
+    /// Fix Docker/GCR/Artifact Registry auth issues
+    DockerAuth,
+    /// Collect status and report a broken session
+    Troubleshoot,
+    /// Recover from stale local state safely
+    Cleanup,
 }
 
 #[derive(Subcommand)]
@@ -36,8 +69,12 @@ enum Commands {
         ci_mode: bool,
 
         /// Start mode: local or remote
-        #[arg(short = 'm', long, default_value = "local")]
-        mode: String,
+        #[arg(short = 'm', long, default_value_t = StartMode::Local)]
+        mode: StartMode,
+
+        /// Shortcut for `--mode remote`
+        #[arg(long)]
+        remote: bool,
 
         /// Use existing Coder workspace
         #[arg(long)]
@@ -237,6 +274,12 @@ enum Commands {
         /// Command that was run when the issue occurred (skip interactive prompt)
         #[arg(long)]
         command: Option<String>,
+    },
+
+    /// Show intent-based command guidance for common workflows
+    Guide {
+        /// What you want to do, e.g. remote-start, add-service, sql-hydration
+        intent: Option<GuideIntent>,
     },
 
     /// Monitor startup resources until all healthy (or timeout)
@@ -624,6 +667,7 @@ async fn main() {
             services,
             ci_mode,
             mode,
+            remote,
             vm,
             workspace_name,
             branch,
@@ -638,7 +682,8 @@ async fn main() {
             dry_run,
             enable_logs,
         } => {
-            if mode == "remote" {
+            let effective_mode = if remote { StartMode::Remote } else { mode };
+            if matches!(effective_mode, StartMode::Remote) {
                 commands::remote::start_remote(commands::remote::RemoteStartConfig {
                     profile,
                     workspace_name,
@@ -741,6 +786,8 @@ async fn main() {
             (Some(s), Some(d), Some(c)) => commands::report::report_bug_with_details(s, d, c).await,
             _ => commands::report::report_bug().await,
         },
+
+        Commands::Guide { intent } => commands::guide::execute(intent).await,
 
         Commands::Monitor { timeout, interval, no_notify, profile } => {
             commands::monitor::execute(timeout, interval, no_notify, profile).await

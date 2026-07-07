@@ -13,7 +13,9 @@ A comprehensive reference for all **implemented** DevDock CLI commands.
 ### 🚀 Quick Start
 ```bash
 devdock start <profile>              # Start local environment
-devdock start <profile> -m remote    # Start remote (Coder) environment
+devdock start <profile> --remote     # Start remote (Coder) environment
+devdock start <profile> -m remote    # Legacy equivalent remote form
+devdock guide <intent>                # Intent-based workflow guidance
 devdock status                        # Check status
 devdock stop                          # Stop current instance
 ```
@@ -22,7 +24,8 @@ devdock stop                          # Stop current instance
 ```bash
 devdock start <profile>               # Start with profile
   -s <services>                       # Start specific services (comma-separated)
-  -m remote                           # Remote mode (Coder workspace)
+  --remote                            # Remote mode shortcut
+  -m remote                           # Remote mode (legacy equivalent)
   --auto-forward                      # Auto-forward ports (remote)
   --ci-mode                           # Non-interactive mode
   --enable-logs                       # Enable rich logging before starting
@@ -54,6 +57,7 @@ devdock docker prune                  # Remove dangling images
 ```bash
 devdock profile list                  # List profiles
 devdock profile show <name>           # Show profile details
+devdock profile apply                 # Apply profile/service changes without teardown
 ```
 
 ### 🗄️ Infrastructure - SQL
@@ -125,6 +129,15 @@ devdock -c                            # Cleanup alias
 devdock setup                         # Initial setup
   --remote                            # Setup for remote mode
 
+devdock guide                         # Show intent-based workflow guidance
+  remote-start                        # Start/reuse remote DevDock
+  add-service                         # Update services without full teardown
+  sql-hydration                       # Hydrate or repair SQL
+  file-sync                           # Inspect or force remote sync
+  docker-auth                         # Fix image pull/auth issues
+  troubleshoot                        # Status/report workflow
+  cleanup                             # Safe cleanup guidance
+
 devdock report                        # Report bug to Jira
   --summary <text>                    # Issue summary
   --description <text>                # Issue description
@@ -162,7 +175,7 @@ devdock stop
 #### Remote Development
 ```bash
 devdock setup --remote
-devdock start my-profile -m remote --auto-forward
+devdock start my-profile --remote --auto-forward
 devdock sync status
 devdock stop
 ```
@@ -177,13 +190,15 @@ devdock start my-profile
 #### Troubleshooting
 ```bash
 devdock status -d
-devdock service logs qe -f
+devdock sync errors -n 20
 devdock docker check
+devdock guide troubleshoot
 devdock cleanup && devdock start my-profile
 devdock report              # If issue persists
 ```
 
 ### 💡 Quick Tips
+- Use `devdock guide <intent>` when you know the workflow but not the exact flags
 - Use `--mode fast` for SQL (hourly snapshots, much faster)
 - Use `-s service1,service2` to start only needed services
 - Use `--soft` cleanup for faster iteration
@@ -199,6 +214,7 @@ devdock report              # If issue persists
 - [Basic Commands](#basic-commands-1)
 - [Docker Management](#docker-management-1)
 - [Profile Management](#profile-management-1)
+- [Intent-Based Guide](#intent-based-guide)
 - [Infrastructure Commands](#infrastructure-commands)
 - [Logging Management](#logging-management-1)
 - [Port Management](#port-management-1)
@@ -223,22 +239,25 @@ devdock start <profile> -s qe,crawler,docbuilder
 devdock start <profile> --ci-mode
 
 # Start in remote mode (Coder workspace)
+devdock start <profile> --remote
+
+# Legacy equivalent remote form
 devdock start <profile> -m remote
 
 # Remote start with custom workspace name
-devdock start <profile> -m remote --workspace-name my-workspace
+devdock start <profile> --remote --workspace-name my-workspace
 
 # Remote start with specific region
-devdock start <profile> -m remote --region us-west1-a
+devdock start <profile> --remote --region us-west1-a
 
 # Remote start with existing VM/workspace
-devdock start <profile> -m remote --vm workspace-name
+devdock start <profile> --remote --vm workspace-name
 
 # Remote start with auto port forwarding
-devdock start <profile> -m remote --auto-forward
+devdock start <profile> --remote --auto-forward
 
 # Remote start with custom port base
-devdock start <profile> -m remote --port-base 8000
+devdock start <profile> --remote --port-base 8000
 
 # Start with verbose progress output
 devdock start <profile> --verbose
@@ -252,6 +271,7 @@ devdock start <profile> --enable-logs
 - `-s, --services <services>`: Comma-separated list of services to start
 - `--enable-logs`: Enable rich logging stack (Grafana/Loki) before starting DevDock
 - `--ci-mode`: Run in non-interactive CI mode
+- `--remote`: Shortcut for `--mode remote`
 - `-m, --mode <mode>`: Start mode - `local` (default) or `remote`
 - `--vm <name>`: Use existing Coder workspace
 - `--workspace-name <name>`: Custom workspace name (default: branch name)
@@ -401,6 +421,68 @@ Display detailed information about a profile.
 
 ```bash
 devdock profile show <profile-name>
+```
+
+---
+
+### Apply Profile Changes
+Apply profile/service changes to the running DevDock without tearing the whole environment down.
+
+```bash
+# Apply the running profile again, preserving current active services
+devdock profile apply
+
+# Apply a specific profile
+devdock profile apply --profile <profile-name>
+
+# Explicitly set active services
+devdock profile apply --services qe,fe,docbuilder
+
+# Preview changes without writing files or triggering resources
+devdock profile apply --dry-run
+
+# Remote apply uses the target running instance/workspace
+devdock profile apply --instance <instance-id>
+```
+
+**Options:**
+- `--profile <name>`: Profile to apply; defaults to the running instance profile
+- `--instance <id>`: Target instance; defaults to the current workspace instance
+- `-s, --services <services>`: Comma-separated active services to use
+- `--dry-run`: Preview target/delta without writing files or triggering resources
+- `--no-sql-refresh`: Do not trigger sql-hydrator even when local SQL is configured
+- `-y, --yes`: Skip confirmation prompts
+
+---
+
+## Intent-Based Guide
+
+Use the guide when you know the intent but not the exact command/flags. This is also the stable entrypoint agents should prefer before guessing DevDock flags.
+
+```bash
+# Show all supported intents
+devdock guide
+
+# Start/reuse remote DevDock
+devdock guide remote-start
+
+# Add or change services in a running DevDock
+devdock guide add-service
+
+# SQL hydration guidance
+devdock guide sql-hydration
+
+# Remote file sync guidance
+devdock guide file-sync
+
+# Docker auth/image pull guidance
+devdock guide docker-auth
+
+# Troubleshooting/reporting guidance
+devdock guide troubleshoot
+
+# Safe cleanup guidance
+devdock guide cleanup
 ```
 
 ---

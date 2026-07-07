@@ -300,8 +300,10 @@ pub fn docker_login_gcr() -> Result<()> {
 
     let token = String::from_utf8_lossy(&token_output.stdout).trim().to_string();
 
-    // Login to artifact registry
-    let login = Command::new("docker")
+    // Login to artifact registry. This must wait for docker login to finish; otherwise
+    // callers can proceed as if auth succeeded while Docker is still failing in the
+    // background.
+    let mut login = Command::new("docker")
         .args([
             "login",
             "-u",
@@ -310,12 +312,25 @@ pub fn docker_login_gcr() -> Result<()> {
             "https://us-central1-docker.pkg.dev",
         ])
         .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
         .spawn()
         .context("Failed to start docker login")?;
 
-    if let Some(mut stdin) = login.stdin {
+    if let Some(mut stdin) = login.stdin.take() {
         use std::io::Write;
-        stdin.write_all(token.as_bytes())?;
+        stdin.write_all(token.as_bytes()).context("Failed to write token to docker login")?;
+    }
+
+    let output = login.wait_with_output().context("Failed to wait for docker login")?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        anyhow::bail!(
+            "Docker login to us-central1-docker.pkg.dev failed.\nstdout: {}\nstderr: {}",
+            stdout.trim(),
+            stderr.trim()
+        );
     }
 
     Ok(())
