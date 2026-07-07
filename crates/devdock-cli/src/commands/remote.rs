@@ -546,9 +546,9 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
             &log_level,
             &loaded_profile.sync.force_patterns,
         ) {
-            Ok(_) => {
+            Ok(pid) => {
                 state
-                    .save_sync_session(&instance_id, &workspace_name, None, false, "running")
+                    .save_sync_session(&instance_id, &workspace_name, Some(pid), false, "running")
                     .await?;
 
                 *t_sync_daemon.lock().unwrap() = Some(wall_start.elapsed().as_secs_f64());

@@ -38,7 +38,7 @@ pub async fn start(full: bool, log_level: &str) -> Result<()> {
     }
 
     let repo_path = PathBuf::from(&worktree);
-    let _pid = sync_daemon::start_daemon(
+    let pid = sync_daemon::start_daemon(
         &devdock_id,
         &workspace_name,
         &repo_path,
@@ -49,7 +49,7 @@ pub async fn start(full: bool, log_level: &str) -> Result<()> {
     )?;
 
     // Update database
-    state.save_sync_session(&devdock_id, &workspace_name, None, full, "running").await?;
+    state.save_sync_session(&devdock_id, &workspace_name, Some(pid), full, "running").await?;
 
     println!("{}", "✅ File sync started".green());
     println!("  Check status: {}", "devdock sync status".cyan());
@@ -85,6 +85,11 @@ pub async fn status() -> Result<()> {
     if let Some((workspace_name, pid, full_mode, db_status)) =
         state.get_sync_session(&devdock_id).await?
     {
+        let liveness = resolve_sync_liveness(&state, &devdock_id, pid, &db_status).await?;
+        let pid = liveness.pid;
+        let db_status = liveness.status;
+        let liveness_note = liveness.note;
+
         // Try to read detailed stats
         match stats::read_session_stats(&devdock_id) {
             Ok(session_stats) => {
@@ -115,6 +120,9 @@ pub async fn status() -> Result<()> {
                 );
                 if let Some(pid) = pid {
                     println!("PID:          {}", pid.to_string().dimmed());
+                }
+                if let Some(note) = &liveness_note {
+                    println!("Liveness:    {}", note.yellow());
                 }
 
                 // Parse uptime from session_start
@@ -314,6 +322,9 @@ pub async fn status() -> Result<()> {
                 if let Some(pid) = pid {
                     println!("PID:          {}", pid.to_string().dimmed());
                 }
+                if let Some(note) = &liveness_note {
+                    println!("Liveness:    {}", note.yellow());
+                }
                 println!();
 
                 // Show pending/in-progress even if no history yet
@@ -408,6 +419,71 @@ pub async fn status() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SyncLiveness {
+    pid: Option<u32>,
+    status: String,
+    note: Option<String>,
+    should_update: bool,
+}
+
+fn compute_sync_liveness(
+    db_status: &str,
+    db_pid: Option<u32>,
+    file_pid: Option<u32>,
+    process_running: bool,
+) -> SyncLiveness {
+    let pid = db_pid.or(file_pid);
+
+    if db_status != "running" {
+        return SyncLiveness {
+            pid,
+            status: db_status.to_string(),
+            note: None,
+            should_update: false,
+        };
+    }
+
+    match pid {
+        Some(pid) if process_running => SyncLiveness {
+            pid: Some(pid),
+            status: "running".to_string(),
+            note: None,
+            should_update: db_pid != Some(pid),
+        },
+        Some(pid) => SyncLiveness {
+            pid: Some(pid),
+            status: "error".to_string(),
+            note: Some("daemon process is not running".to_string()),
+            should_update: true,
+        },
+        None => SyncLiveness {
+            pid: None,
+            status: "error".to_string(),
+            note: Some("daemon PID is missing".to_string()),
+            should_update: true,
+        },
+    }
+}
+
+async fn resolve_sync_liveness(
+    state: &StateManager,
+    devdock_id: &str,
+    db_pid: Option<u32>,
+    db_status: &str,
+) -> Result<SyncLiveness> {
+    let file_pid = sync_daemon::read_daemon_pid(devdock_id).ok().flatten();
+    let pid = db_pid.or(file_pid);
+    let process_running = pid.is_some_and(|pid| sync_daemon::is_daemon_running(devdock_id, pid));
+    let liveness = compute_sync_liveness(db_status, db_pid, file_pid, process_running);
+
+    if liveness.should_update {
+        state.update_sync_session_liveness(devdock_id, liveness.pid, &liveness.status).await?;
+    }
+
+    Ok(liveness)
 }
 
 /// Format bytes in human-readable format
@@ -689,4 +765,84 @@ pub async fn errors(tail: Option<usize>) -> Result<()> {
     println!();
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn liveness_keeps_running_when_db_pid_is_alive() {
+        let liveness = compute_sync_liveness("running", Some(123), None, true);
+
+        assert_eq!(
+            liveness,
+            SyncLiveness {
+                pid: Some(123),
+                status: "running".to_string(),
+                note: None,
+                should_update: false,
+            }
+        );
+    }
+
+    #[test]
+    fn liveness_backfills_file_pid_when_alive() {
+        let liveness = compute_sync_liveness("running", None, Some(456), true);
+
+        assert_eq!(
+            liveness,
+            SyncLiveness {
+                pid: Some(456),
+                status: "running".to_string(),
+                note: None,
+                should_update: true,
+            }
+        );
+    }
+
+    #[test]
+    fn liveness_marks_running_session_error_when_pid_dead() {
+        let liveness = compute_sync_liveness("running", Some(123), None, false);
+
+        assert_eq!(
+            liveness,
+            SyncLiveness {
+                pid: Some(123),
+                status: "error".to_string(),
+                note: Some("daemon process is not running".to_string()),
+                should_update: true,
+            }
+        );
+    }
+
+    #[test]
+    fn liveness_marks_running_session_error_when_pid_missing() {
+        let liveness = compute_sync_liveness("running", None, None, false);
+
+        assert_eq!(
+            liveness,
+            SyncLiveness {
+                pid: None,
+                status: "error".to_string(),
+                note: Some("daemon PID is missing".to_string()),
+                should_update: true,
+            }
+        );
+    }
+
+    #[test]
+    fn liveness_does_not_mutate_stopped_session() {
+        let liveness = compute_sync_liveness("stopped", Some(123), None, true);
+
+        assert_eq!(
+            liveness,
+            SyncLiveness {
+                pid: Some(123),
+                status: "stopped".to_string(),
+                note: None,
+                should_update: false,
+            }
+        );
+    }
 }

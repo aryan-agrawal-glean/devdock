@@ -606,6 +606,65 @@ pub fn start_daemon(
     Ok(pid)
 }
 
+pub fn read_daemon_pid(devdock_id: &str) -> Result<Option<u32>> {
+    let pid_file = SyncDaemon::get_pid_dir().join(format!("{devdock_id}.pid"));
+    if !pid_file.exists() {
+        return Ok(None);
+    }
+
+    let pid_str = fs::read_to_string(pid_file)?;
+    Ok(parse_pid(&pid_str))
+}
+
+pub fn is_daemon_running(devdock_id: &str, pid: u32) -> bool {
+    is_process_alive(pid) && process_command_matches_daemon(devdock_id, pid)
+}
+
+fn parse_pid(contents: &str) -> Option<u32> {
+    contents.trim().parse::<u32>().ok()
+}
+
+fn command_matches_daemon(command: &str, devdock_id: &str) -> bool {
+    command.contains("__sync_daemon__") && command.contains(devdock_id)
+}
+
+#[cfg(unix)]
+fn is_process_alive(pid: u32) -> bool {
+    std::process::Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+#[cfg(windows)]
+fn is_process_alive(pid: u32) -> bool {
+    std::process::Command::new("tasklist")
+        .args(["/FI", &format!("PID eq {pid}")])
+        .output()
+        .is_ok_and(|output| {
+            output.status.success()
+                && String::from_utf8_lossy(&output.stdout).contains(&pid.to_string())
+        })
+}
+
+#[cfg(unix)]
+fn process_command_matches_daemon(devdock_id: &str, pid: u32) -> bool {
+    std::process::Command::new("ps")
+        .args(["-p", &pid.to_string(), "-o", "command="])
+        .output()
+        .is_ok_and(|output| {
+            output.status.success()
+                && command_matches_daemon(&String::from_utf8_lossy(&output.stdout), devdock_id)
+        })
+}
+
+#[cfg(windows)]
+fn process_command_matches_daemon(_devdock_id: &str, _pid: u32) -> bool {
+    // Windows tasklist does not reliably expose command-line args without PowerShell/CIM.
+    // Treat the PID existence check as the liveness signal on Windows for now.
+    true
+}
+
 /// Run the sync daemon (called by hidden __sync_daemon__ command).
 ///
 /// The subprocess inherits env, so `DEVDOCK_FORCE_SYNC_PATTERNS` (set by the parent to
@@ -706,4 +765,37 @@ pub fn cleanup_sync_files(devdock_id: &str) -> Result<()> {
 
     info!("Cleaned up sync files for {}", devdock_id);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_pid_accepts_trimmed_number() {
+        assert_eq!(parse_pid("12345\n"), Some(12345));
+    }
+
+    #[test]
+    fn parse_pid_rejects_invalid_content() {
+        assert_eq!(parse_pid("abc"), None);
+        assert_eq!(parse_pid(""), None);
+    }
+
+    #[test]
+    fn command_matches_expected_daemon() {
+        let command = "/path/devdock __sync_daemon__ dev-123 workspace /repo false false info";
+        assert!(command_matches_daemon(command, "dev-123"));
+    }
+
+    #[test]
+    fn command_rejects_unrelated_process() {
+        assert!(!command_matches_daemon("some unrelated process", "dev-123"));
+    }
+
+    #[test]
+    fn command_rejects_different_devdock_id() {
+        let command = "/path/devdock __sync_daemon__ dev-999 workspace /repo false false info";
+        assert!(!command_matches_daemon(command, "dev-123"));
+    }
 }

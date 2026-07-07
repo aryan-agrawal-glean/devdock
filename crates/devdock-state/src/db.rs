@@ -110,6 +110,11 @@ impl StateManager {
         .execute(&self.pool)
         .await?;
 
+        // Older local DBs may predate sync PID persistence.
+        let _ = sqlx::query("ALTER TABLE sync_sessions ADD COLUMN pid INTEGER")
+            .execute(&self.pool)
+            .await;
+
         Ok(())
     }
 
@@ -409,6 +414,23 @@ impl StateManager {
         .bind(status)
         .execute(&self.pool)
         .await?;
+
+        Ok(())
+    }
+
+    /// Update sync session liveness fields without rewriting sync metadata.
+    pub async fn update_sync_session_liveness(
+        &self,
+        devdock_id: &str,
+        pid: Option<u32>,
+        status: &str,
+    ) -> Result<()> {
+        sqlx::query("UPDATE sync_sessions SET pid = ?, status = ? WHERE devdock_id = ?")
+            .bind(pid.map(i64::from))
+            .bind(status)
+            .bind(devdock_id)
+            .execute(&self.pool)
+            .await?;
 
         Ok(())
     }
