@@ -12,7 +12,10 @@ pub mod workspace;
 
 pub use coder::{check_coder_installed, workspace_exists, CoderWorkspaceConfig};
 pub use port_forward::{PortForwardManager, PortMapping, PortType};
-pub use workspace::{cleanup_existing_devdock, provision_workspace, start_remote_devdock};
+pub use workspace::{
+    cleanup_existing_devdock, inspect_remote_git_state, provision_workspace, start_remote_devdock,
+    RemoteGitState,
+};
 
 use std::process::Command;
 use thiserror::Error;

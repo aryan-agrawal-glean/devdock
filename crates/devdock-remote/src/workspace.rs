@@ -6,6 +6,86 @@ use std::thread::sleep;
 use std::time::Duration;
 use tracing::info;
 
+const REMOTE_SCIO_PATH: &str = "/home/workspace/scio";
+
+/// Git state for the repository inside an existing remote workspace.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteGitState {
+    pub branch: String,
+    pub dirty_entries: Vec<String>,
+}
+
+impl RemoteGitState {
+    pub fn is_dirty(&self) -> bool {
+        !self.dirty_entries.is_empty()
+    }
+}
+
+/// Inspect the git branch and dirty state of the remote repository.
+pub fn inspect_remote_git_state(
+    workspace: &str,
+    log_file: Option<&Path>,
+) -> Result<RemoteGitState> {
+    inspect_remote_git_state_with(workspace, log_file, ssh::ssh_exec_with_log)
+}
+
+fn inspect_remote_git_state_with<F>(
+    workspace: &str,
+    log_file: Option<&Path>,
+    mut exec: F,
+) -> Result<RemoteGitState>
+where
+    F: FnMut(&str, &str, Option<&Path>) -> Result<String>,
+{
+    let script = format!(
+        r#"
+set -e
+cd {REMOTE_SCIO_PATH}
+branch="$(git symbolic-ref --quiet --short HEAD || git rev-parse --short HEAD)"
+printf 'DEVDOCK_GIT_BRANCH\t%s\n' "$branch"
+printf 'DEVDOCK_GIT_STATUS_BEGIN\n'
+git status --porcelain=v1 --untracked-files=all
+printf 'DEVDOCK_GIT_STATUS_END\n'
+"#
+    );
+
+    let output = exec(workspace, &script, log_file)?;
+    parse_remote_git_state(&output)
+}
+
+fn parse_remote_git_state(output: &str) -> Result<RemoteGitState> {
+    let mut branch = None;
+    let mut dirty_entries = Vec::new();
+    let mut in_status = false;
+
+    for line in output.lines() {
+        if let Some(value) = line.strip_prefix("DEVDOCK_GIT_BRANCH\t") {
+            branch = Some(value.trim().to_string());
+            continue;
+        }
+
+        if line == "DEVDOCK_GIT_STATUS_BEGIN" {
+            in_status = true;
+            continue;
+        }
+
+        if line == "DEVDOCK_GIT_STATUS_END" {
+            in_status = false;
+            continue;
+        }
+
+        if in_status && !line.trim().is_empty() {
+            dirty_entries.push(line.to_string());
+        }
+    }
+
+    let branch = branch.filter(|b| !b.is_empty()).ok_or_else(|| {
+        RemoteError::CommandFailed("Failed to parse remote git branch".to_string())
+    })?;
+
+    Ok(RemoteGitState { branch, dirty_entries })
+}
+
 /// Cleanup existing DevDock session on remote workspace.
 pub fn cleanup_existing_devdock(workspace: &str, log_file: Option<&Path>) -> Result<()> {
     info!("Cleaning up existing DevDock processes on {}", workspace);
@@ -438,4 +518,65 @@ fn find_custom_ini_path() -> Option<PathBuf> {
         .unwrap_or_else(|_| ".".to_string());
     let path = PathBuf::from(devdock_root).join("config/custom.ini");
     path.exists().then_some(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_remote_git_state_clean() {
+        let state = parse_remote_git_state(
+            "DEVDOCK_GIT_BRANCH\tfeature/foo\nDEVDOCK_GIT_STATUS_BEGIN\nDEVDOCK_GIT_STATUS_END\n",
+        )
+        .expect("parse clean state");
+
+        assert_eq!(state.branch, "feature/foo");
+        assert!(state.dirty_entries.is_empty());
+        assert!(!state.is_dirty());
+    }
+
+    #[test]
+    fn parse_remote_git_state_dirty() {
+        let state = parse_remote_git_state(
+            "DEVDOCK_GIT_BRANCH\tfeature/foo\nDEVDOCK_GIT_STATUS_BEGIN\n M java/Foo.java\n?? python_scio/new_file.py\nR  old.java -> new.java\nDEVDOCK_GIT_STATUS_END\n",
+        )
+        .expect("parse dirty state");
+
+        assert_eq!(state.branch, "feature/foo");
+        assert_eq!(
+            state.dirty_entries,
+            vec![
+                " M java/Foo.java".to_string(),
+                "?? python_scio/new_file.py".to_string(),
+                "R  old.java -> new.java".to_string(),
+            ]
+        );
+        assert!(state.is_dirty());
+    }
+
+    #[test]
+    fn parse_remote_git_state_requires_branch() {
+        let err = parse_remote_git_state("DEVDOCK_GIT_STATUS_BEGIN\nDEVDOCK_GIT_STATUS_END\n")
+            .expect_err("missing branch should fail");
+
+        assert!(matches!(err, RemoteError::CommandFailed(_)));
+    }
+
+    #[test]
+    fn inspect_remote_git_state_with_uses_injected_executor() {
+        let state =
+            inspect_remote_git_state_with("ws-name", None, |workspace, command, log_file| {
+                assert_eq!(workspace, "ws-name");
+                assert!(command.contains("cd /home/workspace/scio"));
+                assert!(command.contains("git status --porcelain=v1"));
+                assert!(log_file.is_none());
+                Ok("DEVDOCK_GIT_BRANCH\tmain\nDEVDOCK_GIT_STATUS_BEGIN\nDEVDOCK_GIT_STATUS_END\n"
+                    .to_string())
+            })
+            .expect("inspect with injected executor");
+
+        assert_eq!(state.branch, "main");
+        assert!(state.dirty_entries.is_empty());
+    }
 }

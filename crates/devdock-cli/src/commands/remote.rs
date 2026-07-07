@@ -233,6 +233,12 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
             output::info(&format!("Using existing workspace: {existing}"));
             coder::start_workspace(&existing)?;
             logger.log("Workspace started successfully")?;
+            ensure_existing_workspace_safe_to_continue(
+                &existing,
+                use_branch_mode.then_some(branch_for_workspace.as_str()),
+                Some(logger.path()),
+            )?;
+            logger.log("Existing workspace git state passed safety guard")?;
             (existing, true)
         } else {
             // Check if workspace already exists
@@ -257,12 +263,12 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
 
                 if verbose {
                     println!("  What would you like to do?");
-                    println!("  1) Continue with existing workspace (clean and restart DevDock)");
+                    println!("  1) Continue with existing workspace if git state is safe (clean and restart DevDock)");
                     println!("  2) Delete workspace and create fresh");
                     println!("  3) Cancel");
                     println!();
                 } else {
-                    println!("  1) Continue with existing (clean and restart)");
+                    println!("  1) Continue with existing if safe (clean and restart)");
                     println!("  2) Delete and recreate");
                     println!("  3) Cancel");
                     println!();
@@ -291,6 +297,12 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
                         }
                         coder::start_workspace(&workspace_name)?;
                         logger.log("Workspace started")?;
+                        ensure_existing_workspace_safe_to_continue(
+                            &workspace_name,
+                            use_branch_mode.then_some(branch_for_workspace.as_str()),
+                            Some(logger.path()),
+                        )?;
+                        logger.log("Existing workspace git state passed safety guard")?;
 
                         // Cleanup existing DevDock session
                         if verbose {
@@ -889,6 +901,88 @@ fn get_machine_id() -> String {
     std::env::var("USER").unwrap_or_else(|_| "unknown".to_string())
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ExistingWorkspaceGuardIssue {
+    BranchMismatch { expected: String, actual: String },
+    Dirty { entries: Vec<String> },
+}
+
+fn evaluate_existing_workspace_guard(
+    expected_branch: Option<&str>,
+    state: &workspace::RemoteGitState,
+) -> Vec<ExistingWorkspaceGuardIssue> {
+    let mut issues = Vec::new();
+
+    if let Some(expected_branch) = expected_branch {
+        if state.branch != expected_branch {
+            issues.push(ExistingWorkspaceGuardIssue::BranchMismatch {
+                expected: expected_branch.to_string(),
+                actual: state.branch.clone(),
+            });
+        }
+    }
+
+    if state.is_dirty() {
+        issues.push(ExistingWorkspaceGuardIssue::Dirty { entries: state.dirty_entries.clone() });
+    }
+
+    issues
+}
+
+fn ensure_existing_workspace_safe_to_continue(
+    workspace_name: &str,
+    expected_branch: Option<&str>,
+    log_file: Option<&std::path::Path>,
+) -> Result<()> {
+    let state = workspace::inspect_remote_git_state(workspace_name, log_file)
+        .map_err(|e| anyhow!("Failed to inspect remote workspace git state: {e}"))?;
+
+    let issues = evaluate_existing_workspace_guard(expected_branch, &state);
+    if issues.is_empty() {
+        return Ok(());
+    }
+
+    output::error("Refusing to continue with existing remote workspace");
+    println!();
+    println!("Remote workspace: {}", workspace_name.cyan());
+    if let Some(expected_branch) = expected_branch {
+        println!("Expected branch:  {}", expected_branch.cyan());
+    }
+    println!("Remote branch:    {}", state.branch.yellow());
+    println!();
+
+    for issue in &issues {
+        match issue {
+            ExistingWorkspaceGuardIssue::BranchMismatch { expected, actual } => {
+                println!(
+                    "{} Remote branch mismatch: expected {}, found {}",
+                    "•".yellow(),
+                    expected.cyan(),
+                    actual.yellow()
+                );
+            }
+            ExistingWorkspaceGuardIssue::Dirty { entries } => {
+                println!("{} Remote git tree has uncommitted/untracked changes:", "•".yellow());
+                for entry in entries.iter().take(10) {
+                    println!("    {}", entry.yellow());
+                }
+                if entries.len() > 10 {
+                    println!("    ... and {} more", entries.len() - 10);
+                }
+            }
+        }
+    }
+
+    println!();
+    println!("To inspect and resolve:");
+    println!("  {}", format!("coder ssh {workspace_name}").cyan());
+    println!("  {}", "cd /home/workspace/scio && git status --short --branch".cyan());
+    println!();
+    println!("Resolve the remote git state, or choose delete/recreate instead.");
+
+    Err(anyhow!("Existing remote workspace '{workspace_name}' is not safe to continue"))
+}
+
 /// Get current git worktree path.
 fn get_current_worktree() -> Result<String> {
     use std::process::Command;
@@ -1070,6 +1164,71 @@ fn extract_devdock_id_from_filename(filename: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn guard_allows_clean_matching_branch() {
+        let state =
+            workspace::RemoteGitState { branch: "feature/foo".to_string(), dirty_entries: vec![] };
+
+        assert!(evaluate_existing_workspace_guard(Some("feature/foo"), &state).is_empty());
+    }
+
+    #[test]
+    fn guard_ignores_branch_mismatch_without_explicit_branch() {
+        let state = workspace::RemoteGitState { branch: "main".to_string(), dirty_entries: vec![] };
+
+        assert!(evaluate_existing_workspace_guard(None, &state).is_empty());
+    }
+
+    #[test]
+    fn guard_detects_branch_mismatch_when_branch_is_explicit() {
+        let state = workspace::RemoteGitState { branch: "main".to_string(), dirty_entries: vec![] };
+
+        let issues = evaluate_existing_workspace_guard(Some("feature/foo"), &state);
+        assert_eq!(
+            issues,
+            vec![ExistingWorkspaceGuardIssue::BranchMismatch {
+                expected: "feature/foo".to_string(),
+                actual: "main".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn guard_detects_dirty_state() {
+        let state = workspace::RemoteGitState {
+            branch: "feature/foo".to_string(),
+            dirty_entries: vec![" M java/Foo.java".to_string()],
+        };
+
+        let issues = evaluate_existing_workspace_guard(Some("feature/foo"), &state);
+        assert_eq!(
+            issues,
+            vec![ExistingWorkspaceGuardIssue::Dirty {
+                entries: vec![" M java/Foo.java".to_string()],
+            }]
+        );
+    }
+
+    #[test]
+    fn guard_reports_branch_mismatch_and_dirty_state() {
+        let state = workspace::RemoteGitState {
+            branch: "main".to_string(),
+            dirty_entries: vec!["?? new_file.py".to_string()],
+        };
+
+        let issues = evaluate_existing_workspace_guard(Some("feature/foo"), &state);
+        assert_eq!(
+            issues,
+            vec![
+                ExistingWorkspaceGuardIssue::BranchMismatch {
+                    expected: "feature/foo".to_string(),
+                    actual: "main".to_string(),
+                },
+                ExistingWorkspaceGuardIssue::Dirty { entries: vec!["?? new_file.py".to_string()] },
+            ]
+        );
+    }
 
     #[test]
     fn extract_id_from_prefixed_uuid_pid() {
