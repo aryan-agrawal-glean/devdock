@@ -3,6 +3,7 @@
 use crate::output;
 use anyhow::Result;
 use colored::Colorize;
+use devdock_monitor::{ResourceStatus, TiltClient, TiltResource};
 use devdock_state::{Instance, InstanceStatus, StateManager};
 use prettytable::{format, row, Table};
 use std::process::Command;
@@ -91,6 +92,12 @@ async fn print_instance_status(
         println!("\n{}", "Tilt Status".bold());
         println!("{}", "─".repeat(50));
         print_tilt_status(&instance.mode, state_manager).await?;
+
+        if instance.mode == "local" {
+            println!("\n{}", "Tilt Resources".bold());
+            println!("{}", "─".repeat(50));
+            print_tilt_resources();
+        }
     }
 
     // Always show quick access info
@@ -167,6 +174,100 @@ fn print_docker_status() -> Result<()> {
     Ok(())
 }
 
+fn print_tilt_resources() {
+    let client = TiltClient::new();
+
+    match client.get_resources() {
+        Ok(resources) => {
+            let monitored: Vec<_> =
+                resources.into_iter().filter(TiltResource::should_monitor).collect();
+            if monitored.is_empty() {
+                println!("  {}", "No monitored Tilt resources found".yellow());
+                return;
+            }
+
+            print_resource_summary(&monitored);
+            print_resource_table(&monitored);
+        }
+        Err(e) => {
+            println!("  {} {}", "Unable to query Tilt resources:".yellow(), e);
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct ResourceCounts {
+    healthy: usize,
+    pending: usize,
+    failed: usize,
+    disabled: usize,
+    total: usize,
+}
+
+fn count_resources(resources: &[TiltResource]) -> ResourceCounts {
+    ResourceCounts {
+        healthy: resources.iter().filter(|r| r.status == ResourceStatus::Healthy).count(),
+        pending: resources.iter().filter(|r| r.status == ResourceStatus::Pending).count(),
+        failed: resources.iter().filter(|r| r.status == ResourceStatus::Failed).count(),
+        disabled: resources.iter().filter(|r| r.status == ResourceStatus::Disabled).count(),
+        total: resources.len(),
+    }
+}
+
+fn print_resource_summary(resources: &[TiltResource]) {
+    let counts = count_resources(resources);
+    println!(
+        "  Summary: {} healthy, {} pending, {} failed, {} disabled / {} total",
+        counts.healthy.to_string().green(),
+        counts.pending.to_string().yellow(),
+        counts.failed.to_string().red(),
+        counts.disabled.to_string().dimmed(),
+        counts.total
+    );
+}
+
+fn resource_row_values(resource: &TiltResource) -> [String; 6] {
+    [
+        resource.name.clone(),
+        format!("{:?}", resource.resource_type),
+        format_resource_status(&resource.status),
+        resource.runtime_status.clone().unwrap_or_else(|| "-".to_string()),
+        resource.update_status.clone().unwrap_or_else(|| "-".to_string()),
+        resource.compose_health.clone().unwrap_or_else(|| "-".to_string()),
+    ]
+}
+
+fn print_resource_table(resources: &[TiltResource]) {
+    let mut table = Table::new();
+    table.set_format(*format::consts::FORMAT_CLEAN);
+    table.add_row(row!["Resource", "Type", "Status", "Runtime", "Update", "Health"]);
+
+    for resource in resources {
+        let [name, resource_type, status, runtime, update, health] = resource_row_values(resource);
+        table.add_row(row![name, resource_type, status, runtime, update, health]);
+    }
+
+    table.printstd();
+
+    let first_problem = resources
+        .iter()
+        .find(|r| matches!(r.status, ResourceStatus::Failed | ResourceStatus::Pending));
+    if let Some(resource) = first_problem {
+        println!();
+        println!("  {} {}", "Investigate:".dimmed(), format!("tilt logs {}", resource.name).cyan());
+    }
+}
+
+fn format_resource_status(status: &ResourceStatus) -> String {
+    match status {
+        ResourceStatus::Healthy => "Healthy".green().to_string(),
+        ResourceStatus::Pending => "Pending".yellow().to_string(),
+        ResourceStatus::Failed => "Failed".red().to_string(),
+        ResourceStatus::Disabled => "Disabled".dimmed().to_string(),
+        ResourceStatus::Unknown => "Unknown".dimmed().to_string(),
+    }
+}
+
 async fn print_tilt_status(mode: &str, state_manager: &StateManager) -> Result<()> {
     if mode == "remote" {
         // For remote mode, check Tilt on the remote workspace
@@ -234,5 +335,64 @@ fn format_timestamp(ts: i64) -> String {
             }
         }
         Err(_) => "unknown".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use devdock_monitor::{ResourceLabel, ResourceType};
+
+    fn resource(name: &str, status: ResourceStatus) -> TiltResource {
+        TiltResource {
+            name: name.to_string(),
+            labels: vec![ResourceLabel::Service],
+            resource_type: ResourceType::Local,
+            status,
+            runtime_status: None,
+            update_status: None,
+            compose_health: None,
+            is_disabled: false,
+            build_start_time: None,
+            build_finish_time: None,
+            build_duration_secs: None,
+        }
+    }
+
+    #[test]
+    fn format_resource_status_formats_all_statuses() {
+        assert!(format_resource_status(&ResourceStatus::Healthy).contains("Healthy"));
+        assert!(format_resource_status(&ResourceStatus::Pending).contains("Pending"));
+        assert!(format_resource_status(&ResourceStatus::Failed).contains("Failed"));
+        assert!(format_resource_status(&ResourceStatus::Disabled).contains("Disabled"));
+        assert!(format_resource_status(&ResourceStatus::Unknown).contains("Unknown"));
+    }
+
+    #[test]
+    fn count_resources_counts_statuses() {
+        let resources = vec![
+            resource("healthy", ResourceStatus::Healthy),
+            resource("pending", ResourceStatus::Pending),
+            resource("failed", ResourceStatus::Failed),
+            resource("disabled", ResourceStatus::Disabled),
+            resource("unknown", ResourceStatus::Unknown),
+        ];
+
+        assert_eq!(
+            count_resources(&resources),
+            ResourceCounts { healthy: 1, pending: 1, failed: 1, disabled: 1, total: 5 }
+        );
+    }
+
+    #[test]
+    fn resource_row_values_uses_dash_for_missing_optional_fields() {
+        let values = resource_row_values(&resource("qe", ResourceStatus::Healthy));
+
+        assert_eq!(values[0], "qe");
+        assert_eq!(values[1], "Local");
+        assert!(values[2].contains("Healthy"));
+        assert_eq!(values[3], "-");
+        assert_eq!(values[4], "-");
+        assert_eq!(values[5], "-");
     }
 }
