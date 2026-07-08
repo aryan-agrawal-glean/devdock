@@ -7,6 +7,40 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tracing::{debug, info, warn};
 
+const TILT_SERVICE_NAME: &str = "tilt";
+const TILT_PORT: u16 = 10350;
+const NGINX_SERVICE_NAME: &str = "nginx";
+const NGINX_PORT: u16 = 8321;
+
+fn push_unique_mapping(
+    mappings: &mut Vec<PortMapping>,
+    service_name: &str,
+    port_type: PortType,
+    local_port: u16,
+    remote_port: u16,
+) {
+    if !mappings
+        .iter()
+        .any(|mapping| mapping.service_name == service_name && mapping.port_type == port_type)
+    {
+        mappings.push(PortMapping {
+            service_name: service_name.to_string(),
+            port_type,
+            local_port,
+            remote_port,
+            process_pid: None,
+        });
+    }
+}
+
+fn local_port_for(service_name: &str, remote_port: u16, offset: u16) -> u16 {
+    if service_name == NGINX_SERVICE_NAME && remote_port == NGINX_PORT {
+        remote_port
+    } else {
+        offset + remote_port
+    }
+}
+
 /// Type of port being forwarded.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -170,14 +204,22 @@ impl PortForwardManager {
 
         let mut mappings = Vec::new();
 
-        // Add Tilt UI port (always present)
-        mappings.push(PortMapping {
-            service_name: "tilt".to_string(),
-            port_type: PortType::TiltUI,
-            local_port: offset + 10350,
-            remote_port: 10350,
-            process_pid: None,
-        });
+        // Add Tilt UI port (always present).
+        push_unique_mapping(
+            &mut mappings,
+            TILT_SERVICE_NAME,
+            PortType::TiltUI,
+            offset + TILT_PORT,
+            TILT_PORT,
+        );
+        // Remote DevDock should always forward nginx so local.glean.com routes work.
+        push_unique_mapping(
+            &mut mappings,
+            NGINX_SERVICE_NAME,
+            PortType::Service,
+            local_port_for(NGINX_SERVICE_NAME, NGINX_PORT, offset),
+            NGINX_PORT,
+        );
 
         // Extract service ports
         if let Some(services) = profile.services {
@@ -193,13 +235,13 @@ impl PortForwardManager {
                 // Add main service port (priority: explicit > config file)
                 let port = service.port.or_else(|| read_service_config_port(&service_name));
                 if let Some(port) = port {
-                    mappings.push(PortMapping {
-                        service_name: service_name.clone(),
-                        port_type: PortType::Service,
-                        local_port: offset + port,
-                        remote_port: port,
-                        process_pid: None,
-                    });
+                    push_unique_mapping(
+                        &mut mappings,
+                        &service_name,
+                        PortType::Service,
+                        local_port_for(&service_name, port, offset),
+                        port,
+                    );
                     debug!("Added port mapping for {}: {}->{}", service_name, offset + port, port);
                 } else {
                     debug!("No port mapping found for service: {}", service_name);
@@ -209,13 +251,13 @@ impl PortForwardManager {
                 let debug_port =
                     service.debug_port.or_else(|| read_service_config_debug_port(&service_name));
                 if let Some(debug_port) = debug_port {
-                    mappings.push(PortMapping {
-                        service_name: service_name.clone(),
-                        port_type: PortType::Debug,
-                        local_port: offset + debug_port,
-                        remote_port: debug_port,
-                        process_pid: None,
-                    });
+                    push_unique_mapping(
+                        &mut mappings,
+                        &service_name,
+                        PortType::Debug,
+                        offset + debug_port,
+                        debug_port,
+                    );
                     debug!(
                         "Added debug port mapping for {}: {}->{}",
                         service_name,
@@ -309,3 +351,64 @@ impl PortForwardManager {
 // Note: We don't implement Drop to stop port forwards automatically
 // because we use std::mem::forget on the Child processes to keep them alive.
 // Port forwards should be stopped explicitly via `devdock stop` or by killing the PIDs.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    fn setup_profile(dir: &TempDir, name: &str, yaml: &str) -> PathBuf {
+        let profiles_dir = dir.path().join("devdock/profiles");
+        fs::create_dir_all(&profiles_dir).unwrap();
+        let profile_path = profiles_dir.join(format!("{name}.yaml"));
+        fs::write(&profile_path, yaml).unwrap();
+        profile_path
+    }
+
+    #[test]
+    fn from_profile_always_includes_tilt_and_nginx() {
+        let tmp = TempDir::new().unwrap();
+        let profile_path = setup_profile(&tmp, "empty", "services: {}");
+
+        let manager =
+            PortForwardManager::from_profile(&profile_path, "workspace", "devdock-id", 1000)
+                .unwrap();
+
+        assert!(manager.mappings.iter().any(|mapping| {
+            mapping.service_name == "tilt"
+                && mapping.port_type == PortType::TiltUI
+                && mapping.local_port == 11350
+                && mapping.remote_port == 10350
+        }));
+        assert!(manager.mappings.iter().any(|mapping| {
+            mapping.service_name == "nginx"
+                && mapping.port_type == PortType::Service
+                && mapping.local_port == 8321
+                && mapping.remote_port == 8321
+        }));
+    }
+
+    #[test]
+    fn from_profile_dedupes_nginx_when_profile_lists_it() {
+        let tmp = TempDir::new().unwrap();
+        let profile_path = setup_profile(
+            &tmp,
+            "default",
+            "services:\n  nginx:\n    type: local\n    port: 8321\n",
+        );
+
+        let manager =
+            PortForwardManager::from_profile(&profile_path, "workspace", "devdock-id", 0).unwrap();
+
+        assert_eq!(
+            manager
+                .mappings
+                .iter()
+                .filter(|mapping| mapping.service_name == "nginx"
+                    && mapping.port_type == PortType::Service)
+                .count(),
+            1
+        );
+    }
+}

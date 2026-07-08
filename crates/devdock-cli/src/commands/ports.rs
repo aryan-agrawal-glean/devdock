@@ -10,6 +10,28 @@ use std::fs::File;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
+const TILT_SERVICE_NAME: &str = "tilt";
+const TILT_PORT: u16 = 10350;
+const NGINX_SERVICE_NAME: &str = "nginx";
+const NGINX_PORT: u16 = 8321;
+
+fn push_unique_port(ports: &mut Vec<(String, u16)>, service_name: &str, port: u16) {
+    if !ports.iter().any(|(name, _)| name == service_name) {
+        ports.push((service_name.to_string(), port));
+    }
+}
+
+fn local_port_for(service_name: &str, remote_port: u16, port_base: u16, no_offset: bool) -> u16 {
+    if no_offset
+        || (service_name == "fe" && remote_port == 8888)
+        || (service_name == NGINX_SERVICE_NAME && remote_port == NGINX_PORT)
+    {
+        remote_port
+    } else {
+        port_base + remote_port
+    }
+}
+
 /// List port mappings (renamed from execute for clarity).
 pub async fn list(instance: Option<String>) -> Result<()> {
     let state = StateManager::new().await?;
@@ -248,12 +270,15 @@ fn find_profile_path(profile_name: &str) -> Result<PathBuf> {
 }
 
 /// Build the list of (service_name, remote_port) from the instance's profile YAML
-/// and devdock_config.json. Always includes `tilt` (10350).
+/// and devdock_config.json. Always includes `tilt` (10350) and `nginx` (8321).
 fn discover_service_ports(profile_name: &str) -> Result<Vec<(String, u16)>> {
     let mut ports: Vec<(String, u16)> = Vec::new();
 
-    // Tilt UI is always forwarded
-    ports.push(("tilt".to_string(), 10350));
+    // Tilt UI is always forwarded.
+    push_unique_port(&mut ports, TILT_SERVICE_NAME, TILT_PORT);
+    // Remote DevDock needs nginx forwarded for local.glean.com routes even when users
+    // request a narrower service set.
+    push_unique_port(&mut ports, NGINX_SERVICE_NAME, NGINX_PORT);
 
     let profile_path = find_profile_path(profile_name)?;
     let contents = std::fs::read_to_string(&profile_path)
@@ -269,7 +294,7 @@ fn discover_service_ports(profile_name: &str) -> Result<Vec<(String, u16)>> {
                 }
             }
             if let Some(port) = resolve_service_port(name, svc.port) {
-                ports.push((name.clone(), port));
+                push_unique_port(&mut ports, name, port);
             }
         }
     }
@@ -294,11 +319,7 @@ async fn forward_all_ports(
     let mut success_count = 0;
 
     for (service_name, remote_port) in &services {
-        let local_port = if no_offset || (service_name == "fe" && *remote_port == 8888) {
-            *remote_port
-        } else {
-            info.port_base + *remote_port
-        };
+        let local_port = local_port_for(service_name, *remote_port, info.port_base, no_offset);
 
         match start_port_forward(
             state,
@@ -338,6 +359,46 @@ async fn forward_all_ports(
     Ok(())
 }
 
+async fn forward_nginx_if_available(
+    state: &StateManager,
+    info: &RemoteInstanceInfo,
+    services: &[(String, u16)],
+    no_offset: bool,
+) -> Result<()> {
+    if let Some((_, nginx_remote_port)) =
+        services.iter().find(|(name, _)| name == NGINX_SERVICE_NAME)
+    {
+        let existing = state.get_port_mappings(&info.devdock_id).await?;
+        if existing.iter().any(|(name, _, _, _, pid)| name == NGINX_SERVICE_NAME && pid.is_some()) {
+            return Ok(());
+        }
+
+        let nginx_local_port =
+            local_port_for(NGINX_SERVICE_NAME, *nginx_remote_port, info.port_base, no_offset);
+        println!("{}", "Forwarding nginx for local.glean.com routes...".cyan());
+        match start_port_forward(
+            state,
+            &info.devdock_id,
+            &info.workspace_name,
+            NGINX_SERVICE_NAME,
+            nginx_local_port,
+            *nginx_remote_port,
+        )
+        .await
+        {
+            Ok(()) => println!(
+                "  ✅ {}: localhost:{} → remote:{}",
+                NGINX_SERVICE_NAME.cyan(),
+                nginx_local_port,
+                nginx_remote_port
+            ),
+            Err(e) => println!("  ⚠️  {}: failed ({})", NGINX_SERVICE_NAME.yellow(), e),
+        }
+    }
+
+    Ok(())
+}
+
 /// Forward a specific service port.
 async fn forward_service_port(
     state: &StateManager,
@@ -353,11 +414,11 @@ async fn forward_service_port(
             anyhow!("Unknown service: {service_name}. Available: {}", available.join(", "))
         })?;
 
-    let local_port = if no_offset || (service_name == "fe" && *remote_port == 8888) {
-        *remote_port
-    } else {
-        info.port_base + remote_port
-    };
+    let local_port = local_port_for(service_name, *remote_port, info.port_base, no_offset);
+
+    if service_name != NGINX_SERVICE_NAME {
+        forward_nginx_if_available(state, info, &services, no_offset).await?;
+    }
 
     println!("{}", format!("Forwarding {service_name} port...").cyan());
     start_port_forward(
@@ -634,13 +695,25 @@ mod tests {
     // ── discover_service_ports ───────────────────────────────────────────────
 
     #[test]
-    fn discover_always_includes_tilt() {
+    fn discover_always_includes_tilt_and_nginx() {
         let _lock = ENV_LOCK.lock().unwrap();
         let tmp = TempDir::new().unwrap();
         setup_profile(&tmp, "empty", "services: {}");
         std::env::set_var("DEVDOCK_ROOT", tmp.path());
         let ports = super::discover_service_ports("empty").unwrap();
         assert!(ports.iter().any(|(n, p)| n == "tilt" && *p == 10350));
+        assert!(ports.iter().any(|(n, p)| n == "nginx" && *p == 8321));
+    }
+
+    #[test]
+    fn discover_dedupes_nginx_when_profile_lists_it() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let tmp = TempDir::new().unwrap();
+        setup_profile(&tmp, "default", "services:\n  nginx:\n    type: local\n    port: 8321\n");
+        std::env::set_var("DEVDOCK_ROOT", tmp.path());
+        let ports = super::discover_service_ports("default").unwrap();
+        assert_eq!(ports.iter().filter(|(n, _)| n == "nginx").count(), 1);
+        assert!(ports.iter().any(|(n, p)| n == "nginx" && *p == 8321));
     }
 
     #[test]
@@ -721,17 +794,15 @@ mod tests {
     #[test]
     fn fe_non_8888_port_uses_offset() {
         // If fe somehow uses a different port, it still gets the offset applied
-        let port_base: u16 = 1000;
-        let remote_port: u16 = 9000;
-        let service_name = "fe";
-        let no_offset = false;
-
-        let local_port = if no_offset || (service_name == "fe" && remote_port == 8888) {
-            remote_port
-        } else {
-            port_base + remote_port
-        };
+        let local_port = super::local_port_for("fe", 9000, 1000, false);
 
         assert_eq!(local_port, 10000);
+    }
+
+    #[test]
+    fn nginx_always_maps_8321_to_8321_regardless_of_offset() {
+        let local_port = super::local_port_for("nginx", 8321, 1000, false);
+
+        assert_eq!(local_port, 8321, "nginx must keep local.glean.com routes on standard port");
     }
 }

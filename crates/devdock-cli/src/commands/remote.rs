@@ -635,11 +635,11 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
             } else {
                 println!(
                     "  💡 Tip: Forward ports with: {}",
-                    "devdock ports forward --all".yellow()
+                    "devdock ports forward --all --no-offset".yellow()
                 );
                 println!(
-                    "         Use {} to skip port offset",
-                    "devdock ports forward --all --no-offset".yellow()
+                    "         {}",
+                    "This includes nginx so local.glean.com routes work.".dimmed()
                 );
             }
 
@@ -681,8 +681,8 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
                 println!(
                     "   {} {}  {}",
                     "•".cyan(),
-                    "devdock ports forward --all".cyan(),
-                    "(forward service ports, add --no-offset to skip offset)".dimmed()
+                    "devdock ports forward --all --no-offset".cyan(),
+                    "(forward service ports including nginx)".dimmed()
                 );
             }
 

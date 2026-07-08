@@ -439,15 +439,20 @@ exit 0
         }
         Some(mgr)
     } else {
-        // Manual mode: only forward Tilt UI
-        info!("Forwarding Tilt UI only (use --auto-forward for all services)");
+        // Manual mode: forward Tilt UI and nginx so local.glean.com routes work.
+        info!("Forwarding Tilt UI and nginx (use --auto-forward for all services)");
         let tilt_port = offset + 10350;
         println!("  Starting port forward: localhost:{tilt_port} -> remote:10350");
-        let _child = coder::port_forward_single(workspace, tilt_port, 10350)?;
+        let tilt_child = coder::port_forward_single(workspace, tilt_port, 10350)?;
         // Keep the child process alive - it will be cleaned up when the program exits
-        std::mem::forget(_child);
+        std::mem::forget(tilt_child);
+
+        println!("  Starting port forward: localhost:8321 -> remote:8321 (nginx)");
+        let nginx_child = coder::port_forward_single(workspace, 8321, 8321)?;
+        std::mem::forget(nginx_child);
+
         if verbose {
-            println!("  ✓ Tilt UI port forward started");
+            println!("  ✓ Tilt UI and nginx port forwards started");
         }
         None
     };
