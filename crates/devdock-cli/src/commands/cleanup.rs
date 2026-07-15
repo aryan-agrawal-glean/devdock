@@ -28,28 +28,33 @@ pub async fn execute(
     let total_steps = if clean_local { 6 } else { 4 };
     let mut step = 1;
 
-    if clean_local {
-        docker::check_docker()?;
+    // Cleanup is also useful when the Docker engine is stopped (or Docker is not
+    // installed), so treat Docker as an optional best-effort component here.
+    let docker_available = clean_local && docker::check_docker().is_ok();
 
+    if clean_local {
         // Step 1: Clean up service containers
         output::step(step, total_steps, "Cleaning service containers...");
-        let containers = docker::get_devdock_containers()?;
-        let mut cleaned = 0;
+        if docker_available {
+            let containers = docker::get_devdock_containers()?;
+            let mut cleaned = 0;
 
-        for container in &containers {
-            // In soft mode, skip infra containers
-            if soft && is_infra_container(container) {
-                continue;
+            for container in &containers {
+                // In soft mode, skip infra containers
+                if soft && is_infra_container(container) {
+                    continue;
+                }
+
+                output::info(&format!("Removing {container}..."));
+                docker::remove_container(container)?;
+                cleaned += 1;
             }
-
-            output::info(&format!("Removing {container}..."));
-            docker::remove_container(container)?;
-            cleaned += 1;
+            output::success(&format!("Cleaned {cleaned} containers"));
+        } else {
+            output::warn("Docker is unavailable; skipping container cleanup");
         }
-        output::success(&format!("Cleaned {cleaned} containers"));
         step += 1;
     }
-
     // Step 2: Clean up generated files
     if keep_generated {
         output::info("Keeping generated Dockerfiles and docker-compose.yaml (use --clean-generated to remove)");
@@ -62,18 +67,22 @@ pub async fn execute(
 
     // Step 3: Clean up Grafana/observability stack
     output::step(step, total_steps, "Cleaning observability stack...");
-    clean_grafana_stack(&devdock_dir, clean_local)?;
+    clean_grafana_stack(&devdock_dir, docker_available)?;
     output::success("Observability stack cleaned");
     step += 1;
 
     if clean_local {
         // Step 4: Clean up dangling images
         output::step(step, total_steps, "Cleaning dangling images...");
-        let removed = docker::remove_dangling_images()?;
-        if removed > 0 {
-            output::success(&format!("Removed {removed} dangling images"));
+        if docker_available {
+            let removed = docker::remove_dangling_images()?;
+            if removed > 0 {
+                output::success(&format!("Removed {removed} dangling images"));
+            } else {
+                output::info("No dangling images found");
+            }
         } else {
-            output::info("No dangling images found");
+            output::warn("Docker is unavailable; skipping dangling image cleanup");
         }
         step += 1;
     }
@@ -248,14 +257,14 @@ fn clean_service_state_dirs(devdock_dir: &Path) {
     }
 }
 
-fn clean_grafana_stack(devdock_dir: &Path, docker: bool) -> Result<()> {
+fn clean_grafana_stack(devdock_dir: &Path, docker_available: bool) -> Result<()> {
     // Remove Grafana data
     let grafana_dir = devdock_dir.join("grafana");
     if grafana_dir.exists() {
         let _ = std::fs::remove_dir_all(&grafana_dir);
     }
 
-    if !docker {
+    if !docker_available {
         return Ok(());
     }
 

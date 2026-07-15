@@ -1,4 +1,5 @@
 use std::process::Command;
+use tempfile::tempdir;
 
 fn devdock() -> Command {
     Command::new(env!("CARGO_BIN_EXE_devdock"))
@@ -36,6 +37,38 @@ fn invalid_start_mode_is_rejected_by_clap() {
         stderr.contains("invalid value") || stderr.contains("possible values"),
         "unexpected stderr:\n{stderr}"
     );
+}
+
+#[test]
+fn cleanup_succeeds_without_docker() {
+    let home = tempdir().expect("create temporary HOME");
+    let workspace = tempdir().expect("create temporary workspace");
+    let no_commands = tempdir().expect("create isolated PATH");
+
+    let output = devdock()
+        .args(["cleanup"])
+        .current_dir(workspace.path())
+        .env("HOME", home.path())
+        .env("DEVDOCK_ROOT", workspace.path())
+        // Ensure this test exercises the missing-Docker-CLI path, regardless of
+        // whether Docker is installed on the machine running the test.
+        .env("PATH", no_commands.path())
+        .output()
+        .expect("run cleanup without docker");
+
+    assert!(
+        output.status.success(),
+        "cleanup should not require Docker:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Docker is unavailable"),
+        "cleanup should explain skipped Docker work:\n{stdout}"
+    );
+    assert!(stdout.contains("Cleanup Complete"), "cleanup should finish:\n{stdout}");
 }
 
 #[test]
