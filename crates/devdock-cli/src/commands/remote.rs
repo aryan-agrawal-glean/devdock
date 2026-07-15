@@ -411,7 +411,7 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
         ))?;
         logger.log(&format!(
             "Remote logs: coder ssh {} -- tail -f /tmp/devdock-start.log",
-            &workspace_name
+            workspace_name
         ))?;
 
         // Step 1: Config sync

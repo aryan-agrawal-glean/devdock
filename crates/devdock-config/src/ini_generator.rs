@@ -599,7 +599,7 @@ impl IniGenerator {
             let port = node.config.env.get("PORT").unwrap_or(&"7976".to_string()).clone();
             self.config.set(
                 "deploy",
-                "computeengine.git_crawler.url",
+                "k8s.git_crawler.url",
                 format!("http://host.docker.internal:{port}/git-crawler"),
             );
             self.config.set("deploy", "git_crawler.machine_type", "e2-small");
