@@ -755,6 +755,21 @@ impl TempProfileGenerator {
         };
 
         let platform = self.profile.platform.as_str();
+        let connection_mode =
+            extra.get("connection_mode").and_then(serde_json::Value::as_str).unwrap_or("auto");
+        if platform == "google" && connection_mode == "kubernetes" {
+            extra.insert(
+                "kubernetes_proxy".to_string(),
+                serde_json::json!({
+                    "target": "deployment/admin-deployment",
+                    "namespace": "default",
+                    "port_forwards": [[3307, 13306], [3308, 13307]],
+                }),
+            );
+            self.profile.sql_account = Some("admin-console".to_string());
+            return;
+        }
+
         // Primary-project path never runs as multi-project: the nested glean_apps_canary
         // case is handled separately by `build_remote_sql_config` in generator.rs.
         let outputs = build_remote_sql_config(metadata, self.dynamic_ini.as_ref(), platform, false);
@@ -959,6 +974,58 @@ mod tests {
     use super::*;
     use crate::ini_parser::ParsedIniConfig;
     use std::path::PathBuf;
+
+    fn private_google_sql_metadata() -> crate::sql::SqlRemoteMetadata {
+        crate::sql::SqlRemoteMetadata {
+            instances: HashMap::from([
+                (
+                    "frontendInstance".to_string(),
+                    "glean-salessavvy2:us-central1:sql-frontend".to_string(),
+                ),
+                (
+                    "backendInstance".to_string(),
+                    "glean-salessavvy2:us-central1:sql-backend".to_string(),
+                ),
+            ]),
+            use_public_ip: false,
+            is_bastion_available: true,
+            bastion_zone: Some("us-central1-a".to_string()),
+            use_iam_auth: true,
+            platform: "google".to_string(),
+            project: "glean-salessavvy2".to_string(),
+        }
+    }
+
+    #[test]
+    fn test_kubernetes_remote_sql_uses_admin_sidecar_without_bastion() {
+        let profile: Profile = serde_yaml::from_str(
+            r#"
+project: glean-salessavvy2
+infra:
+  sql:
+    type: remote
+    connection_mode: kubernetes
+"#,
+        )
+        .unwrap();
+        let mut generator = TempProfileGenerator::new(&PathBuf::from("/tmp"), None)
+            .with_sql_metadata(private_google_sql_metadata());
+        generator.profile.platform = "google".to_string();
+        generator.profile.dns_kubectl = Some("enabled".to_string());
+
+        generator.apply_infra_config("sql", &profile);
+
+        assert!(!generator.profile.infra.contains_key("bastion"));
+        assert_eq!(generator.profile.sql_account.as_deref(), Some("admin-console"));
+        assert_eq!(
+            generator.profile.infra["sql"].extra["kubernetes_proxy"],
+            serde_json::json!({
+                "target": "deployment/admin-deployment",
+                "namespace": "default",
+                "port_forwards": [[3307, 13306], [3308, 13307]],
+            })
+        );
+    }
 
     #[test]
     fn test_opensearch_namespace_default() {

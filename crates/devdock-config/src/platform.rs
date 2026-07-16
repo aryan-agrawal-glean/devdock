@@ -81,6 +81,7 @@ pub struct TempProfile {
 /// DNS kubectl enabled projects
 const DNS_KUBECTL_ENABLED_PROJECTS: &[&str] = &[
     "dev-sandbox-334901",
+    "glean-salessavvy2",
     "salessavvy-test",
     "scio-test-273415",
     "glean-vanitytest",
@@ -678,6 +679,7 @@ mod tests {
     fn test_dns_kubectl_all_whitelisted_projects() {
         // Verify all whitelisted projects are supported
         assert!(GooglePlatform::should_use_dns_kubectl_with_env("dev-sandbox-334901", None));
+        assert!(GooglePlatform::should_use_dns_kubectl_with_env("glean-salessavvy2", None));
         assert!(GooglePlatform::should_use_dns_kubectl_with_env("salessavvy-test", None));
         assert!(GooglePlatform::should_use_dns_kubectl_with_env("scio-test-273415", None));
         assert!(GooglePlatform::should_use_dns_kubectl_with_env("glean-vanitytest", None));
