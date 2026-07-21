@@ -145,6 +145,29 @@ impl DependencyGraph {
             }
         }
 
+        // When QE is local, py_agents must also be local (QE + remote pyagents doesn't work)
+        if let Some(qe_config) = expanded.services.get("qe") {
+            if qe_config.deployment_type == DeploymentType::Local {
+                if let Some(py_agents_config) = expanded.services.get_mut("py_agents") {
+                    py_agents_config.deployment_type = DeploymentType::Local;
+                }
+            }
+        }
+
+        // When QE is in the profile, use valkey instead of redis
+        if expanded.services.contains_key("qe") {
+            expanded.infra.remove("redis");
+            if !expanded.infra.contains_key("valkey") {
+                expanded.infra.insert(
+                    "valkey".to_string(),
+                    InfraConfig {
+                        deployment_type: DeploymentType::Local,
+                        config: HashMap::new(),
+                    },
+                );
+            }
+        }
+
         // Add QE with remote type by default if not present (Python behavior)
         // Python: if 'services' in profile and 'qe' not in comps:
         // Only add QE if the profile already has services AND QE wasn't resolved via dependencies
