@@ -160,10 +160,7 @@ impl DependencyGraph {
             if !expanded.infra.contains_key("valkey") {
                 expanded.infra.insert(
                     "valkey".to_string(),
-                    InfraConfig {
-                        deployment_type: DeploymentType::Local,
-                        config: HashMap::new(),
-                    },
+                    InfraConfig { deployment_type: DeploymentType::Local, config: HashMap::new() },
                 );
             }
         }
