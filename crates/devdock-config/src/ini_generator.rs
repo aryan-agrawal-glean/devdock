@@ -200,6 +200,7 @@ impl IniGenerator {
             // Infrastructure
             "sql" => self.apply_sql_config(node),
             "redis" => self.apply_redis_config(node),
+            "valkey" => self.apply_valkey_config(node),
             "opensearch" => self.apply_opensearch_config(node),
             "memcached" => self.apply_memcached_config(node),
             "rabbitmq" => self.apply_rabbitmq_config(node),
@@ -394,6 +395,13 @@ impl IniGenerator {
         } else {
             self.config.set("redis", "port", "6381");
         }
+    }
+
+    fn apply_valkey_config(&mut self, _node: &ServiceNode) {
+        self.config.set("redis", "useValkeyBackend", "true");
+        self.config.set("valkey", "host", "host.docker.internal");
+        self.config.set("valkey", "port", "6382");
+        self.config.set("valkey", "useTls", "false");
     }
 
     fn apply_opensearch_config(&mut self, node: &ServiceNode) {
