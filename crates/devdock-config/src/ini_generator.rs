@@ -402,6 +402,9 @@ impl IniGenerator {
         self.config.set("valkey", "host", "host.docker.internal");
         self.config.set("valkey", "port", "6382");
         self.config.set("valkey", "useTls", "false");
+        for instance in &["fe_cache", "fe_persistent", "be_cache", "be_persistent"] {
+            self.config.set("valkey", &format!("{instance}.discoveryEndpoints"), "");
+        }
     }
 
     fn apply_opensearch_config(&mut self, node: &ServiceNode) {
@@ -641,6 +644,12 @@ mod tests {
         ServiceNode { name: "sql".to_string(), config, component_type: ComponentType::Infra }
     }
 
+    fn create_local_infra_node(name: &str) -> ServiceNode {
+        let mut config = ServiceConfig::default();
+        config.set_deployment_local(true);
+        ServiceNode { name: name.to_string(), config, component_type: ComponentType::Infra }
+    }
+
     /// Create test context for a given project
     fn create_test_context(project: &str) -> IniGeneratorContext {
         IniGeneratorContext {
@@ -816,5 +825,25 @@ mod tests {
             ini_output.contains("enableHostedComposio = false"),
             "Generated INI should have enableHostedComposio = false"
         );
+    }
+
+    #[test]
+    fn test_local_valkey_clears_cloud_discovery_endpoints() {
+        let mut generator = IniGenerator::new();
+        for instance in &["fe_cache", "fe_persistent", "be_cache", "be_persistent"] {
+            generator.config.set(
+                "valkey",
+                &format!("{instance}.discoveryEndpoints"),
+                "10.0.0.1:6379",
+            );
+        }
+
+        generator.apply_dependency(&create_local_infra_node("valkey"));
+
+        let ini_output = generator.generate();
+        for instance in &["fe_cache", "fe_persistent", "be_cache", "be_persistent"] {
+            assert!(ini_output.contains(&format!("{instance}.discoveryEndpoints = ")));
+            assert!(!ini_output.contains(&format!("{instance}.discoveryEndpoints = 10.0.0.1:6379")));
+        }
     }
 }
