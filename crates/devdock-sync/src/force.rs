@@ -144,10 +144,14 @@ pub const FORCE_PATTERNS_ENV_VAR: &str = "DEVDOCK_FORCE_SYNC_PATTERNS";
 /// Empty / missing var yields an empty vec. Whitespace around entries is trimmed, and
 /// empty entries (e.g. `,,`) are dropped.
 pub fn patterns_from_env() -> Vec<String> {
-    std::env::var(FORCE_PATTERNS_ENV_VAR)
-        .ok()
-        .map(|raw| raw.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
-        .unwrap_or_default()
+    parse_patterns(std::env::var(FORCE_PATTERNS_ENV_VAR).ok().as_deref())
+}
+
+fn parse_patterns(raw: Option<&str>) -> Vec<String> {
+    raw.map(|value| {
+        value.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
+    })
+    .unwrap_or_default()
 }
 
 /// Merge force-sync pattern sources into a deduplicated list while preserving insertion
@@ -220,17 +224,14 @@ mod tests {
 
     #[test]
     fn patterns_from_env_parses_comma_separated() {
-        // Isolate test from environment pollution.
-        std::env::set_var(FORCE_PATTERNS_ENV_VAR, "  config/shards/** , **/BUILD.bazel ,,");
-        let got = patterns_from_env();
-        std::env::remove_var(FORCE_PATTERNS_ENV_VAR);
-
-        assert_eq!(got, vec!["config/shards/**", "**/BUILD.bazel"]);
+        assert_eq!(
+            parse_patterns(Some("  config/shards/** , **/BUILD.bazel ,,")),
+            vec!["config/shards/**", "**/BUILD.bazel"]
+        );
     }
 
     #[test]
     fn patterns_from_env_returns_empty_when_unset() {
-        std::env::remove_var(FORCE_PATTERNS_ENV_VAR);
-        assert!(patterns_from_env().is_empty());
+        assert!(parse_patterns(None).is_empty());
     }
 }
