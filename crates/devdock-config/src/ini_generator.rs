@@ -482,7 +482,7 @@ impl IniGenerator {
             format!("https://local.glean.com:{port}")
         };
 
-        self.config.set("queryapi", "baseURL", &glean_base_url);
+        self.config.set("queryapi", "baseURL", "https://local.glean.com:8321");
         self.config.set("queryapi", "baseInternalURL", &glean_base_url);
         self.config.set("queryapi", "baseExternalURL", "https://local.glean.com:8321");
         // Note: preferClusterBaseUrl is set by deployment_wizard, not QE
