@@ -405,6 +405,12 @@ impl IniGenerator {
         for instance in &["fe_cache", "fe_persistent", "be_cache", "be_persistent"] {
             self.config.set("valkey", &format!("{instance}.discoveryEndpoints"), "");
         }
+        // PKV uses its own redis.url config rather than the generic valkey settings
+        self.config.set(
+            "personal_knowledge_vault",
+            "redis.url",
+            "redis://host.docker.internal:6382",
+        );
     }
 
     fn apply_opensearch_config(&mut self, node: &ServiceNode) {
