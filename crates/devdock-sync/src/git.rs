@@ -1,90 +1,32 @@
 //! Git-aware file listing.
 
-use crate::{Result, SyncError};
+use crate::{
+    policy::{universal_matcher, SyncMatcher},
+    Result, SyncError,
+};
 use git2::Repository;
 use ignore::WalkBuilder;
 use std::path::{Path, PathBuf};
 use tracing::{debug, info, warn};
 
-/// Directories to monitor for sync (matches Python MONITORED_DIRS).
-pub const MONITORED_DIRS: &[&str] = &[
-    "data/",
-    "go/",
-    "python_scio/",
-    "typescript/",
-    "java/",
-    "com/askscio/proto/",
-    "config/",
-    "javatests/",
-    "openapi/",
-    "devdock/",
-];
-
-/// File patterns to sync (matches Python SYNC_PATTERNS).
-const SYNC_EXTENSIONS: &[&str] = &[
-    ".bazel",
-    ".go",
-    ".py",
-    ".ts",
-    ".tsx",
-    ".java",
-    ".proto",
-    ".ini",
-    ".json",
-    ".yaml",
-    ".yml",
-    ".sh",
-    ".sql",
-    ".gradle",
-    ".properties",
-    ".csv",
-];
-
-/// File names to always sync.
-const SYNC_FILENAMES: &[&str] = &["pom.xml", "Makefile", "package.json", "pnpm-lock.yaml"];
-
-/// Files that should sync without requiring git tracking.
-/// These are typically config files that may be .gitignore'd but still need to sync.
-const SYNC_WITHOUT_GIT_TRACKING: &[&str] = &["config/custom.ini", "devdock/custom.ini"];
-
-/// Path patterns that should sync without requiring git tracking.
-/// These support prefix matching for directories.
-const SYNC_WITHOUT_GIT_TRACKING_PATTERNS: &[&str] = &[
-    "devdock/profiles/user_profiles/",
-    "devdock/profiles/integration_tests/",
-    "devdock/profiles/user_profile.yaml",
-];
-
 /// Check if a file should be synced based on patterns (monitored dirs + extensions).
 pub fn should_sync_file_by_pattern(path: &Path) -> bool {
-    // Check if in monitored directory
-    let path_str = path.to_string_lossy();
-    let in_monitored_dir = MONITORED_DIRS.iter().any(|dir| path_str.starts_with(dir));
+    universal_matcher().is_syncable(path)
+}
 
-    if !in_monitored_dir {
-        return false;
-    }
-
-    // Check filename
-    if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
-        if SYNC_FILENAMES.contains(&filename) {
-            return true;
-        }
-    }
-
-    // Check extension
-    if let Some(ext_os) = path.extension() {
-        if let Some(ext) = ext_os.to_str() {
-            let ext_with_dot = format!(".{ext}");
-            return SYNC_EXTENSIONS.contains(&ext_with_dot.as_str());
-        }
-    }
-
-    false
+pub fn should_sync_file_by_pattern_with(matcher: &SyncMatcher, path: &Path) -> bool {
+    matcher.is_syncable(path)
 }
 
 /// List all git-tracked files in monitored directories that match sync patterns.
 pub fn list_git_tracked_files(repo_path: &Path) -> Result<Vec<PathBuf>> {
+    list_git_tracked_files_with(repo_path, universal_matcher())
+}
+
+pub fn list_git_tracked_files_with(
+    repo_path: &Path,
+    matcher: &SyncMatcher,
+) -> Result<Vec<PathBuf>> {
     info!("Listing git-tracked files in monitored directories");
 
     let repo = Repository::open(repo_path)
@@ -97,7 +39,7 @@ pub fn list_git_tracked_files(repo_path: &Path) -> Result<Vec<PathBuf>> {
         let path = PathBuf::from(String::from_utf8_lossy(&entry.path).to_string());
         let full_path = repo_path.join(&path);
 
-        if full_path.exists() && full_path.is_file() && should_sync_file_by_pattern(&path) {
+        if full_path.exists() && full_path.is_file() && matcher.is_syncable(&path) {
             files.push(path);
         }
     }
@@ -130,6 +72,13 @@ pub fn list_all_files(repo_path: &Path) -> Result<Vec<PathBuf>> {
 /// List git-modified files (changed since origin/master or origin/main).
 /// This is used for fast initial sync - only sync files you're actually working on.
 pub fn list_git_modified_files(repo_path: &Path) -> Result<Vec<PathBuf>> {
+    list_git_modified_files_with(repo_path, universal_matcher())
+}
+
+pub fn list_git_modified_files_with(
+    repo_path: &Path,
+    matcher: &SyncMatcher,
+) -> Result<Vec<PathBuf>> {
     info!("Finding git-modified files since origin/master...");
 
     use std::process::Command;
@@ -176,7 +125,7 @@ pub fn list_git_modified_files(repo_path: &Path) -> Result<Vec<PathBuf>> {
         let path = PathBuf::from(line.trim());
         let full_path = repo_path.join(&path);
 
-        if full_path.exists() && full_path.is_file() && should_sync_file_by_pattern(&path) {
+        if full_path.exists() && full_path.is_file() && matcher.is_syncable(&path) {
             files.push(path);
         }
     }
@@ -199,7 +148,7 @@ pub fn list_git_modified_files(repo_path: &Path) -> Result<Vec<PathBuf>> {
 
                 if full_path.exists()
                     && full_path.is_file()
-                    && should_sync_file_by_pattern(&path)
+                    && matcher.is_syncable(&path)
                     && !files.contains(&path)
                 {
                     files.push(path);
@@ -222,10 +171,17 @@ pub fn list_git_modified_files(repo_path: &Path) -> Result<Vec<PathBuf>> {
 /// List all git-tracked files plus untracked files.
 /// Used when syncing entire branch (not just diff from master).
 pub fn list_git_tracked_and_untracked_files(repo_path: &Path) -> Result<Vec<PathBuf>> {
+    list_git_tracked_and_untracked_files_with(repo_path, universal_matcher())
+}
+
+pub fn list_git_tracked_and_untracked_files_with(
+    repo_path: &Path,
+    matcher: &SyncMatcher,
+) -> Result<Vec<PathBuf>> {
     info!("Listing all git-tracked and untracked files");
 
     // Start with all tracked files
-    let mut files = list_git_tracked_files(repo_path)?;
+    let mut files = list_git_tracked_files_with(repo_path, matcher)?;
 
     // Add untracked files (same pattern as list_git_modified_files)
     use std::process::Command;
@@ -245,7 +201,7 @@ pub fn list_git_tracked_and_untracked_files(repo_path: &Path) -> Result<Vec<Path
 
                 if full_path.exists()
                     && full_path.is_file()
-                    && should_sync_file_by_pattern(&path)
+                    && matcher.is_syncable(&path)
                     && !files.contains(&path)
                 {
                     files.push(path);
@@ -267,6 +223,15 @@ pub fn list_git_tracked_and_untracked_files(repo_path: &Path) -> Result<Vec<Path
 
 /// Check if a path should be synced based on git tracking.
 pub fn should_sync_file(repo_path: &Path, file_path: &Path, full_mode: bool) -> Result<bool> {
+    should_sync_file_with(universal_matcher(), repo_path, file_path, full_mode)
+}
+
+pub fn should_sync_file_with(
+    matcher: &SyncMatcher,
+    repo_path: &Path,
+    file_path: &Path,
+    full_mode: bool,
+) -> Result<bool> {
     if full_mode {
         // In full mode, sync all files (respecting .gitignore via WalkBuilder)
         return Ok(true);
@@ -279,14 +244,8 @@ pub fn should_sync_file(repo_path: &Path, file_path: &Path, full_mode: bool) -> 
 
     // Check if it's a special file that doesn't need git tracking
     let path_str = relative_path.to_string_lossy();
-    if SYNC_WITHOUT_GIT_TRACKING.iter().any(|p| path_str == *p) {
+    if matcher.syncs_without_git_tracking(relative_path) {
         debug!("File {} syncs without git tracking (special file)", path_str);
-        return Ok(true);
-    }
-
-    // Check if it matches a path pattern that doesn't need git tracking
-    if SYNC_WITHOUT_GIT_TRACKING_PATTERNS.iter().any(|pattern| path_str.starts_with(pattern)) {
-        debug!("File {} syncs without git tracking (pattern match)", path_str);
         return Ok(true);
     }
 

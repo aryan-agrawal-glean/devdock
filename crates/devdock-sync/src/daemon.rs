@@ -6,7 +6,7 @@ use crate::{
     rsync::RsyncClient,
     stats::{StatsUpdate, SyncStatsTracker},
     watcher::FileWatcher,
-    Result, SyncError,
+    Result, SyncError, SyncMatcher,
 };
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -29,6 +29,7 @@ pub struct SyncDaemon {
     /// Profile-level patterns remembered so hot-reload can re-merge all three sources
     /// without losing profile/env overlays.
     extra_force_patterns: Vec<String>,
+    sync_matcher: SyncMatcher,
 }
 
 impl SyncDaemon {
@@ -45,6 +46,28 @@ impl SyncDaemon {
         full_mode: bool,
         branch_mode: bool,
         extra_force_patterns: Vec<String>,
+    ) -> Result<Self> {
+        Self::with_matcher(
+            devdock_id,
+            workspace_name,
+            repo_path,
+            full_mode,
+            branch_mode,
+            extra_force_patterns,
+            SyncMatcher::universal(),
+        )
+    }
+
+    /// Construct a daemon with the exact policy matcher recorded for its session.
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_matcher(
+        devdock_id: String,
+        workspace_name: String,
+        repo_path: PathBuf,
+        full_mode: bool,
+        branch_mode: bool,
+        extra_force_patterns: Vec<String>,
+        sync_matcher: SyncMatcher,
     ) -> Result<Self> {
         let remote_path = PathBuf::from("/home/workspace/scio");
 
@@ -85,6 +108,7 @@ impl SyncDaemon {
             force_patterns,
             force_patterns_mtime,
             extra_force_patterns,
+            sync_matcher,
         })
     }
 
@@ -113,9 +137,8 @@ impl SyncDaemon {
         // Start watching for changes - watch specific monitored directories, not entire repo
         debug!("Setting up file watcher for monitored directories...");
 
-        // Use the canonical MONITORED_DIRS from git.rs (strip trailing slashes for path joining)
-        let monitored_dirs: Vec<&str> =
-            git::MONITORED_DIRS.iter().map(|d| d.trim_end_matches('/')).collect();
+        let monitored_dirs: Vec<String> =
+            self.sync_matcher.monitored_roots().map(str::to_string).collect();
 
         let mut watched_count = 0;
         for dir in &monitored_dirs {
@@ -272,12 +295,12 @@ impl SyncDaemon {
                 // BRANCH MODE: Sync all git-tracked files + untracked
                 // Used when --branch flag is specified to ensure complete branch sync
                 info!("Syncing all git-tracked and untracked files (branch mode)");
-                git::list_git_tracked_and_untracked_files(&self.repo_path)?
+                git::list_git_tracked_and_untracked_files_with(&self.repo_path, &self.sync_matcher)?
             } else {
                 // FAST STARTUP: Only sync git-modified files (changed since origin/master)
                 // This dramatically reduces startup time from minutes to seconds
                 info!("Syncing git-modified files only (fast startup)");
-                git::list_git_modified_files(&self.repo_path)?
+                git::list_git_modified_files_with(&self.repo_path, &self.sync_matcher)?
             };
 
             if files.is_empty() {
@@ -361,13 +384,15 @@ impl SyncDaemon {
             }
 
             // Check if file matches sync patterns (monitored dirs + extensions)
-            if !git::should_sync_file_by_pattern(&relative_path) {
+            if !self.sync_matcher.is_syncable(&relative_path) {
                 debug!("❌ Filtered out: not in monitored dirs or wrong extension");
                 continue;
             }
 
             // In git-tracked mode, also check if file is tracked
-            if !self.full_mode && !git::should_sync_file(&self.repo_path, file, false)? {
+            if !self.full_mode
+                && !git::should_sync_file_with(&self.sync_matcher, &self.repo_path, file, false)?
+            {
                 debug!("❌ Filtered out: not git-tracked");
                 continue;
             }

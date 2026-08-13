@@ -7,6 +7,7 @@ pub mod daemon;
 pub mod force;
 pub mod git;
 pub mod health;
+pub mod policy;
 pub mod rsync;
 pub mod stats;
 pub mod watcher;
@@ -14,6 +15,10 @@ pub mod watcher;
 pub use daemon::SyncDaemon;
 pub use git::{list_all_files, list_git_modified_files, list_git_tracked_files};
 pub use health::HealthMonitor;
+pub use policy::{
+    universal_matcher, BenignRuleV1, PathClassification, PolicyError, RepositorySyncPolicyV1,
+    RuleSource, SyncMatcher, SYNC_POLICY_SCHEMA_VERSION, UNIVERSAL_BASELINE_VERSION,
+};
 pub use rsync::RsyncClient;
 pub use stats::{StatsUpdate, SyncStatsTracker};
 pub use watcher::FileWatcher;

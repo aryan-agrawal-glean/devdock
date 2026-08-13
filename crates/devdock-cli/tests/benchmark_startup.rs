@@ -30,12 +30,17 @@ fn benchmark_startup_bootstrap_time() {
     let test_fixture = workspace_root.join("tests/fixtures/benchmark");
     assert!(test_fixture.exists(), "Test fixture not found at {}", test_fixture.display());
 
+    // Dry-run startup still performs legacy startup-state cleanup. Isolate the benchmark from the
+    // developer/runner's real ~/.devdock tree so the measurement is deterministic and read-only
+    // with respect to existing sessions.
+    let benchmark_home = tempfile::tempdir().expect("Failed to create isolated benchmark home");
+
     // Run the benchmark
     let start = Instant::now();
     let output = Command::new(&binary_path)
         .args(["start", "bench", "--dry-run", "--ci-mode"])
         .current_dir(&test_fixture)
-        .env("HOME", std::env::var("HOME").unwrap())
+        .env("HOME", benchmark_home.path())
         .output()
         .expect("Failed to execute devdock start");
 
