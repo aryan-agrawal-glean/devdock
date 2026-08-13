@@ -4,8 +4,7 @@ use anyhow::{anyhow, Result};
 use colored::Colorize;
 use devdock_config::ProfileLoader;
 use devdock_state::StateManager;
-use devdock_sync::daemon as sync_daemon;
-use devdock_sync::stats;
+use devdock_sync::{daemon as sync_daemon, stats, universal_matcher};
 use serde::Deserialize;
 use std::path::PathBuf;
 use tracing::warn;
@@ -46,6 +45,7 @@ pub async fn start(full: bool, log_level: &str) -> Result<()> {
         false, // branch_mode = false (manual sync always uses diff mode)
         log_level,
         &force_patterns,
+        universal_matcher(),
     )?;
 
     // Update database

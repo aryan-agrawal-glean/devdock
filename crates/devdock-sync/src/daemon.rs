@@ -6,12 +6,14 @@ use crate::{
     rsync::RsyncClient,
     stats::{StatsUpdate, SyncStatsTracker},
     watcher::FileWatcher,
-    Result, SyncError,
+    RepositorySyncPolicyV1, Result, SyncError, SyncMatcher,
 };
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 use tracing::{debug, error, info};
+
+const SYNC_POLICY_SNAPSHOT_ENV_VAR: &str = "DEVDOCK_SYNC_POLICY_SNAPSHOT";
 
 /// Sync daemon state.
 pub struct SyncDaemon {
@@ -29,6 +31,7 @@ pub struct SyncDaemon {
     /// Profile-level patterns remembered so hot-reload can re-merge all three sources
     /// without losing profile/env overlays.
     extra_force_patterns: Vec<String>,
+    sync_matcher: SyncMatcher,
 }
 
 impl SyncDaemon {
@@ -45,6 +48,28 @@ impl SyncDaemon {
         full_mode: bool,
         branch_mode: bool,
         extra_force_patterns: Vec<String>,
+    ) -> Result<Self> {
+        Self::with_matcher(
+            devdock_id,
+            workspace_name,
+            repo_path,
+            full_mode,
+            branch_mode,
+            extra_force_patterns,
+            SyncMatcher::universal(),
+        )
+    }
+
+    /// Construct a daemon with the exact policy matcher recorded for its session.
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_matcher(
+        devdock_id: String,
+        workspace_name: String,
+        repo_path: PathBuf,
+        full_mode: bool,
+        branch_mode: bool,
+        extra_force_patterns: Vec<String>,
+        sync_matcher: SyncMatcher,
     ) -> Result<Self> {
         let remote_path = PathBuf::from("/home/workspace/scio");
 
@@ -85,6 +110,7 @@ impl SyncDaemon {
             force_patterns,
             force_patterns_mtime,
             extra_force_patterns,
+            sync_matcher,
         })
     }
 
@@ -113,9 +139,8 @@ impl SyncDaemon {
         // Start watching for changes - watch specific monitored directories, not entire repo
         debug!("Setting up file watcher for monitored directories...");
 
-        // Use the canonical MONITORED_DIRS from git.rs (strip trailing slashes for path joining)
-        let monitored_dirs: Vec<&str> =
-            git::MONITORED_DIRS.iter().map(|d| d.trim_end_matches('/')).collect();
+        let monitored_dirs: Vec<String> =
+            self.sync_matcher.monitored_roots().map(str::to_string).collect();
 
         let mut watched_count = 0;
         for dir in &monitored_dirs {
@@ -272,12 +297,12 @@ impl SyncDaemon {
                 // BRANCH MODE: Sync all git-tracked files + untracked
                 // Used when --branch flag is specified to ensure complete branch sync
                 info!("Syncing all git-tracked and untracked files (branch mode)");
-                git::list_git_tracked_and_untracked_files(&self.repo_path)?
+                git::list_git_tracked_and_untracked_files_with(&self.repo_path, &self.sync_matcher)?
             } else {
                 // FAST STARTUP: Only sync git-modified files (changed since origin/master)
                 // This dramatically reduces startup time from minutes to seconds
                 info!("Syncing git-modified files only (fast startup)");
-                git::list_git_modified_files(&self.repo_path)?
+                git::list_git_modified_files_with(&self.repo_path, &self.sync_matcher)?
             };
 
             if files.is_empty() {
@@ -361,13 +386,15 @@ impl SyncDaemon {
             }
 
             // Check if file matches sync patterns (monitored dirs + extensions)
-            if !git::should_sync_file_by_pattern(&relative_path) {
+            if !self.sync_matcher.is_syncable(&relative_path) {
                 debug!("❌ Filtered out: not in monitored dirs or wrong extension");
                 continue;
             }
 
             // In git-tracked mode, also check if file is tracked
-            if !self.full_mode && !git::should_sync_file(&self.repo_path, file, false)? {
+            if !self.full_mode
+                && !git::should_sync_file_with(&self.sync_matcher, &self.repo_path, file, false)?
+            {
                 debug!("❌ Filtered out: not git-tracked");
                 continue;
             }
@@ -526,6 +553,7 @@ pub fn start_daemon_foreground(
 }
 
 /// Start sync daemon as a separate background process.
+#[allow(clippy::too_many_arguments)]
 pub fn start_daemon(
     devdock_id: &str,
     workspace_name: &str,
@@ -534,6 +562,7 @@ pub fn start_daemon(
     branch_mode: bool,
     log_level: &str,
     extra_force_patterns: &[String],
+    sync_matcher: &SyncMatcher,
 ) -> Result<u32> {
     use std::fs::OpenOptions;
     use std::process::Command;
@@ -580,6 +609,15 @@ pub fn start_daemon(
             format!("{},{}", existing, extra_force_patterns.join(","))
         };
         cmd.env(crate::force::FORCE_PATTERNS_ENV_VAR, merged);
+    }
+
+    // Preserve the exact trusted policy used by the parent. Keeping this optional and out of the
+    // positional CLI layout lets new children accept old launchers, while an explicit env_remove
+    // prevents a stale inherited policy from changing a universal session.
+    if let Some(snapshot) = matcher_policy_snapshot(sync_matcher)? {
+        cmd.env(SYNC_POLICY_SNAPSHOT_ENV_VAR, snapshot);
+    } else {
+        cmd.env_remove(SYNC_POLICY_SNAPSHOT_ENV_VAR);
     }
 
     // Redirect stdin/stdout/stderr to log file
@@ -667,8 +705,9 @@ fn process_command_matches_daemon(_devdock_id: &str, _pid: u32) -> bool {
 
 /// Run the sync daemon (called by hidden __sync_daemon__ command).
 ///
-/// The subprocess inherits env, so `DEVDOCK_FORCE_SYNC_PATTERNS` (set by the parent to
-/// carry profile-level patterns) is read via `SyncDaemon::new`'s env merge.
+/// The subprocess inherits env, so `DEVDOCK_FORCE_SYNC_PATTERNS` carries profile-level patterns
+/// and `DEVDOCK_SYNC_POLICY_SNAPSHOT` carries the exact validated repository policy selected by
+/// the parent. Both variables are optional for compatibility with older launchers.
 pub fn run_daemon_process(
     devdock_id: &str,
     workspace_name: &str,
@@ -687,7 +726,9 @@ pub fn run_daemon_process(
     info!("Repo: {}", repo_path.display());
     info!("Time: {:?}", std::time::SystemTime::now());
 
-    let mut daemon = match SyncDaemon::new(
+    let sync_matcher = matcher_from_process_env()?;
+
+    let mut daemon = match SyncDaemon::with_matcher(
         devdock_id.clone(),
         workspace_name.clone(),
         repo_path.clone(),
@@ -696,6 +737,7 @@ pub fn run_daemon_process(
         // Subprocess: profile patterns arrive via DEVDOCK_FORCE_SYNC_PATTERNS, so no
         // extra layer is needed here.
         Vec::new(),
+        sync_matcher,
     ) {
         Ok(d) => {
             info!("Sync daemon created successfully");
@@ -714,6 +756,43 @@ pub fn run_daemon_process(
     } else {
         info!("Sync daemon stopped normally");
         Ok(())
+    }
+}
+
+fn matcher_policy_snapshot(sync_matcher: &SyncMatcher) -> Result<Option<String>> {
+    let Some(policy) = sync_matcher.repository_policy() else {
+        return Ok(None);
+    };
+
+    let snapshot = serde_json::to_vec(policy).map_err(|error| {
+        SyncError::DaemonError(format!("Failed to serialize sync policy snapshot: {error}"))
+    })?;
+    RepositorySyncPolicyV1::from_snapshot(&snapshot).map_err(|error| {
+        SyncError::DaemonError(format!("Refusing invalid sync policy snapshot: {error}"))
+    })?;
+    String::from_utf8(snapshot).map(Some).map_err(|error| {
+        SyncError::DaemonError(format!("Sync policy snapshot was not UTF-8: {error}"))
+    })
+}
+
+fn matcher_from_snapshot(snapshot: Option<&str>) -> Result<SyncMatcher> {
+    let Some(snapshot) = snapshot else {
+        return Ok(SyncMatcher::universal());
+    };
+
+    let policy = RepositorySyncPolicyV1::from_snapshot(snapshot.as_bytes()).map_err(|error| {
+        SyncError::DaemonError(format!("Invalid sync policy snapshot from parent: {error}"))
+    })?;
+    Ok(SyncMatcher::with_repository_policy(&policy))
+}
+
+fn matcher_from_process_env() -> Result<SyncMatcher> {
+    match std::env::var(SYNC_POLICY_SNAPSHOT_ENV_VAR) {
+        Ok(snapshot) => matcher_from_snapshot(Some(&snapshot)),
+        Err(std::env::VarError::NotPresent) => matcher_from_snapshot(None),
+        Err(std::env::VarError::NotUnicode(_)) => Err(SyncError::DaemonError(format!(
+            "{SYNC_POLICY_SNAPSHOT_ENV_VAR} is not valid UTF-8"
+        ))),
     }
 }
 
@@ -771,6 +850,18 @@ pub fn cleanup_sync_files(devdock_id: &str) -> Result<()> {
 mod tests {
     use super::*;
 
+    fn repository_policy() -> RepositorySyncPolicyV1 {
+        RepositorySyncPolicyV1 {
+            schema_version: 1,
+            compatible_since_sha: "a".repeat(40),
+            monitored_roots: vec!["terraform".into()],
+            sync_extensions: vec![".tf".into()],
+            sync_filenames: vec!["BUILD".into()],
+            impact_roots: vec![],
+            benign_out_of_scope: vec![],
+        }
+    }
+
     #[test]
     fn parse_pid_accepts_trimmed_number() {
         assert_eq!(parse_pid("12345\n"), Some(12345));
@@ -797,5 +888,30 @@ mod tests {
     fn command_rejects_different_devdock_id() {
         let command = "/path/devdock __sync_daemon__ dev-999 workspace /repo false false info";
         assert!(!command_matches_daemon(command, "dev-123"));
+    }
+
+    #[test]
+    fn repository_matcher_round_trips_through_daemon_snapshot() {
+        let matcher = SyncMatcher::with_repository_policy(&repository_policy());
+        let snapshot = matcher_policy_snapshot(&matcher).unwrap().unwrap();
+        let child_matcher = matcher_from_snapshot(Some(&snapshot)).unwrap();
+
+        assert!(child_matcher.is_syncable(Path::new("terraform/main.tf")));
+        assert!(child_matcher.is_syncable(Path::new("go/service/BUILD")));
+    }
+
+    #[test]
+    fn missing_daemon_snapshot_preserves_universal_compatibility() {
+        let child_matcher = matcher_from_snapshot(None).unwrap();
+
+        assert!(child_matcher.is_syncable(Path::new("python_scio/service/main.py")));
+        assert!(!child_matcher.is_syncable(Path::new("terraform/main.tf")));
+    }
+
+    #[test]
+    fn invalid_daemon_snapshot_fails_closed() {
+        let error = matcher_from_snapshot(Some(r#"{"schema_version":999}"#)).unwrap_err();
+
+        assert!(error.to_string().contains("Invalid sync policy snapshot from parent"));
     }
 }
