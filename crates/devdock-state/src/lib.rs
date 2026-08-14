@@ -2,6 +2,7 @@
 
 pub mod db;
 pub mod instance;
+mod migration;
 pub mod ports;
 
 pub use db::StateManager;

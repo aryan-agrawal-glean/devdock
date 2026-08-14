@@ -59,6 +59,7 @@ pub enum InstanceStatus {
     Stopping,
     Stopped,
     Error,
+    Quarantined,
 }
 
 impl InstanceStatus {
@@ -69,6 +70,7 @@ impl InstanceStatus {
             Self::Stopping => "stopping",
             Self::Stopped => "stopped",
             Self::Error => "error",
+            Self::Quarantined => "quarantined",
         }
     }
 
@@ -78,6 +80,7 @@ impl InstanceStatus {
             "running" => Self::Running,
             "stopping" => Self::Stopping,
             "stopped" => Self::Stopped,
+            "quarantined" => Self::Quarantined,
             _ => Self::Error,
         }
     }
@@ -191,5 +194,12 @@ mod tests {
     fn as_prefix_values() {
         assert_eq!(SessionOrigin::Dev.as_prefix(), "dev");
         assert_eq!(SessionOrigin::Bot.as_prefix(), "bot");
+    }
+
+    #[test]
+    fn quarantined_status_roundtrips_and_is_distinct_from_error() {
+        assert_eq!(InstanceStatus::parse("quarantined"), InstanceStatus::Quarantined);
+        assert_eq!(InstanceStatus::Quarantined.as_str(), "quarantined");
+        assert_eq!(InstanceStatus::parse("unknown-future-status"), InstanceStatus::Error);
     }
 }

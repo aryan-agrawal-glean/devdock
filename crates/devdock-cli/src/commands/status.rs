@@ -62,6 +62,7 @@ async fn print_instance_status(
         InstanceStatus::Stopping => "◑ Stopping".yellow(),
         InstanceStatus::Stopped => "○ Stopped".red(),
         InstanceStatus::Error => "✗ Error".red(),
+        InstanceStatus::Quarantined => "⚠ Quarantined".yellow(),
     };
 
     println!("\n{}", "DevDock Status".bold());

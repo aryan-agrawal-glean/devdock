@@ -50,6 +50,7 @@ pub async fn execute(running_only: bool) -> Result<()> {
             InstanceStatus::Stopping => "◑ Stopping".yellow().to_string(),
             InstanceStatus::Stopped => "○ Stopped".dimmed().to_string(),
             InstanceStatus::Error => "✗ Error".red().to_string(),
+            InstanceStatus::Quarantined => "⚠ Quarantined".yellow().to_string(),
         };
 
         // Display mode

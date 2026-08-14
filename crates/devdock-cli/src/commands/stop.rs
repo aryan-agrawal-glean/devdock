@@ -29,6 +29,13 @@ pub async fn execute(target: Option<&str>, force: bool, delete: bool) -> Result<
     // Get instance details
     let instance = state_manager.get_instance(&instance_id).await?.context("Instance not found")?;
 
+    if instance.status == InstanceStatus::Quarantined {
+        anyhow::bail!(
+            "Instance {} is quarantined because its legacy workspace ownership is ambiguous; DevDock will not stop or delete resources until the session is explicitly reconciled",
+            Instance::display_id(&instance_id)
+        );
+    }
+
     output::info(&format!(
         "Stopping instance: {} ({})",
         Instance::display_id(&instance_id),

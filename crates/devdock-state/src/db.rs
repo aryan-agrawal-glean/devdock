@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 #[derive(Clone)]
 pub struct StateManager {
     pool: SqlitePool,
+    db_path: PathBuf,
 }
 
 impl StateManager {
@@ -29,7 +30,7 @@ impl StateManager {
         let url = format!("sqlite://{}?mode=rwc", db_path.display());
         let pool = SqlitePool::connect(&url).await?;
 
-        let manager = Self { pool };
+        let manager = Self { pool, db_path: db_path.to_path_buf() };
         manager.initialize().await?;
 
         Ok(manager)
@@ -37,85 +38,8 @@ impl StateManager {
 
     /// Initialize database schema.
     async fn initialize(&self) -> Result<()> {
-        sqlx::query(
-            r"
-            CREATE TABLE IF NOT EXISTS instances (
-                id TEXT PRIMARY KEY,
-                workspace_path TEXT NOT NULL,
-                workspace_name TEXT,
-                branch TEXT NOT NULL,
-                profile TEXT NOT NULL,
-                mode TEXT NOT NULL,
-                status TEXT NOT NULL,
-                port_base INTEGER NOT NULL,
-                created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL
-            )
-            ",
-        )
-        .execute(&self.pool)
-        .await?;
-
-        // Add workspace_name column if it doesn't exist (migration for existing databases)
-        let _ = sqlx::query("ALTER TABLE instances ADD COLUMN workspace_name TEXT")
-            .execute(&self.pool)
-            .await;
-
-        sqlx::query(
-            r"
-            CREATE TABLE IF NOT EXISTS services (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                instance_id TEXT NOT NULL,
-                name TEXT NOT NULL,
-                status TEXT NOT NULL,
-                port INTEGER,
-                FOREIGN KEY (instance_id) REFERENCES instances(id) ON DELETE CASCADE
-            )
-            ",
-        )
-        .execute(&self.pool)
-        .await?;
-
-        // Port mappings table for remote DevDock
-        sqlx::query(
-            r"
-            CREATE TABLE IF NOT EXISTS port_mappings (
-                devdock_id TEXT NOT NULL,
-                service_name TEXT NOT NULL,
-                port_type TEXT NOT NULL,
-                local_port INTEGER NOT NULL,
-                remote_port INTEGER NOT NULL,
-                process_pid INTEGER,
-                PRIMARY KEY (devdock_id, service_name, port_type)
-            )
-            ",
-        )
-        .execute(&self.pool)
-        .await?;
-
-        // Sync sessions table for file sync
-        sqlx::query(
-            r"
-            CREATE TABLE IF NOT EXISTS sync_sessions (
-                devdock_id TEXT PRIMARY KEY,
-                workspace_name TEXT NOT NULL,
-                pid INTEGER,
-                full_mode BOOLEAN DEFAULT 0,
-                last_sync_time INTEGER,
-                files_synced INTEGER DEFAULT 0,
-                status TEXT NOT NULL CHECK(status IN ('running', 'stopped', 'error'))
-            )
-            ",
-        )
-        .execute(&self.pool)
-        .await?;
-
-        // Older local DBs may predate sync PID persistence.
-        let _ = sqlx::query("ALTER TABLE sync_sessions ADD COLUMN pid INTEGER")
-            .execute(&self.pool)
-            .await;
-
-        Ok(())
+        let mut connection = self.pool.acquire().await?;
+        crate::migration::initialize(&mut connection, &self.db_path).await
     }
 
     /// Register a new DevDock instance.

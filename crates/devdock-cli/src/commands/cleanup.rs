@@ -440,6 +440,9 @@ where
                 // Clean up all stopped/error instances
                 true
             }
+            // Migration could not prove which live workspace/processes this row owns. Keep the
+            // record for explicit reconciliation rather than deleting ambiguous evidence.
+            InstanceStatus::Quarantined => false,
         };
 
         if should_clean {
@@ -701,6 +704,27 @@ mod tests {
         assert_eq!(cleaned, 2);
         let remaining = state_manager.list_instances().await?;
         assert!(remaining.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn clean_stale_instances_preserves_quarantined_ownership_evidence() -> Result<()> {
+        let (state_manager, _db_file) = setup_state_manager().await?;
+        let instance = make_instance("inst-quarantined", "remote", InstanceStatus::Quarantined);
+        let instance_id = instance.id.clone();
+        state_manager.register_instance(&instance).await?;
+
+        let cleaned = _clean_stale_instances(CleanStaleInstancesParams {
+            state_manager: &state_manager,
+            clean_local: true,
+            is_tilt_running: |_| panic!("quarantined instances must not be probed"),
+            prompt_remote_running: |_| panic!("quarantined instances must not prompt cleanup"),
+        })
+        .await?;
+
+        assert_eq!(cleaned, 0);
+        let remaining = state_manager.list_instances().await?;
+        assert_eq!(instance_ids(&remaining), vec![instance_id]);
         Ok(())
     }
 
