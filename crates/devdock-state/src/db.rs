@@ -1,9 +1,10 @@
 //! Database management for DevDock state.
 
+use crate::forward::{PortMappingRecord, DEVDOCK_FORWARD_OWNER};
 use crate::instance::{Instance, InstanceStatus};
 use crate::session::{
     canonical_worktree, local_session_key, provisional_session_key, stable_session_key,
-    ClaimedRemoteSession, RemoteSessionRequest, SessionManifestV1,
+    ClaimedRemoteSession, RemoteSessionRequest, SessionManifestV1, SessionPortMappingV1,
 };
 use crate::StatePaths;
 use anyhow::{bail, Context, Result};
@@ -245,7 +246,13 @@ impl StateManager {
 
     async fn persist_session_manifest(&self, id: &str) -> Result<()> {
         let instance = self.get_instance(id).await?.context("instance not found")?;
-        let manifest = SessionManifestV1::from_instance(&instance)?;
+        let mut manifest = SessionManifestV1::from_instance(&instance)?;
+        manifest.port_mappings = self
+            .get_port_mapping_records(id)
+            .await?
+            .iter()
+            .filter_map(SessionPortMappingV1::from_record)
+            .collect();
         let manifest_path = manifest.write_atomic(&self.paths)?;
         let manifest_path =
             manifest_path.to_str().context("session manifest path is not valid UTF-8")?;
@@ -256,6 +263,36 @@ impl StateManager {
             .bind(id)
             .execute(&self.pool)
             .await?;
+        Ok(())
+    }
+
+    /// Read the persisted, non-secret manifest for an existing session.
+    pub async fn load_session_manifest(&self, id: &str) -> Result<Option<SessionManifestV1>> {
+        if self.get_instance(id).await?.is_none() {
+            return Ok(None);
+        }
+        // An older binary can legally replace a row without ownership columns.
+        // Rebuild before returning so a stale manifest can never resurrect that
+        // row as verified ownership.
+        self.persist_session_manifest(id).await?;
+        let instance = self.get_instance(id).await?.context("instance disappeared")?;
+        let Some(path) = instance.manifest_path else {
+            return Ok(None);
+        };
+        let bytes = std::fs::read(&path)
+            .with_context(|| format!("failed to read session manifest {path}"))?;
+        Ok(Some(
+            serde_json::from_slice(&bytes)
+                .with_context(|| format!("failed to parse session manifest {path}"))?,
+        ))
+    }
+
+    async fn refresh_session_manifest_if_remote(&self, id: &str) -> Result<()> {
+        if self.get_instance(id).await?.is_some_and(|instance| {
+            instance.mode == "remote" && instance.planned_workspace_name.is_some()
+        }) {
+            self.persist_session_manifest(id).await?;
+        }
         Ok(())
     }
 
@@ -386,8 +423,7 @@ impl StateManager {
             .execute(&self.pool)
             .await?;
         }
-
-        Ok(())
+        self.refresh_session_manifest_if_remote(devdock_id).await
     }
 
     /// Get port mappings for a DevDock instance.
@@ -395,8 +431,31 @@ impl StateManager {
         &self,
         devdock_id: &str,
     ) -> Result<Vec<(String, String, u16, u16, Option<u32>)>> {
+        Ok(self
+            .get_port_mapping_records(devdock_id)
+            .await?
+            .into_iter()
+            .map(|mapping| {
+                (
+                    mapping.service_name,
+                    mapping.port_type,
+                    mapping.local_port,
+                    mapping.remote_port,
+                    mapping.process_pid,
+                )
+            })
+            .collect())
+    }
+
+    /// Get port mappings including nullable ownership identity from older writers.
+    pub async fn get_port_mapping_records(
+        &self,
+        devdock_id: &str,
+    ) -> Result<Vec<PortMappingRecord>> {
         let rows = sqlx::query(
-            "SELECT service_name, port_type, local_port, remote_port, process_pid FROM port_mappings WHERE devdock_id = ?"
+            "SELECT service_name, port_type, local_port, remote_port, process_pid, workspace_id,
+                    owner_kind, process_start_time, command_fingerprint
+             FROM port_mappings WHERE devdock_id = ?",
         )
         .bind(devdock_id)
         .fetch_all(&self.pool)
@@ -404,16 +463,69 @@ impl StateManager {
 
         Ok(rows
             .into_iter()
-            .map(|r| {
-                (
-                    r.get("service_name"),
-                    r.get("port_type"),
-                    r.get::<i64, _>("local_port") as u16,
-                    r.get::<i64, _>("remote_port") as u16,
-                    r.get::<Option<i64>, _>("process_pid").map(|p| p as u32),
-                )
+            .map(|r| PortMappingRecord {
+                devdock_id: devdock_id.to_string(),
+                service_name: r.get("service_name"),
+                port_type: r.get("port_type"),
+                local_port: r.get::<i64, _>("local_port") as u16,
+                remote_port: r.get::<i64, _>("remote_port") as u16,
+                process_pid: r.get::<Option<i64>, _>("process_pid").map(|p| p as u32),
+                workspace_id: r.get("workspace_id"),
+                owner_kind: r.get("owner_kind"),
+                process_start_time: r
+                    .get::<Option<i64>, _>("process_start_time")
+                    .and_then(|value| u64::try_from(value).ok()),
+                command_fingerprint: r.get("command_fingerprint"),
             })
             .collect())
+    }
+
+    /// Register a forward only after its exact process identity has been observed.
+    pub async fn save_managed_port_mapping(&self, mapping: &PortMappingRecord) -> Result<()> {
+        if !mapping.is_devdock_managed()
+            || mapping.owner_kind.as_deref() != Some(DEVDOCK_FORWARD_OWNER)
+        {
+            bail!("managed port mapping is missing verified ownership identity");
+        }
+        let instance = self
+            .get_instance(&mapping.devdock_id)
+            .await?
+            .context("cannot register a managed forward for an unknown session")?;
+        if instance.is_quarantined || instance.status == InstanceStatus::Quarantined {
+            bail!("cannot register a managed forward for a quarantined session");
+        }
+        if mapping.workspace_id.as_deref() != instance.workspace_id.as_deref() {
+            bail!("managed forward workspace identity does not match its session");
+        }
+        let process_start_time = mapping
+            .process_start_time
+            .map(i64::try_from)
+            .transpose()
+            .context("managed forward process start time exceeds SQLite integer range")?;
+
+        sqlx::query(
+            r"
+            INSERT INTO port_mappings (
+                devdock_id, service_name, port_type, local_port, remote_port, process_pid,
+                workspace_id, owner_kind, process_start_time, command_fingerprint
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ",
+        )
+        .bind(&mapping.devdock_id)
+        .bind(&mapping.service_name)
+        .bind(&mapping.port_type)
+        .bind(i64::from(mapping.local_port))
+        .bind(i64::from(mapping.remote_port))
+        .bind(mapping.process_pid.map(i64::from))
+        .bind(&mapping.workspace_id)
+        .bind(&mapping.owner_kind)
+        .bind(process_start_time)
+        .bind(&mapping.command_fingerprint)
+        .execute(&self.pool)
+        .await?;
+
+        self.persist_session_manifest(&mapping.devdock_id).await
     }
 
     /// Save a single port mapping.
@@ -448,8 +560,7 @@ impl StateManager {
         .bind(pid.map(i64::from))
         .execute(&self.pool)
         .await?;
-
-        Ok(())
+        self.refresh_session_manifest_if_remote(devdock_id).await
     }
 
     /// Remove a specific port mapping.
@@ -459,8 +570,26 @@ impl StateManager {
             .bind(service_name)
             .execute(&self.pool)
             .await?;
+        self.refresh_session_manifest_if_remote(devdock_id).await
+    }
 
-        Ok(())
+    /// Remove one exact mapping without conflating service and debug forwards.
+    pub async fn remove_port_mapping_record(
+        &self,
+        devdock_id: &str,
+        service_name: &str,
+        port_type: &str,
+    ) -> Result<()> {
+        sqlx::query(
+            "DELETE FROM port_mappings
+             WHERE devdock_id = ? AND service_name = ? AND port_type = ?",
+        )
+        .bind(devdock_id)
+        .bind(service_name)
+        .bind(port_type)
+        .execute(&self.pool)
+        .await?;
+        self.refresh_session_manifest_if_remote(devdock_id).await
     }
 
     /// Delete port mappings for a DevDock instance.
@@ -469,8 +598,7 @@ impl StateManager {
             .bind(devdock_id)
             .execute(&self.pool)
             .await?;
-
-        Ok(())
+        self.refresh_session_manifest_if_remote(devdock_id).await
     }
 
     /// Save sync session state.
@@ -934,6 +1062,7 @@ fn unix_timestamp() -> Result<i64> {
 mod tests {
     use super::*;
     use crate::session::SESSION_MANIFEST_SCHEMA;
+    use crate::LOOPBACK_BIND_ADDRESS;
     use std::fs;
     use tempfile::TempDir;
 
@@ -1206,5 +1335,50 @@ mod tests {
         assert_eq!(retried.instance.id, "dev-session");
         assert!(retried.instance.failure_stage.is_none());
         assert!(retried.instance.failure_reason.is_none());
+    }
+
+    #[tokio::test]
+    async fn managed_forward_identity_is_persisted_in_session_manifest() {
+        let (_state_dir, worktree, manager) = state_fixture().await;
+        manager
+            .claim_remote_session(request(worktree.path(), "dev-session", "workspace", 10))
+            .await
+            .unwrap();
+        manager.attach_remote_workspace("dev-session", "workspace-id", "workspace").await.unwrap();
+
+        let mapping = PortMappingRecord {
+            devdock_id: "dev-session".to_string(),
+            service_name: "tilt".to_string(),
+            port_type: "tilt_ui".to_string(),
+            local_port: 11350,
+            remote_port: 10350,
+            process_pid: Some(42),
+            workspace_id: Some("workspace-id".to_string()),
+            owner_kind: Some(DEVDOCK_FORWARD_OWNER.to_string()),
+            process_start_time: Some(1_234),
+            command_fingerprint: Some("fingerprint".to_string()),
+        };
+        manager.save_managed_port_mapping(&mapping).await.unwrap();
+
+        assert_eq!(manager.get_port_mapping_records("dev-session").await.unwrap(), vec![mapping]);
+        let manifest = manager.load_session_manifest("dev-session").await.unwrap().unwrap();
+        assert_eq!(manifest.port_mappings.len(), 1);
+        assert_eq!(manifest.port_mappings[0].bind_address, LOOPBACK_BIND_ADDRESS);
+        assert_eq!(manifest.port_mappings[0].workspace_id, "workspace-id");
+        assert_eq!(manifest.port_mappings[0].process_start_time, 1_234);
+
+        // Simulate a schema-0 writer replacing ownership-aware state. Loading
+        // the manifest must rebuild from the database and fail closed.
+        sqlx::query(
+            "UPDATE port_mappings
+             SET workspace_id = NULL, owner_kind = NULL, process_start_time = NULL,
+                 command_fingerprint = NULL
+             WHERE devdock_id = 'dev-session'",
+        )
+        .execute(&manager.pool)
+        .await
+        .unwrap();
+        let rebuilt = manager.load_session_manifest("dev-session").await.unwrap().unwrap();
+        assert!(rebuilt.port_mappings.is_empty());
     }
 }

@@ -4,6 +4,7 @@ use crate::output;
 use anyhow::Result;
 use colored::Colorize;
 use devdock_monitor::{ResourceStatus, TiltClient, TiltResource};
+use devdock_remote::{managed_port_forward_status, ManagedForwardStatus};
 use devdock_state::{Instance, InstanceStatus, StateManager};
 use prettytable::{format, row, Table};
 use std::process::Command;
@@ -118,7 +119,7 @@ async fn print_instance_status(
 
     // Show port mappings for remote instances
     if instance.mode == "remote" {
-        let mappings = state_manager.get_port_mappings(&instance.id).await?;
+        let mappings = state_manager.get_port_mapping_records(&instance.id).await?;
 
         if !mappings.is_empty() {
             println!("\n{}", "Port Mappings".bold());
@@ -130,18 +131,27 @@ async fn print_instance_status(
             // Add header row
             table.add_row(row!["Service", "Type", "Local", "Remote", "Status"]);
 
-            for (service_name, port_type, local_port, remote_port, pid) in &mappings {
-                let status = if pid.is_some() {
-                    "Active".green().to_string()
-                } else {
-                    "Inactive".red().to_string()
-                };
+            for mapping in &mappings {
+                let status =
+                    match (instance.workspace_id.as_deref(), instance.workspace_name.as_deref()) {
+                        (Some(workspace_id), Some(workspace_name)) => {
+                            match managed_port_forward_status(mapping, workspace_id, workspace_name)
+                            {
+                                ManagedForwardStatus::Active => "Active".green().to_string(),
+                                ManagedForwardStatus::Exited => "Exited".red().to_string(),
+                                ManagedForwardStatus::Unverified(_) => {
+                                    "External/unverified".yellow().to_string()
+                                }
+                            }
+                        }
+                        _ => "External/unverified".yellow().to_string(),
+                    };
 
                 table.add_row(row![
-                    service_name,
-                    port_type,
-                    local_port.to_string(),
-                    remote_port.to_string(),
+                    mapping.service_name,
+                    mapping.port_type,
+                    mapping.local_port.to_string(),
+                    mapping.remote_port.to_string(),
                     status
                 ]);
             }

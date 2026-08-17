@@ -2,6 +2,7 @@
 
 use crate::output;
 use anyhow::{Context, Result};
+use devdock_remote::{stop_managed_port_forward, ManagedForwardStopOutcome};
 use devdock_state::{Instance, InstanceStatus, StateManager};
 use devdock_sync::daemon as sync_daemon;
 use std::path::PathBuf;
@@ -349,15 +350,14 @@ async fn perform_remote_cleanup(
         let _ = std::fs::remove_file(&file_path);
     }
 
-    // Get workspace name BEFORE cleaning up (we'll need it for prompts later)
-    let workspace_name =
-        if let Ok(Some((ws_name, _, _, _))) = state_manager.get_sync_session(instance_id).await {
-            println!("DEBUG: Found workspace name from sync session: {ws_name}");
-            Some(ws_name)
-        } else {
-            println!("DEBUG: No sync session found for instance {instance_id}");
-            None
-        };
+    // Resolve immutable ownership before removing supporting sync state.
+    let instance = state_manager.get_instance(instance_id).await?.context("Instance not found")?;
+    let workspace_name = if instance.workspace_name.is_some() {
+        instance.workspace_name.clone()
+    } else {
+        state_manager.get_sync_session(instance_id).await?.map(|(name, _, _, _)| name)
+    };
+    let workspace_id = instance.workspace_id.clone();
 
     // 1. Stop file sync
     output::info("Stopping file sync...");
@@ -376,60 +376,36 @@ async fn perform_remote_cleanup(
     output::info("Stopping port forwards...");
 
     let mut stopped_count = 0;
-
-    // First try to kill PIDs from database
-    let mappings = state_manager.get_port_mappings(instance_id).await?;
-    for (_service_name, _port_type, _local_port, _remote_port, pid) in &mappings {
-        if let Some(pid) = pid {
-            #[cfg(unix)]
-            {
-                unsafe {
-                    if libc::kill(*pid as i32, libc::SIGTERM) == 0 {
-                        stopped_count += 1;
-                    }
-                }
+    let mappings = state_manager.get_port_mapping_records(instance_id).await?;
+    for mapping in mappings {
+        let outcome = match (workspace_id.as_deref(), workspace_name.as_deref()) {
+            (Some(workspace_id), Some(workspace_name)) => {
+                stop_managed_port_forward(&mapping, workspace_id, workspace_name)?
             }
-
-            #[cfg(windows)]
-            {
-                let _ = Command::new("taskkill").args(["/PID", &pid.to_string(), "/F"]).output();
+            _ => ManagedForwardStopOutcome::Unverified(
+                "session is missing immutable workspace identity".to_string(),
+            ),
+        };
+        match outcome {
+            ManagedForwardStopOutcome::Stopped => {
                 stopped_count += 1;
             }
-        }
-    }
-
-    // Also search for and kill any port-forward processes for this workspace
-    if let Some(ref ws_name) = workspace_name {
-        #[cfg(unix)]
-        {
-            let output = Command::new("pgrep")
-                .args(["-f", &format!("coder port-forward {ws_name}")])
-                .output();
-
-            if let Ok(output) = output {
-                if output.status.success() {
-                    let pids = String::from_utf8_lossy(&output.stdout);
-                    for pid_str in pids.lines() {
-                        if let Ok(pid) = pid_str.parse::<i32>() {
-                            unsafe {
-                                if libc::kill(pid, libc::SIGTERM) == 0 {
-                                    stopped_count += 1;
-                                }
-                            }
-                        }
-                    }
-                }
+            ManagedForwardStopOutcome::AlreadyExited => {}
+            ManagedForwardStopOutcome::Unverified(reason) => {
+                output::warn(&format!(
+                    "Leaving {} forward untouched: {reason}",
+                    mapping.service_name
+                ));
+                continue;
             }
         }
+        state_manager
+            .remove_port_mapping_record(instance_id, &mapping.service_name, &mapping.port_type)
+            .await?;
     }
 
     if stopped_count > 0 {
         output::success(&format!("Stopped {stopped_count} port forward(s)"));
-    }
-
-    // Clean up port mappings from database
-    if let Err(e) = state_manager.delete_port_mappings(instance_id).await {
-        output::warn(&format!("Failed to clean port mappings: {e}"));
     }
 
     // 3. Prompt for workspace cleanup (skip prompt if force or delete flag)

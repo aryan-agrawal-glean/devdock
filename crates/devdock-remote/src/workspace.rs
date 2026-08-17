@@ -1,6 +1,7 @@
 //! Workspace lifecycle management.
 
 use crate::{coder, config_sync, port_forward::PortForwardManager, ssh, RemoteError, Result};
+use devdock_state::StateManager;
 use std::path::{Path, PathBuf};
 use std::thread::sleep;
 use std::time::Duration;
@@ -157,7 +158,9 @@ pub async fn provision_workspace(config: &coder::CoderWorkspaceConfig) -> Result
 /// Start DevDock on remote workspace with optional port forwarding.
 #[allow(clippy::too_many_arguments)]
 pub async fn start_remote_devdock<F>(
+    state: &StateManager,
     workspace: &str,
+    workspace_id: &str,
     profile: &str,
     profile_path: &Path,
     devdock_id: &str,
@@ -431,30 +434,32 @@ exit 0
     }
     let port_mgr = if auto_forward {
         info!("Setting up auto port forwarding...");
-        let mut mgr =
-            PortForwardManager::from_profile(profile_path, workspace, devdock_id, offset)?;
-        mgr.start_all_forwards()?;
+        let mut mgr = PortForwardManager::from_profile(
+            profile_path,
+            workspace,
+            workspace_id,
+            devdock_id,
+            offset,
+        )?;
+        mgr.start_all_forwards(state).await?;
         if verbose {
             println!("  ✓ Auto port forwarding enabled");
         }
         Some(mgr)
     } else {
-        // Manual mode: forward Tilt UI and nginx so local.glean.com routes work.
+        // Compatibility mode: forward Tilt UI and nginx so local.glean.com routes work.
         info!("Forwarding Tilt UI and nginx (use --auto-forward for all services)");
         let tilt_port = offset + 10350;
         println!("  Starting port forward: localhost:{tilt_port} -> remote:10350");
-        let tilt_child = coder::port_forward_single(workspace, tilt_port, 10350)?;
-        // Keep the child process alive - it will be cleaned up when the program exits
-        std::mem::forget(tilt_child);
-
         println!("  Starting port forward: localhost:8321 -> remote:8321 (nginx)");
-        let nginx_child = coder::port_forward_single(workspace, 8321, 8321)?;
-        std::mem::forget(nginx_child);
+        let mut mgr =
+            PortForwardManager::default_forwards(workspace, workspace_id, devdock_id, offset);
+        mgr.start_all_forwards(state).await?;
 
         if verbose {
             println!("  ✓ Tilt UI and nginx port forwards started");
         }
-        None
+        Some(mgr)
     };
 
     // 5. Final success message (only in verbose mode, caller shows better summary)

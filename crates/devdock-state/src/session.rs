@@ -1,5 +1,6 @@
 //! Versioned remote-session identity and manifest handling.
 
+use crate::forward::{PortMappingRecord, LOOPBACK_BIND_ADDRESS};
 use crate::instance::Instance;
 use crate::paths::{create_private_dir, StatePaths};
 use anyhow::{Context, Result};
@@ -40,8 +41,48 @@ pub struct SessionManifestV1 {
     pub profile: String,
     pub branch: String,
     pub port_base: u16,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub port_mappings: Vec<SessionPortMappingV1>,
     pub created_at: i64,
     pub updated_at: i64,
+}
+
+/// Non-secret, resolved forward data needed to operate an existing session
+/// without re-reading its profile.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionPortMappingV1 {
+    pub service_name: String,
+    pub port_type: String,
+    pub bind_address: String,
+    pub local_port: u16,
+    pub remote_port: u16,
+    pub process_pid: u32,
+    pub workspace_id: String,
+    pub owner_kind: String,
+    pub process_start_time: u64,
+    pub command_fingerprint: String,
+}
+
+impl SessionPortMappingV1 {
+    pub fn from_record(record: &PortMappingRecord) -> Option<Self> {
+        record.is_devdock_managed().then(|| Self {
+            service_name: record.service_name.clone(),
+            port_type: record.port_type.clone(),
+            bind_address: LOOPBACK_BIND_ADDRESS.to_string(),
+            local_port: record.local_port,
+            remote_port: record.remote_port,
+            process_pid: record.process_pid.expect("managed mapping has a PID"),
+            workspace_id: record.workspace_id.clone().expect("managed mapping has a workspace ID"),
+            owner_kind: record.owner_kind.clone().expect("managed mapping has an owner"),
+            process_start_time: record
+                .process_start_time
+                .expect("managed mapping has a process start time"),
+            command_fingerprint: record
+                .command_fingerprint
+                .clone()
+                .expect("managed mapping has a command fingerprint"),
+        })
+    }
 }
 
 impl SessionManifestV1 {
@@ -60,6 +101,7 @@ impl SessionManifestV1 {
             profile: instance.profile.clone(),
             branch: instance.branch.clone(),
             port_base: instance.port_base,
+            port_mappings: Vec::new(),
             created_at: instance.created_at,
             updated_at: instance.updated_at,
         })

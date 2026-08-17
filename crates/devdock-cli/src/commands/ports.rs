@@ -2,13 +2,16 @@
 
 use anyhow::{anyhow, Result};
 use colored::Colorize;
-use devdock_state::StateManager;
+use devdock_remote::{
+    coder, managed_port_forward_status, start_managed_port_forward_logged,
+    stop_managed_port_forward, ManagedForwardStatus, ManagedForwardStopOutcome,
+};
+use devdock_state::{PortMappingRecord, StateManager};
 use prettytable::{format, row, Table};
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::fs::File;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::Command;
 
 const TILT_SERVICE_NAME: &str = "tilt";
 const TILT_PORT: u16 = 10350;
@@ -51,8 +54,8 @@ pub async fn list(instance: Option<String>) -> Result<()> {
             .ok_or_else(|| anyhow!("No running DevDock instance found for current worktree"))?
     };
 
-    // Get port mappings
-    let mappings = state.get_port_mappings(&devdock_id).await?;
+    let owning_instance = state.get_instance(&devdock_id).await?;
+    let mappings = state.get_port_mapping_records(&devdock_id).await?;
 
     if mappings.is_empty() {
         println!("{}", "No port mappings found".yellow());
@@ -63,16 +66,20 @@ pub async fn list(instance: Option<String>) -> Result<()> {
     }
 
     // Display port table
-    print_port_table(&mappings);
+    print_port_table(
+        &mappings,
+        owning_instance.as_ref().and_then(|instance| instance.workspace_id.as_deref()),
+        owning_instance.as_ref().and_then(|instance| instance.workspace_name.as_deref()),
+    );
 
     // Display service URLs
     println!("\n{}:", "Access services".bold());
-    for (service_name, port_type, local_port, _remote_port, _pid) in &mappings {
-        if port_type == "service" {
+    for mapping in &mappings {
+        if mapping.port_type.eq_ignore_ascii_case("service") {
             println!(
                 "  {} {}",
-                service_name.cyan(),
-                format!("http://localhost:{local_port}").green()
+                mapping.service_name.cyan(),
+                format!("http://localhost:{}", mapping.local_port).green()
             );
         }
     }
@@ -81,22 +88,36 @@ pub async fn list(instance: Option<String>) -> Result<()> {
 }
 
 /// Print port mappings table.
-fn print_port_table(mappings: &[(String, String, u16, u16, Option<u32>)]) {
+fn print_port_table(
+    mappings: &[PortMappingRecord],
+    workspace_id: Option<&str>,
+    workspace_name: Option<&str>,
+) {
     let mut table = Table::new();
     table.set_format(*format::consts::FORMAT_BOX_CHARS);
 
     // Add header row
     table.add_row(row!["Service", "Type", "Local Port", "Remote Port", "Status"]);
 
-    for (service_name, port_type, local_port, remote_port, pid) in mappings {
-        let status =
-            if pid.is_some() { "Active".green().to_string() } else { "Inactive".red().to_string() };
+    for mapping in mappings {
+        let status = match (workspace_id, workspace_name) {
+            (Some(workspace_id), Some(workspace_name)) => {
+                match managed_port_forward_status(mapping, workspace_id, workspace_name) {
+                    ManagedForwardStatus::Active => "Active".green().to_string(),
+                    ManagedForwardStatus::Exited => "Exited".red().to_string(),
+                    ManagedForwardStatus::Unverified(_) => {
+                        "External/unverified".yellow().to_string()
+                    }
+                }
+            }
+            _ => "External/unverified".yellow().to_string(),
+        };
 
         table.add_row(row![
-            service_name,
-            port_type,
-            local_port.to_string(),
-            remote_port.to_string(),
+            mapping.service_name,
+            mapping.port_type,
+            mapping.local_port.to_string(),
+            mapping.remote_port.to_string(),
             status
         ]);
     }
@@ -139,6 +160,7 @@ pub async fn forward(
             &state,
             &instance_info.devdock_id,
             &instance_info.workspace_name,
+            &instance_info.workspace_id,
             custom_mapping,
         )
         .await
@@ -155,9 +177,9 @@ pub async fn stop(all: bool, service: Option<&str>) -> Result<()> {
     let info = get_current_remote_instance(&state).await?;
 
     if all {
-        stop_all_port_forwards(&state, &info.devdock_id).await
+        stop_all_port_forwards(&state, &info).await
     } else if let Some(svc) = service {
-        stop_service_port_forward(&state, &info.devdock_id, svc).await
+        stop_service_port_forward(&state, &info, svc).await
     } else {
         Err(anyhow!("Please specify --all or --service <name>"))
     }
@@ -166,6 +188,7 @@ pub async fn stop(all: bool, service: Option<&str>) -> Result<()> {
 struct RemoteInstanceInfo {
     devdock_id: String,
     workspace_name: String,
+    workspace_id: String,
     port_base: u16,
     profile: String,
 }
@@ -182,14 +205,36 @@ async fn get_current_remote_instance(state: &StateManager) -> Result<RemoteInsta
         })
         .ok_or_else(|| anyhow!("No running remote DevDock instance found for current worktree"))?;
 
-    let workspace_name = instance
+    let mut workspace_name = instance
         .workspace_name
         .clone()
         .ok_or_else(|| anyhow!("Remote instance missing workspace name"))?;
+    // Sessions created by older DevDock binaries only recorded the mutable workspace name.
+    // Resolve and persist the immutable Coder identity before this process creates any managed
+    // forward, so legacy state remains usable without weakening ownership verification.
+    let workspace_id = match instance.workspace_id.clone() {
+        Some(workspace_id) => workspace_id,
+        None => {
+            let identity = coder::get_workspace_identity(&workspace_name)?.ok_or_else(|| {
+                anyhow!(
+                    "Coder workspace '{workspace_name}' was not found while upgrading legacy session identity"
+                )
+            })?;
+            let attached =
+                state.attach_remote_workspace(&instance.id, &identity.id, &identity.name).await?;
+            workspace_name = attached
+                .workspace_name
+                .ok_or_else(|| anyhow!("Failed to persist canonical Coder workspace name"))?;
+            attached
+                .workspace_id
+                .ok_or_else(|| anyhow!("Failed to persist immutable Coder workspace identity"))?
+        }
+    };
 
     Ok(RemoteInstanceInfo {
         devdock_id: instance.id,
         workspace_name,
+        workspace_id,
         port_base: instance.port_base,
         profile: instance.profile,
     })
@@ -325,6 +370,7 @@ async fn forward_all_ports(
             state,
             &info.devdock_id,
             &info.workspace_name,
+            &info.workspace_id,
             service_name,
             local_port,
             *remote_port,
@@ -380,6 +426,7 @@ async fn forward_nginx_if_available(
             state,
             &info.devdock_id,
             &info.workspace_name,
+            &info.workspace_id,
             NGINX_SERVICE_NAME,
             nginx_local_port,
             *nginx_remote_port,
@@ -425,6 +472,7 @@ async fn forward_service_port(
         state,
         &info.devdock_id,
         &info.workspace_name,
+        &info.workspace_id,
         service_name,
         local_port,
         *remote_port,
@@ -443,6 +491,7 @@ async fn forward_custom_port(
     state: &StateManager,
     devdock_id: &str,
     workspace_name: &str,
+    workspace_id: &str,
     mapping: &str,
 ) -> Result<()> {
     let parts: Vec<&str> = mapping.split(':').collect();
@@ -456,8 +505,16 @@ async fn forward_custom_port(
         parts[1].parse().map_err(|_| anyhow!("Invalid remote port: {}", parts[1]))?;
 
     println!("{}", "Forwarding custom port...".cyan());
-    start_port_forward(state, devdock_id, workspace_name, "custom", local_port, remote_port)
-        .await?;
+    start_port_forward(
+        state,
+        devdock_id,
+        workspace_name,
+        workspace_id,
+        "custom",
+        local_port,
+        remote_port,
+    )
+    .await?;
 
     println!("  ✅ Custom: localhost:{local_port} → remote:{remote_port}");
     println!();
@@ -471,48 +528,36 @@ async fn start_port_forward(
     state: &StateManager,
     devdock_id: &str,
     workspace_name: &str,
+    workspace_id: &str,
     service_name: &str,
     local_port: u16,
     remote_port: u16,
 ) -> Result<()> {
-    // Create log directory
     let log_dir = dirs::home_dir()
         .ok_or_else(|| anyhow!("Could not determine home directory"))?
         .join(".devdock")
         .join("ports");
     std::fs::create_dir_all(&log_dir)?;
+    let log_path = log_dir.join(format!("{devdock_id}_{service_name}.log"));
 
-    let log_file = log_dir.join(format!("{devdock_id}_{service_name}.log"));
-    let log_handle = File::create(&log_file)?;
-
-    // Start port forward process
-    let child = Command::new("coder")
-        .arg("port-forward")
-        .arg(workspace_name)
-        .arg("--tcp")
-        .arg(format!("{local_port}:{remote_port}"))
-        .stdin(Stdio::null())
-        .stdout(log_handle.try_clone()?)
-        .stderr(log_handle)
-        .spawn()
-        .map_err(|e| anyhow!("Failed to start port forward: {e}"))?;
-
-    let pid = child.id();
-
-    // Give it a moment to establish
-    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-
-    // Save port mapping to state
-    state
-        .save_port_mapping(devdock_id, service_name, "service", local_port, remote_port, Some(pid))
-        .await?;
-
+    start_managed_port_forward_logged(
+        state,
+        devdock_id,
+        workspace_name,
+        workspace_id,
+        service_name,
+        "service",
+        local_port,
+        remote_port,
+        &log_path,
+    )
+    .await?;
     Ok(())
 }
 
 /// Stop all port forwards for an instance.
-async fn stop_all_port_forwards(state: &StateManager, devdock_id: &str) -> Result<()> {
-    let mappings = state.get_port_mappings(devdock_id).await?;
+async fn stop_all_port_forwards(state: &StateManager, info: &RemoteInstanceInfo) -> Result<()> {
+    let mappings = state.get_port_mapping_records(&info.devdock_id).await?;
 
     if mappings.is_empty() {
         println!("{}", "No port forwards to stop".yellow());
@@ -522,19 +567,40 @@ async fn stop_all_port_forwards(state: &StateManager, devdock_id: &str) -> Resul
     println!("{}", "Stopping all port forwards...".cyan());
     let mut stopped_count = 0;
 
-    for (service_name, _, _, _, pid_opt) in mappings {
-        if let Some(pid) = pid_opt {
-            if kill_process(pid) {
-                println!("  ✅ Stopped: {}", service_name.cyan());
+    let mut unverified_count = 0;
+    for mapping in mappings {
+        match stop_managed_port_forward(&mapping, &info.workspace_id, &info.workspace_name)? {
+            ManagedForwardStopOutcome::Stopped => {
+                println!("  ✅ Stopped: {}", mapping.service_name.cyan());
                 stopped_count += 1;
             }
+            ManagedForwardStopOutcome::AlreadyExited => {
+                println!("  ✓ Already exited: {}", mapping.service_name.cyan());
+            }
+            ManagedForwardStopOutcome::Unverified(reason) => {
+                println!("  ⚠️  Not stopping {}: {}", mapping.service_name.yellow(), reason);
+                unverified_count += 1;
+                continue;
+            }
         }
-        // Remove from state
-        state.remove_port_mapping(devdock_id, &service_name).await?;
+        state
+            .remove_port_mapping_record(
+                &mapping.devdock_id,
+                &mapping.service_name,
+                &mapping.port_type,
+            )
+            .await?;
     }
 
     println!();
     println!("{} {} port forward(s) stopped", "✅".green(), stopped_count);
+    if unverified_count > 0 {
+        println!(
+            "{} {} legacy/external forward(s) left untouched because ownership could not be verified",
+            "⚠️".yellow(),
+            unverified_count
+        );
+    }
 
     Ok(())
 }
@@ -542,54 +608,64 @@ async fn stop_all_port_forwards(state: &StateManager, devdock_id: &str) -> Resul
 /// Stop a specific service port forward.
 async fn stop_service_port_forward(
     state: &StateManager,
-    devdock_id: &str,
+    info: &RemoteInstanceInfo,
     service_name: &str,
 ) -> Result<()> {
-    let mappings = state.get_port_mappings(devdock_id).await?;
+    let mappings = state.get_port_mapping_records(&info.devdock_id).await?;
 
-    let mapping = mappings
-        .iter()
-        .find(|(name, _, _, _, _)| name == service_name)
-        .ok_or_else(|| anyhow!("No port forward found for service: {service_name}"))?;
+    let mappings: Vec<_> =
+        mappings.into_iter().filter(|mapping| mapping.service_name == service_name).collect();
+    if mappings.is_empty() {
+        return Err(anyhow!("No port forward found for service: {service_name}"));
+    }
 
-    println!("{}", format!("Stopping {service_name} port forward...").cyan());
-
-    if let Some(pid) = mapping.4 {
-        if kill_process(pid) {
-            println!("  ✅ Stopped: {} (PID: {})", service_name.cyan(), pid);
-        } else {
-            println!("  ⚠️  Process {pid} not found (may have already exited)");
+    // A service can have both service and debug mappings. Refuse the whole request before
+    // changing anything if any live mapping lacks kill authority, then stop each exact record.
+    for mapping in &mappings {
+        if let ManagedForwardStatus::Unverified(reason) =
+            managed_port_forward_status(mapping, &info.workspace_id, &info.workspace_name)
+        {
+            return Err(anyhow!(
+                "Refusing to stop {service_name}: ownership could not be verified ({reason})"
+            ));
         }
     }
 
-    // Remove from state
-    state.remove_port_mapping(devdock_id, service_name).await?;
+    println!("{}", format!("Stopping {service_name} port forward...").cyan());
+
+    for mapping in mappings {
+        match stop_managed_port_forward(&mapping, &info.workspace_id, &info.workspace_name)? {
+            ManagedForwardStopOutcome::Stopped => {
+                println!(
+                    "  ✅ Stopped: {} {} (PID: {})",
+                    service_name.cyan(),
+                    mapping.port_type,
+                    mapping.process_pid.expect("managed forward has a PID")
+                );
+            }
+            ManagedForwardStopOutcome::AlreadyExited => {
+                println!("  ✓ {} process already exited", mapping.port_type);
+            }
+            ManagedForwardStopOutcome::Unverified(reason) => {
+                return Err(anyhow!(
+                    "Refusing to stop {service_name}: ownership changed during cleanup ({reason})"
+                ));
+            }
+        }
+
+        state
+            .remove_port_mapping_record(
+                &mapping.devdock_id,
+                &mapping.service_name,
+                &mapping.port_type,
+            )
+            .await?;
+    }
 
     println!();
     println!("View remaining mappings: {}", "devdock ports list".cyan());
 
     Ok(())
-}
-
-/// Kill a process by PID.
-fn kill_process(pid: u32) -> bool {
-    #[cfg(unix)]
-    {
-        Command::new("kill")
-            .arg(pid.to_string())
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-    }
-
-    #[cfg(windows)]
-    {
-        Command::new("taskkill")
-            .args(["/PID", &pid.to_string(), "/F"])
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-    }
 }
 
 #[cfg(test)]

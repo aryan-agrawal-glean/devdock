@@ -11,7 +11,11 @@ pub mod ssh;
 pub mod workspace;
 
 pub use coder::{check_coder_installed, workspace_exists, CoderWorkspaceConfig};
-pub use port_forward::{PortForwardManager, PortMapping, PortType};
+pub use port_forward::{
+    managed_port_forward_status, start_managed_port_forward, start_managed_port_forward_logged,
+    stop_managed_port_forward, ManagedForwardStatus, ManagedForwardStopOutcome, PortForwardManager,
+    PortMapping, PortType,
+};
 pub use workspace::{
     cleanup_existing_devdock, inspect_remote_git_state, provision_workspace, start_remote_devdock,
     RemoteGitState,

@@ -412,8 +412,12 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
                 )
             })?
         };
+        // Coder accepts owner-qualified names for lookup and startup, but process fingerprints and
+        // durable session identity must use the canonical name returned by the API. Shadow the
+        // requested spelling before any managed forwards are created.
+        let workspace_name = coder_identity.name.clone();
         state
-            .attach_remote_workspace(&instance_id, &coder_identity.id, &coder_identity.name)
+            .attach_remote_workspace(&instance_id, &coder_identity.id, &workspace_name)
             .await?;
         *t_current_stage.lock().unwrap() = stage::CONFIG_SYNC;
 
@@ -484,7 +488,9 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
 
         // The actual config sync and devdock start happens inside workspace::start_remote_devdock
         let port_mgr = workspace::start_remote_devdock(
+            &state,
             &workspace_name,
+            &coder_identity.id,
             &profile,
             &profile_path,
             &instance_id,
@@ -514,27 +520,12 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
         }
         logger.log("DevDock started successfully")?;
 
-        // Step 2: Save port mappings (if auto-forwarding)
-        if let Some(mgr) = &port_mgr {
+        // Step 2: managed mappings were durably registered before their child
+        // handles were released. Preserve the existing auto-forward progress UX.
+        if auto_forward && port_mgr.is_some() {
             let step2_start = Instant::now();
 
             let spinner2 = if verbose { None } else { Some(output::create_spinner("Ports")) };
-
-            let mappings: Vec<_> = mgr
-                .mappings
-                .iter()
-                .map(|m| {
-                    (
-                        m.service_name.clone(),
-                        format!("{:?}", m.port_type),
-                        m.local_port,
-                        m.remote_port,
-                        m.process_pid,
-                    )
-                })
-                .collect();
-
-            state.save_port_mappings(&instance_id, &mappings).await?;
             *t_port_forward.lock().unwrap() = Some(wall_start.elapsed().as_secs_f64());
 
             let step2_duration = step2_start.elapsed().as_secs();

@@ -2,8 +2,16 @@
 
 use crate::{RemoteError, Result};
 use serde::{Deserialize, Serialize};
+use std::fs::File;
+use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use tracing::{debug, info, warn};
+
+pub const PORT_FORWARD_BIND_ADDRESS: &str = devdock_state::LOOPBACK_BIND_ADDRESS;
+
+pub fn port_forward_tcp_spec(local_port: u16, remote_port: u16) -> String {
+    format!("{PORT_FORWARD_BIND_ADDRESS}:{local_port}:{remote_port}")
+}
 
 /// Configuration for creating a Coder workspace.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -228,41 +236,54 @@ pub fn port_forward_single(workspace: &str, local_port: u16, remote_port: u16) -
 
     info!("Port forwarding {}:{} -> {}", workspace, remote_port, local_port);
 
-    let child = Command::new("coder")
-        .arg("port-forward")
-        .arg(workspace)
-        .arg("--tcp")
-        .arg(format!("{local_port}:{remote_port}"))
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|e| RemoteError::PortForwardError(format!("Failed to start port forward: {e}")))?;
+    let mut command = port_forward_command(workspace, local_port, remote_port);
+    let child =
+        command.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().map_err(
+            |e| RemoteError::PortForwardError(format!("Failed to start port forward: {e}")),
+        )?;
 
     debug!("Port forward started with PID: {}", child.id());
     Ok(child)
 }
 
-/// Kill a port forward process by PID.
-pub fn kill_port_forward(pid: u32) -> Result<()> {
-    #[cfg(unix)]
-    {
-        use std::process::Command;
-        let _ = Command::new("kill").arg(pid.to_string()).output();
-    }
+/// Start a managed forward while preserving the existing manual-command log.
+pub fn port_forward_single_logged(
+    workspace: &str,
+    local_port: u16,
+    remote_port: u16,
+    log_path: &Path,
+) -> Result<Child> {
+    check_coder_installed()?;
+    let log = File::create(log_path).map_err(|error| {
+        RemoteError::PortForwardError(format!(
+            "Failed to create port-forward log {}: {error}",
+            log_path.display()
+        ))
+    })?;
+    let mut command = port_forward_command(workspace, local_port, remote_port);
+    command.stdin(Stdio::null()).stdout(log.try_clone()?).stderr(log).spawn().map_err(|error| {
+        RemoteError::PortForwardError(format!("Failed to start port forward: {error}"))
+    })
+}
 
-    #[cfg(windows)]
-    {
-        use std::process::Command;
-        let _ = Command::new("taskkill").arg("/PID").arg(pid.to_string()).arg("/F").output();
-    }
-
-    Ok(())
+fn port_forward_command(workspace: &str, local_port: u16, remote_port: u16) -> Command {
+    let mut command = Command::new("coder");
+    command
+        .arg("port-forward")
+        .arg(workspace)
+        .arg("--tcp")
+        .arg(port_forward_tcp_spec(local_port, remote_port));
+    command
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn port_forward_spec_is_explicitly_ipv4_loopback_bound() {
+        assert_eq!(port_forward_tcp_spec(11350, 10350), "127.0.0.1:11350:10350");
+    }
 
     #[test]
     fn parses_exact_coder_workspace_identity() {
