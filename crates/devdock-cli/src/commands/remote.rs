@@ -4,11 +4,12 @@ use crate::{logging::OperationLogger, output};
 use anyhow::{anyhow, Result};
 use colored::Colorize;
 use devdock_config::ProfileLoader;
-use devdock_remote::{check_gcloud_auth, coder, workspace, CoderWorkspaceConfig, RemoteError};
+use devdock_remote::{
+    check_coder_installed, check_gcloud_auth, coder, workspace, CoderWorkspaceConfig, RemoteError,
+};
 use devdock_state::{
     instance::{Instance, InstanceStatus, SessionOrigin},
-    ports::PortAllocator,
-    StateManager,
+    RemoteSessionRequest, StateManager,
 };
 use devdock_sync::daemon as sync_daemon;
 use std::path::PathBuf;
@@ -126,32 +127,35 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
     let loader = ProfileLoader::new();
     let loaded_profile = loader.load_from_path(&profile_path)?;
 
-    // Register instance in database
+    // Complete local preflight before creating an active session record.
+    check_coder_installed()?;
+    let identity_lookup_name = vm.as_deref().unwrap_or(&workspace_name);
+    let preflight_coder_identity = coder::get_workspace_identity(identity_lookup_name)?;
+    if vm.is_some() && preflight_coder_identity.is_none() {
+        return Err(anyhow!(
+            "Coder workspace '{identity_lookup_name}' was not found during preflight"
+        ));
+    }
+
+    // Transactionally claim or reuse the session before remote mutation. Retries for the same
+    // worktree/workspace pair retain the original DevDock ID and port allocation.
     let state = StateManager::new().await?;
-    let instance_id = Instance::generate_id(SessionOrigin::Dev);
-
-    // Calculate port offset
-    let offset = if let Some(base) = port_base {
-        base
-    } else {
-        let port_allocator = PortAllocator::new(state.clone()).await;
-        port_allocator.allocate().await?
-    };
-
-    let instance = Instance {
-        id: instance_id.clone(),
-        workspace_path: worktree.clone(),
-        workspace_name: Some(workspace_name.clone()),
-        branch: branch_for_workspace.clone(),
-        profile: profile.clone(),
-        mode: "remote".to_string(),
-        status: InstanceStatus::Starting,
-        port_base: offset,
-        created_at: now(),
-        updated_at: now(),
-    };
-
-    state.register_instance(&instance).await?;
+    let claimed = state
+        .claim_remote_session(RemoteSessionRequest {
+            proposed_id: Instance::generate_id(SessionOrigin::Dev),
+            workspace_path: PathBuf::from(&worktree),
+            planned_workspace_name: workspace_name.clone(),
+            branch: branch_for_workspace.clone(),
+            profile: profile.clone(),
+            requested_port_base: port_base,
+            created_at: now(),
+        })
+        .await?;
+    if claimed.reused {
+        info!("Reusing reconciled remote session {}", claimed.instance.id);
+    }
+    let instance_id = claimed.instance.id;
+    let offset = claimed.instance.port_base;
 
     // Track total time
     let overall_start = Instant::now();
@@ -227,10 +231,13 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
     // Execute main setup logic with error handling to update status on failure
     let setup_result = async {
         // Create or start workspace
-        let (workspace_name, workspace_existed_flag) = if let Some(existing) = vm {
+        let (workspace_name, workspace_existed_flag, known_coder_identity) = if let Some(existing) = vm
+        {
             logger.log_section("Using Existing Workspace")?;
             logger.log(&format!("Workspace: {existing}"))?;
             output::info(&format!("Using existing workspace: {existing}"));
+            let identity = preflight_coder_identity
+                .ok_or_else(|| anyhow!("Coder workspace '{existing}' disappeared after preflight"))?;
             coder::start_workspace(&existing)?;
             logger.log("Workspace started successfully")?;
             ensure_existing_workspace_safe_to_continue(
@@ -239,11 +246,12 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
                 Some(logger.path()),
             )?;
             logger.log("Existing workspace git state passed safety guard")?;
-            (existing, true)
+            (existing, true, Some(identity))
         } else {
             // Check if workspace already exists
             logger.log(&format!("Checking if workspace '{workspace_name}' exists..."))?;
-            let exists = coder::workspace_exists(&workspace_name)?;
+            let existing_identity = preflight_coder_identity;
+            let exists = existing_identity.is_some();
             logger.log(&format!("Workspace exists: {exists}"))?;
 
             if exists {
@@ -314,7 +322,7 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
                         // Note: Gcloud credentials will be re-synced in workspace::start_remote_devdock
                         // No need to sync them here
 
-                        (workspace_name.clone(), true)
+                        (workspace_name.clone(), true, existing_identity)
                     }
                     "2" => {
                         logger.log_section("Deleting and Recreating Workspace")?;
@@ -352,7 +360,7 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
                         logger.log("Workspace created successfully")?;
 
                         logger.log(&format!("Workspace SSH ready: coder ssh {ws_name}"))?;
-                        (ws_name, false)
+                        (ws_name, false, None)
                     }
                     "3" | "" => {
                         output::info("Cancelled");
@@ -388,12 +396,25 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
                 logger.log("Workspace created successfully")?;
 
                 logger.log(&format!("Workspace SSH ready: coder ssh {ws_name}"))?;
-                (ws_name, false)
+                (ws_name, false, None)
             }
         };
         let workspace_ready_secs = wall_start.elapsed().as_secs_f64();
         *t_workspace_ready.lock().unwrap() = Some(workspace_ready_secs);
         *t_workspace_existed.lock().unwrap() = workspace_existed_flag;
+
+        let coder_identity = if let Some(identity) = known_coder_identity {
+            identity
+        } else {
+            coder::get_workspace_identity(&workspace_name)?.ok_or_else(|| {
+                anyhow!(
+                    "Coder workspace '{workspace_name}' was not returned after it became reachable"
+                )
+            })?
+        };
+        state
+            .attach_remote_workspace(&instance_id, &coder_identity.id, &coder_identity.name)
+            .await?;
         *t_current_stage.lock().unwrap() = stage::CONFIG_SYNC;
 
         // Start DevDock on remote with progress reporting
@@ -772,10 +793,11 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
             );
             emit_remote_telemetry(metrics).await;
 
-            // Failed - update status to Stopped
-            info!("Setup failed, updating instance status to Stopped");
-            if let Err(status_err) =
-                state.update_status(&instance_id, InstanceStatus::Stopped).await
+            // Preserve the failed stage/reason while retaining the retryable session identity.
+            info!("Setup failed, recording retryable session failure");
+            if let Err(status_err) = state
+                .record_failure(&instance_id, InstanceStatus::Stopped, failed_stage, &e.to_string())
+                .await
             {
                 warn!("Failed to update instance status: {}", status_err);
             }

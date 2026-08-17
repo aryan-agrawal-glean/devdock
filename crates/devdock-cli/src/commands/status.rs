@@ -81,6 +81,15 @@ async fn print_instance_status(
         println!("  Full ID:    {}", instance.id);
         println!("  Created:    {}", format_timestamp(instance.created_at));
         println!("  Updated:    {}", format_timestamp(instance.updated_at));
+        if let Some(workspace_id) = &instance.workspace_id {
+            println!("  Workspace ID: {workspace_id}");
+        }
+        if let Some(failure_stage) = &instance.failure_stage {
+            println!("  Failed stage: {failure_stage}");
+        }
+        if let Some(failure_reason) = &instance.failure_reason {
+            println!("  Failure:    {failure_reason}");
+        }
 
         // Check Docker containers (only for local mode)
         if instance.mode == "local" {

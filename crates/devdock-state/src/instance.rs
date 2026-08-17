@@ -41,11 +41,31 @@ pub struct Instance {
     pub id: String,
     pub workspace_path: String,
     pub workspace_name: Option<String>,
+    #[serde(default)]
+    pub workspace_id: Option<String>,
+    #[serde(default)]
+    pub planned_workspace_name: Option<String>,
+    #[serde(default)]
+    pub session_key: Option<String>,
     pub branch: String,
     pub profile: String,
     pub mode: String,
     pub status: InstanceStatus,
     pub port_base: u16,
+    #[serde(default)]
+    pub failure_stage: Option<String>,
+    #[serde(default)]
+    pub failure_reason: Option<String>,
+    #[serde(default)]
+    pub is_quarantined: bool,
+    #[serde(default)]
+    pub quarantine_reason: Option<String>,
+    #[serde(default)]
+    pub superseded_by: Option<String>,
+    #[serde(default)]
+    pub manifest_path: Option<String>,
+    #[serde(default)]
+    pub last_observed_at: Option<i64>,
     pub created_at: i64,
     pub updated_at: i64,
 }

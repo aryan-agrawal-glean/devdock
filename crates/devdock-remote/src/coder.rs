@@ -24,6 +24,14 @@ pub struct CoderWorkspaceConfig {
     pub disk_size: Option<u32>,
 }
 
+/// Immutable identity returned by the Coder API via `coder list --output json`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct CoderWorkspaceIdentity {
+    pub id: String,
+    pub name: String,
+    pub owner_name: String,
+}
+
 /// Check if coder CLI is installed and available.
 pub fn check_coder_installed() -> Result<()> {
     which::which("coder").map_err(|_| RemoteError::CoderNotInstalled)?;
@@ -152,25 +160,44 @@ pub fn delete_workspace(name: &str) -> Result<()> {
 
 /// Check if a workspace exists.
 pub fn workspace_exists(name: &str) -> Result<bool> {
+    Ok(get_workspace_identity(name)?.is_some())
+}
+
+/// Resolve a workspace name to its immutable Coder workspace ID.
+pub fn get_workspace_identity(name: &str) -> Result<Option<CoderWorkspaceIdentity>> {
     check_coder_installed()?;
+    let search_name = name.rsplit('/').next().unwrap_or(name);
 
     let output = Command::new("coder")
         .arg("list")
+        .arg("--output")
+        .arg("json")
+        .arg("--search")
+        .arg(format!("owner:me name:{search_name}"))
         .output()
         .map_err(|e| RemoteError::CommandFailed(format!("Failed to list workspaces: {e}")))?;
 
     if !output.status.success() {
-        return Ok(false);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(RemoteError::CommandFailed(format!(
+            "Failed to resolve Coder workspace identity: {stderr}"
+        )));
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    // Check if workspace name appears in the list output
-    // Format is like: "username/workspace-name    template-name    ..."
-    // Check if any line contains the workspace name (either with or without username prefix)
-    Ok(stdout.lines().any(|line| {
-        let first_col = line.split_whitespace().next().unwrap_or("");
-        // Match either "username/workspace-name" or just "workspace-name"
-        first_col == name || first_col.ends_with(&format!("/{name}"))
+    parse_workspace_identity(&output.stdout, name)
+}
+
+fn parse_workspace_identity(
+    bytes: &[u8],
+    requested: &str,
+) -> Result<Option<CoderWorkspaceIdentity>> {
+    let workspaces: Vec<CoderWorkspaceIdentity> =
+        serde_json::from_slice(bytes).map_err(|error| {
+            RemoteError::CommandFailed(format!("Invalid JSON from coder list: {error}"))
+        })?;
+    Ok(workspaces.into_iter().find(|workspace| {
+        workspace.name == requested
+            || format!("{}/{}", workspace.owner_name, workspace.name) == requested
     }))
 }
 
@@ -231,4 +258,29 @@ pub fn kill_port_forward(pid: u32) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_exact_coder_workspace_identity() {
+        let json = br#"[
+          {"id":"workspace-id","name":"feature-one","owner_name":"owner"},
+          {"id":"other-id","name":"feature-two","owner_name":"owner"}
+        ]"#;
+
+        let identity = parse_workspace_identity(json, "owner/feature-one").unwrap().unwrap();
+        assert_eq!(identity.id, "workspace-id");
+        assert_eq!(identity.name, "feature-one");
+    }
+
+    #[test]
+    fn does_not_accept_partial_workspace_names() {
+        let json = br#"[
+          {"id":"workspace-id","name":"feature-one-copy","owner_name":"owner"}
+        ]"#;
+        assert!(parse_workspace_identity(json, "feature-one").unwrap().is_none());
+    }
 }

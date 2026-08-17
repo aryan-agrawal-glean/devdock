@@ -8,7 +8,7 @@
 
 use std::path::PathBuf;
 use std::process::Command;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 #[test]
 #[ignore] // Only run when explicitly requested
@@ -95,5 +95,43 @@ fn benchmark_startup_bootstrap_time() {
         bootstrap_time_ms > 0,
         "Bootstrap time should be positive, got: {} ms",
         bootstrap_time_ms
+    );
+
+    // Dry-run intentionally skips instance registration, so separately measure the state-open
+    // path that every normal start executes. CI keeps this as a deterministic smoke ceiling; the
+    // release gate compares base/candidate p95 on a stable runner as specified by the design.
+    let state_dir = benchmark_home.path().join(".devdock");
+    std::fs::create_dir_all(&state_dir).expect("Failed to create benchmark state directory");
+    let state_db = state_dir.join("devdock.db");
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("Failed to create benchmark runtime");
+    runtime.block_on(async {
+        drop(
+            devdock_state::StateManager::with_path(&state_db)
+                .await
+                .expect("Failed to initialize benchmark state"),
+        );
+    });
+
+    let mut samples = Vec::with_capacity(20);
+    for _ in 0..20 {
+        let started = Instant::now();
+        runtime.block_on(async {
+            drop(
+                devdock_state::StateManager::with_path(&state_db)
+                    .await
+                    .expect("Failed to reopen benchmark state"),
+            );
+        });
+        samples.push(started.elapsed());
+    }
+    samples.sort_unstable();
+    let p95 = samples[18];
+    println!("{{\"state_open_p95_us\": {}}}", p95.as_micros());
+    assert!(
+        p95 < Duration::from_millis(100),
+        "Warm state-open p95 too high: {p95:?} (expected <100ms smoke ceiling)"
     );
 }
