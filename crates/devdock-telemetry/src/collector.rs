@@ -9,7 +9,7 @@ use crate::{
     Result,
 };
 use chrono::{DateTime, Utc};
-use devdock_monitor::{SessionTiming, TiltClient, TiltResource};
+use devdock_monitor::{SessionTiming, TiltResource, TiltSnapshotBroker, DEFAULT_TILT_ENDPOINT};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::process::Command;
@@ -21,6 +21,8 @@ use tracing::{info, warn};
 /// Configuration for the telemetry collector.
 #[derive(Debug, Clone)]
 pub struct TelemetryCollectorConfig {
+    /// Explicit loopback Tilt web endpoint.
+    pub tilt_endpoint: String,
     /// Collection interval for periodic metrics (default: 30 seconds)
     pub collection_interval: Duration,
     /// Whether to collect host metrics
@@ -40,6 +42,7 @@ pub struct TelemetryCollectorConfig {
 impl Default for TelemetryCollectorConfig {
     fn default() -> Self {
         TelemetryCollectorConfig {
+            tilt_endpoint: DEFAULT_TILT_ENDPOINT.to_string(),
             collection_interval: Duration::from_secs(30),
             collect_host_metrics: true,
             collect_docker_metrics: true,
@@ -69,7 +72,7 @@ struct ResourceTracker {
 /// Telemetry collector that gathers metrics from various sources.
 pub struct TelemetryCollector {
     config: TelemetryCollectorConfig,
-    tilt_client: TiltClient,
+    tilt_broker: TiltSnapshotBroker,
     emitters: Vec<Arc<dyn TelemetryEmitter>>,
     resource_trackers: RwLock<HashMap<String, ResourceTracker>>,
     session_start: DateTime<Utc>,
@@ -78,12 +81,19 @@ pub struct TelemetryCollector {
 
 impl TelemetryCollector {
     pub fn new(config: TelemetryCollectorConfig) -> Self {
+        let tilt_broker =
+            TiltSnapshotBroker::new(&config.tilt_endpoint, config.collection_interval)
+                .expect("validated Tilt endpoint");
+        Self::with_broker(config, tilt_broker)
+    }
+
+    pub fn with_broker(config: TelemetryCollectorConfig, tilt_broker: TiltSnapshotBroker) -> Self {
         if config.devdock_id.is_empty() {
             tracing::warn!("TelemetryCollector created with empty devdock_id — metrics will lack session correlation");
         }
         TelemetryCollector {
             config,
-            tilt_client: TiltClient::new(),
+            tilt_broker,
             emitters: Vec::new(),
             resource_trackers: RwLock::new(HashMap::new()),
             session_start: Utc::now(),
@@ -100,7 +110,7 @@ impl TelemetryCollector {
     pub async fn collect_snapshot(&self) -> Result<TelemetrySnapshot> {
         let mut snapshot = TelemetrySnapshot::new();
 
-        if let Ok(resources) = self.tilt_client.get_monitored_resources() {
+        if let Ok(resources) = self.tilt_broker.monitored_resources() {
             snapshot.resource_statuses = self.collect_resource_statuses(&resources).await;
             snapshot.health_transitions = self.check_health_transitions(&resources).await;
         }
@@ -152,7 +162,7 @@ impl TelemetryCollector {
             timestamp: now,
         });
 
-        if let Ok(resources) = self.tilt_client.get_monitored_resources() {
+        if let Ok(resources) = self.tilt_broker.monitored_resources() {
             snapshot.resource_startups = self.collect_resource_startups(&resources).await;
         }
 

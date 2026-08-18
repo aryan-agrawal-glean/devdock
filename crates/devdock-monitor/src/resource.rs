@@ -62,6 +62,16 @@ pub enum ResourceStatus {
     Unknown,
 }
 
+/// One Tilt build-history entry. Its identity is meaningful only with the
+/// enclosing snapshot's `tiltStartTime` and resource name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TiltBuild {
+    pub span_id: String,
+    pub start_time: String,
+    pub finish_time: Option<String>,
+    pub error: Option<String>,
+}
+
 impl ResourceStatus {
     pub fn is_terminal(&self) -> bool {
         matches!(self, ResourceStatus::Healthy | ResourceStatus::Failed)
@@ -90,6 +100,7 @@ pub struct TiltResource {
     pub build_start_time: Option<String>,
     pub build_finish_time: Option<String>,
     pub build_duration_secs: Option<f64>,
+    pub build_history: Vec<TiltBuild>,
 }
 
 impl TiltResource {
@@ -136,7 +147,9 @@ impl TiltResource {
             Self::determine_status(&runtime_status, &update_status, &compose_health, status);
 
         // Extract build timing from buildHistory
-        let (build_start, build_finish, build_duration) = Self::extract_build_timing(status);
+        let build_history = Self::extract_build_history(status);
+        let (build_start, build_finish, build_duration) =
+            Self::extract_build_timing(&build_history);
 
         Some(TiltResource {
             name,
@@ -150,27 +163,41 @@ impl TiltResource {
             build_start_time: build_start,
             build_finish_time: build_finish,
             build_duration_secs: build_duration,
+            build_history,
         })
+    }
+
+    fn extract_build_history(status: &serde_json::Value) -> Vec<TiltBuild> {
+        status
+            .get("buildHistory")
+            .and_then(|history| history.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|build| {
+                let span_id = build.get("spanID")?.as_str()?.to_string();
+                let start_time = build.get("startTime")?.as_str()?.to_string();
+                let finish_time =
+                    build.get("finishTime").and_then(|value| value.as_str()).map(str::to_string);
+                let error = build
+                    .get("error")
+                    .and_then(|value| value.as_str())
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string);
+                Some(TiltBuild { span_id, start_time, finish_time, error })
+            })
+            .collect()
     }
 
     /// Extract build timing from buildHistory (most recent build)
     fn extract_build_timing(
-        status: &serde_json::Value,
+        build_history: &[TiltBuild],
     ) -> (Option<String>, Option<String>, Option<f64>) {
-        let build_history = match status.get("buildHistory").and_then(|h| h.as_array()) {
-            Some(h) => h,
-            None => return (None, None, None),
-        };
-
-        // Get the most recent build (first in array)
         let latest_build = match build_history.first() {
             Some(b) => b,
             None => return (None, None, None),
         };
-
-        let start_time = latest_build.get("startTime").and_then(|t| t.as_str()).map(String::from);
-
-        let finish_time = latest_build.get("finishTime").and_then(|t| t.as_str()).map(String::from);
+        let start_time = Some(latest_build.start_time.clone());
+        let finish_time = latest_build.finish_time.clone();
 
         // Calculate duration if both times exist
         let duration = if let (Some(start), Some(finish)) = (&start_time, &finish_time) {

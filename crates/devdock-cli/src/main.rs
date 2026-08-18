@@ -284,6 +284,10 @@ enum Commands {
 
     /// Monitor startup resources until all healthy (or timeout)
     Monitor {
+        /// Explicit loopback Tilt web endpoint.
+        #[arg(long, default_value = devdock_monitor::DEFAULT_TILT_ENDPOINT)]
+        tilt_endpoint: String,
+
         /// Timeout in seconds (default: 1200 = 20 minutes)
         #[arg(short, long)]
         timeout: Option<u64>,
@@ -789,8 +793,8 @@ async fn main() {
 
         Commands::Guide { intent } => commands::guide::execute(intent).await,
 
-        Commands::Monitor { timeout, interval, no_notify, profile } => {
-            commands::monitor::execute(timeout, interval, no_notify, profile).await
+        Commands::Monitor { tilt_endpoint, timeout, interval, no_notify, profile } => {
+            commands::monitor::execute(&tilt_endpoint, timeout, interval, no_notify, profile).await
         }
 
         Commands::Update { version, check, force, list } => {

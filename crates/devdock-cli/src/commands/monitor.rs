@@ -2,10 +2,11 @@
 
 use crate::output;
 use anyhow::Result;
-use devdock_monitor::{StartupMonitor, StartupMonitorConfig, StartupResult};
+use devdock_monitor::{StartupMonitor, StartupMonitorConfig, StartupResult, TiltSnapshotBroker};
 
 /// Execute the monitor command - runs startup monitoring until all resources are healthy.
 pub async fn execute(
+    tilt_endpoint: &str,
     timeout: Option<u64>,
     interval: Option<u64>,
     no_notify: bool,
@@ -20,6 +21,7 @@ pub async fn execute(
     let monitor_start_time = chrono::Utc::now();
 
     let config = StartupMonitorConfig {
+        tilt_endpoint: tilt_endpoint.to_string(),
         timeout_secs: timeout.unwrap_or(1200),
         poll_interval_secs: interval.unwrap_or(2),
         notifications_enabled: !no_notify,
@@ -33,7 +35,9 @@ pub async fn execute(
         },
     };
 
-    let monitor = StartupMonitor::new(config);
+    let tilt_broker =
+        TiltSnapshotBroker::new(tilt_endpoint, Duration::from_secs(config.poll_interval_secs))?;
+    let monitor = StartupMonitor::with_broker(config, tilt_broker.clone());
 
     // Get devdock_id (must be set by start.rs, fallback to new ID for standalone runs)
     let devdock_id = std::env::var("DEVDOCK_ID").unwrap_or_else(|_| {
@@ -61,6 +65,7 @@ pub async fn execute(
                 &profile,
                 monitor_start_time,
                 duration_secs,
+                &tilt_broker,
             )
             .await;
 
@@ -84,6 +89,7 @@ pub async fn execute(
                 &profile,
                 monitor_start_time,
                 duration_secs,
+                &tilt_broker,
             )
             .await;
 
@@ -108,6 +114,7 @@ pub async fn execute(
                 &profile,
                 monitor_start_time,
                 duration_secs,
+                &tilt_broker,
             )
             .await;
 
@@ -125,6 +132,7 @@ pub async fn execute(
                 &profile,
                 monitor_start_time,
                 0,
+                &tilt_broker,
             )
             .await;
 
@@ -180,6 +188,7 @@ fn get_profile_name() -> String {
 }
 
 /// Emit telemetry data to BigQuery with resource-level metrics
+#[allow(clippy::too_many_arguments)]
 async fn emit_telemetry_with_resources(
     devdock_id: &str,
     status: &str,
@@ -188,9 +197,9 @@ async fn emit_telemetry_with_resources(
     profile: &str,
     monitor_start_time: chrono::DateTime<chrono::Utc>,
     duration_secs: u64,
+    tilt_broker: &TiltSnapshotBroker,
 ) {
     use chrono::Utc;
-    use devdock_monitor::TiltClient;
     use devdock_telemetry::{
         BigQueryConfig, BigQueryEmitter, ResourceStartupMetrics, ResourceStatusMetrics,
         SessionMetrics, TelemetryEmitter, TelemetrySnapshot,
@@ -227,11 +236,10 @@ async fn emit_telemetry_with_resources(
     };
 
     // Collect per-resource metrics from Tilt
-    let tilt_client = TiltClient::new();
     let mut resource_statuses = Vec::new();
     let mut resource_startups = Vec::new();
 
-    if let Ok(resources) = tilt_client.get_monitored_resources() {
+    if let Ok(resources) = tilt_broker.monitored_resources() {
         // Collect resource status snapshots
         for resource in &resources {
             resource_statuses.push(ResourceStatusMetrics {

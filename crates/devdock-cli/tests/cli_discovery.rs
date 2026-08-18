@@ -85,3 +85,26 @@ fn guide_help_lists_intent_entrypoint() {
     );
     assert!(stdout.contains("add-service"), "guide help should list add-service intent:\n{stdout}");
 }
+
+#[test]
+fn monitor_exposes_explicit_loopback_tilt_endpoint() {
+    let help = devdock().args(["monitor", "--help"]).output().expect("run monitor help");
+    assert!(help.status.success());
+    let stdout = String::from_utf8_lossy(&help.stdout);
+    assert!(stdout.contains("--tilt-endpoint"), "monitor help should expose endpoint:\n{stdout}");
+    assert!(
+        stdout.contains("http://127.0.0.1:10350"),
+        "monitor help should show the local default:\n{stdout}"
+    );
+
+    let invalid = devdock()
+        .args(["monitor", "--tilt-endpoint", "http://0.0.0.0:10350"])
+        .output()
+        .expect("run monitor with unsafe endpoint");
+    assert!(!invalid.status.success(), "non-loopback endpoint should fail");
+    let stderr = String::from_utf8_lossy(&invalid.stderr);
+    assert!(
+        stderr.contains("Tilt endpoint must use http://127.0.0.1"),
+        "unexpected endpoint validation error:\n{stderr}"
+    );
+}

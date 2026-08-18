@@ -5,11 +5,13 @@
 
 use crate::{
     HealthTracker, MonitorError, Notifier, ResourceStatus, Result, SessionState, SessionTiming,
-    StabilityConfig, StabilityInfo, StatsCollector, TiltClient, TiltResource,
+    StabilityConfig, StabilityInfo, StatsCollector, TiltResource, TiltSnapshot, TiltSnapshotBroker,
+    DEFAULT_TILT_ENDPOINT,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io::{self, Write};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::time::sleep;
 use tracing::{debug, info, warn};
@@ -17,6 +19,8 @@ use tracing::{debug, info, warn};
 /// Configuration for the startup monitor.
 #[derive(Debug, Clone)]
 pub struct StartupMonitorConfig {
+    /// Explicit loopback Tilt web endpoint.
+    pub tilt_endpoint: String,
     /// Timeout in seconds (default: 1200 = 20 minutes)
     pub timeout_secs: u64,
     /// Polling interval in seconds (default: 2)
@@ -36,6 +40,7 @@ pub struct StartupMonitorConfig {
 impl Default for StartupMonitorConfig {
     fn default() -> Self {
         StartupMonitorConfig {
+            tilt_endpoint: DEFAULT_TILT_ENDPOINT.to_string(),
             timeout_secs: 1200,
             poll_interval_secs: 2,
             notifications_enabled: true,
@@ -69,7 +74,7 @@ impl StartupResult {
 /// Startup monitor that waits for all resources to become healthy.
 pub struct StartupMonitor {
     config: StartupMonitorConfig,
-    tilt_client: TiltClient,
+    tilt_broker: TiltSnapshotBroker,
     notifier: Notifier,
     session_state: SessionState,
     stats_collector: StatsCollector,
@@ -78,14 +83,24 @@ pub struct StartupMonitor {
 
 impl StartupMonitor {
     pub fn new(config: StartupMonitorConfig) -> Self {
+        let tilt_broker = TiltSnapshotBroker::new(
+            &config.tilt_endpoint,
+            Duration::from_secs(config.poll_interval_secs),
+        )
+        .expect("validated Tilt endpoint");
+        Self::with_broker(config, tilt_broker)
+    }
+
+    pub fn with_broker(config: StartupMonitorConfig, tilt_broker: TiltSnapshotBroker) -> Self {
         let notifier = Notifier::with_enabled(config.notifications_enabled);
         let health_tracker = HealthTracker::new(config.stability.clone());
+        let stats_collector = StatsCollector::new(tilt_broker.clone());
         StartupMonitor {
             config,
-            tilt_client: TiltClient::new(),
+            tilt_broker,
             notifier,
             session_state: SessionState::new(),
-            stats_collector: StatsCollector::new(),
+            stats_collector,
             health_tracker: RefCell::new(health_tracker),
         }
     }
@@ -99,8 +114,22 @@ impl StartupMonitor {
         self.session_state.clear()
     }
 
+    async fn refresh_tilt_snapshot(&self) -> Result<Arc<TiltSnapshot>> {
+        let broker = self.tilt_broker.clone();
+        tokio::task::spawn_blocking(move || broker.refresh()).await.map_err(|error| {
+            MonitorError::TiltHttp(format!("Tilt snapshot task failed: {error}"))
+        })?
+    }
+
+    async fn tilt_snapshot(&self) -> Result<Arc<TiltSnapshot>> {
+        let broker = self.tilt_broker.clone();
+        tokio::task::spawn_blocking(move || broker.snapshot()).await.map_err(|error| {
+            MonitorError::TiltHttp(format!("Tilt snapshot task failed: {error}"))
+        })?
+    }
+
     /// Wait for Tilt to become available.
-    async fn wait_for_tilt(&self, max_wait: Duration) -> bool {
+    async fn wait_for_tilt(&self, max_wait: Duration) -> Option<Arc<TiltSnapshot>> {
         let start = Instant::now();
         let check_interval = Duration::from_secs(1);
 
@@ -109,15 +138,15 @@ impl StartupMonitor {
         }
 
         while start.elapsed() < max_wait {
-            if self.tilt_client.is_running() {
+            if let Ok(snapshot) = self.refresh_tilt_snapshot().await {
                 info!("Tilt is now available after {:?}", start.elapsed());
-                return true;
+                return Some(snapshot);
             }
             debug!("Tilt not ready yet, waiting...");
             sleep(check_interval).await;
         }
 
-        false
+        None
     }
 
     /// Run the startup monitoring loop.
@@ -136,11 +165,10 @@ impl StartupMonitor {
         );
 
         // Wait for Tilt to become available (up to 30 seconds)
-        let tilt_ready = self.wait_for_tilt(Duration::from_secs(30)).await;
-        if !tilt_ready {
+        let Some(initial_snapshot) = self.wait_for_tilt(Duration::from_secs(30)).await else {
             warn!("Tilt did not become available within 30 seconds");
             return Ok(StartupResult::TiltNotRunning);
-        }
+        };
 
         let mut session_timing = SessionTiming::new();
         session_timing.mark_tilt_up();
@@ -158,8 +186,15 @@ impl StartupMonitor {
                 return self.handle_timeout(elapsed, &resource_statuses);
             }
 
-            match self.tilt_client.get_monitored_resources() {
-                Ok(resources) => {
+            match self.tilt_snapshot().await {
+                Ok(snapshot) => {
+                    initial_snapshot.ensure_same_tilt_session(&snapshot)?;
+                    let resources = snapshot
+                        .resources
+                        .iter()
+                        .filter(|resource| resource.should_monitor())
+                        .cloned()
+                        .collect::<Vec<_>>();
                     let total = resources.len();
 
                     if total == 0 {
@@ -470,6 +505,30 @@ impl StartupMonitor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Read;
+    use std::net::TcpListener;
+
+    fn tilt_view(start_time: &str) -> String {
+        format!(r#"{{"tiltStartTime":"{start_time}","uiResources":[]}}"#)
+    }
+
+    fn serve_tilt_views(views: Vec<String>) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            for body in views {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = [0_u8; 4096];
+                let _ = stream.read(&mut request).unwrap();
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                stream.write_all(response.as_bytes()).unwrap();
+            }
+        });
+        format!("http://{address}/")
+    }
 
     #[test]
     fn test_config_default() {
@@ -492,5 +551,28 @@ mod tests {
             failed: vec![],
         };
         assert!(!timeout.is_success());
+    }
+
+    #[test]
+    fn monitor_rejects_replacement_tilt_session() {
+        let endpoint = serve_tilt_views(vec![
+            tilt_view("2026-08-18T09:20:31Z"),
+            tilt_view("2026-08-18T09:21:31Z"),
+        ]);
+        let config = StartupMonitorConfig {
+            tilt_endpoint: endpoint.clone(),
+            timeout_secs: 1,
+            poll_interval_secs: 0,
+            notifications_enabled: false,
+            show_progress: false,
+            skip_if_completed: false,
+            collect_stats: false,
+            stability: StabilityConfig::default(),
+        };
+        let broker = TiltSnapshotBroker::new(endpoint, Duration::ZERO).unwrap();
+        let monitor = StartupMonitor::with_broker(config, broker);
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+
+        assert!(matches!(runtime.block_on(monitor.run()), Err(MonitorError::TiltRestarted)));
     }
 }

@@ -11,6 +11,30 @@ pub enum MonitorError {
     #[error("Tilt command failed: {0}")]
     TiltCommand(String),
 
+    #[error("Invalid Tilt endpoint: {0}")]
+    InvalidTiltEndpoint(String),
+
+    #[error("Tilt HTTP request failed: {0}")]
+    TiltHttp(String),
+
+    #[error("Tilt /api/view returned HTML or a non-JSON response ({0})")]
+    TiltViewHtmlResponse(String),
+
+    #[error("Tilt /api/view schema is incompatible: {0}")]
+    TiltViewSchema(String),
+
+    #[error("Tilt web session did not issue a Tilt-Token cookie")]
+    TiltWebCookieMissing,
+
+    #[error("Tilt resource '{0}' was not found")]
+    TiltTriggerUnknownResource(String),
+
+    #[error("Tilt resource trigger failed: {0}")]
+    TiltTrigger(String),
+
+    #[error("Tilt restarted while collecting evidence")]
+    TiltRestarted,
+
     #[error("Failed to parse Tilt output: {0}")]
     ParseError(String),
 

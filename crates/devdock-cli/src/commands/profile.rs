@@ -473,13 +473,11 @@ fn is_local_sql(profile: &Profile) -> bool {
 
 fn trigger_sql_hydrator() {
     output::info("Triggering local SQL refresh (sql-hydrator)...");
-    match Command::new("tilt").args(["trigger", "sql-hydrator"]).output() {
-        Ok(output) if output.status.success() => output::success("sql-hydrator triggered"),
-        Ok(output) => output::warn(&format!(
-            "Failed to trigger sql-hydrator: {}",
-            String::from_utf8_lossy(&output.stderr)
-        )),
-        Err(e) => output::warn(&format!("Failed to run tilt trigger sql-hydrator: {e}")),
+    let client = devdock_monitor::TiltClient::new(devdock_monitor::DEFAULT_TILT_ENDPOINT)
+        .expect("valid default Tilt endpoint");
+    match client.trigger_resource("sql-hydrator") {
+        Ok(()) => output::success("sql-hydrator triggered"),
+        Err(e) => output::warn(&format!("Failed to trigger sql-hydrator: {e}")),
     }
 }
 

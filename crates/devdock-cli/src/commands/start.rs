@@ -498,6 +498,7 @@ async fn wait_for_tilt(
         use std::time::Duration;
 
         let monitor_config = StartupMonitorConfig {
+            tilt_endpoint: devdock_monitor::DEFAULT_TILT_ENDPOINT.to_string(),
             timeout_secs: monitor_timeout.unwrap_or(1200),
             poll_interval_secs: 2,
             notifications_enabled: true,

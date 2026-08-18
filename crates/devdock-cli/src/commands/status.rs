@@ -3,7 +3,7 @@
 use crate::output;
 use anyhow::Result;
 use colored::Colorize;
-use devdock_monitor::{ResourceStatus, TiltClient, TiltResource};
+use devdock_monitor::{ResourceStatus, TiltClient, TiltResource, DEFAULT_TILT_ENDPOINT};
 use devdock_remote::{managed_port_forward_status, ManagedForwardStatus};
 use devdock_state::{Instance, InstanceStatus, StateManager};
 use prettytable::{format, row, Table};
@@ -195,7 +195,7 @@ fn print_docker_status() -> Result<()> {
 }
 
 fn print_tilt_resources() {
-    let client = TiltClient::new();
+    let client = TiltClient::new(DEFAULT_TILT_ENDPOINT).expect("valid default Tilt endpoint");
 
     match client.get_resources() {
         Ok(resources) => {
@@ -376,6 +376,7 @@ mod tests {
             build_start_time: None,
             build_finish_time: None,
             build_duration_secs: None,
+            build_history: Vec::new(),
         }
     }
 

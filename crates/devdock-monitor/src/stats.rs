@@ -2,7 +2,7 @@
 //!
 //! Collects host stats, docker stats, and resource bootup times.
 
-use crate::{Result, SessionTiming, TiltClient, TiltResource};
+use crate::{Result, SessionTiming, TiltResource, TiltSnapshotBroker};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::process::Command;
@@ -36,14 +36,14 @@ pub struct ResourceStats {
 }
 
 /// Collector for startup statistics.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct StatsCollector {
-    tilt_client: TiltClient,
+    tilt_broker: TiltSnapshotBroker,
 }
 
 impl StatsCollector {
-    pub fn new() -> Self {
-        StatsCollector { tilt_client: TiltClient::new() }
+    pub fn new(tilt_broker: TiltSnapshotBroker) -> Self {
+        StatsCollector { tilt_broker }
     }
 
     /// Collect host system statistics.
@@ -72,7 +72,7 @@ impl StatsCollector {
 
     /// Collect per-resource startup statistics.
     pub fn collect_resource_stats(&self) -> Result<Vec<ResourceStats>> {
-        let resources = self.tilt_client.get_monitored_resources()?;
+        let resources = self.tilt_broker.monitored_resources()?;
         let mut stats = Vec::new();
 
         for resource in resources {
