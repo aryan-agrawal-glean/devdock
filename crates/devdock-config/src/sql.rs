@@ -119,8 +119,13 @@ impl SqlUtils {
         let instance_type =
             config.get("sql", &instance_key).map_or(FRONTEND_INSTANCE, std::string::String::as_str);
 
-        // Then get the instance connection name
-        let connection_key = format!("{instance_type}.googlecloud.instanceName");
+        // An explicitly empty instance type refers to the unprefixed/default SQL instance.
+        // This matches legacy deployment config semantics used by scio-apps databases.
+        let connection_key = if instance_type.trim().is_empty() {
+            "googlecloud.instanceName".to_string()
+        } else {
+            format!("{}.googlecloud.instanceName", instance_type.trim())
+        };
         config.get("sql", &connection_key).map(|full_name| {
             // Extract instance ID from connection name
             full_name.split(':').next_back().unwrap_or(full_name).to_string()
@@ -423,8 +428,10 @@ mod tests {
 active.instances = frontendInstance,backendInstance
 frontendInstance.googlecloud.instanceName = myproject:us-central1:frontend-sql-1
 backendInstance.googlecloud.instanceName = myproject:us-central1:backend-sql-1
+googlecloud.instanceName = myproject:us-central1:default-sql-1
 frontend_keyval.db.instance = frontendInstance
 backend_data.db.instance = backendInstance
+internal_permissions.db.instance =
 user_profile.db.instance = frontendInstance
 ";
 
@@ -458,6 +465,14 @@ user_profile.db.instance = frontendInstance
         assert_eq!(
             utils.get_instance_id_for_db(&config, "backend_data"),
             Some("backend-sql-1".to_string())
+        );
+        assert_eq!(
+            utils.get_instance_id_for_db(&config, "internal_permissions"),
+            Some("default-sql-1".to_string())
+        );
+        assert_eq!(
+            utils.get_instance_id_for_db(&config, "missing_mapping"),
+            Some("frontend-sql-1".to_string())
         );
     }
 
