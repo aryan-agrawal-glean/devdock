@@ -35,6 +35,7 @@ pub struct RemoteStartConfig {
     pub disk_size: Option<u32>,
     pub vm: Option<String>,
     pub auto_forward: bool,
+    pub copy_git_creds: bool,
     pub services: Option<String>,
     pub verbose: bool,
     pub log_level: String,
@@ -46,6 +47,16 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
 
     let command_start_time = chrono::Utc::now();
     let wall_start = std::time::Instant::now();
+
+    if config.copy_git_creds {
+        if config.vm.is_some() {
+            return Err(anyhow!(
+                "--copy-git-creds only applies when DevDock creates a Coder workspace; \
+                 remove --vm or create a new workspace"
+            ));
+        }
+        devdock_remote::config_sync::check_local_git_credentials()?;
+    }
 
     // Preflight check: verify gcloud auth is valid before any remote operations
     // This fails fast with a clear error message, avoiding wasted time on workspace
@@ -85,6 +96,7 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
         disk_size,
         vm,
         auto_forward,
+        copy_git_creds,
         services,
         verbose,
         log_level,
@@ -170,6 +182,7 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
     logger.log(&format!("Region: {region}"))?;
     logger.log(&format!("Port Base: {offset}"))?;
     logger.log(&format!("Auto-forward: {auto_forward}"))?;
+    logger.log(&format!("Copy Git credentials: {copy_git_creds}"))?;
     logger.log(&format!("Verbose: {verbose}"))?;
 
     // Progress will be shown via spinners for non-verbose mode
@@ -416,6 +429,12 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
         // durable session identity must use the canonical name returned by the API. Shadow the
         // requested spelling before any managed forwards are created.
         let workspace_name = coder_identity.name.clone();
+        if copy_git_creds && workspace_existed_flag {
+            return Err(anyhow!(
+                "--copy-git-creds requires a newly created Coder workspace; \
+                 choose delete and recreate, or use a new --workspace-name"
+            ));
+        }
         state
             .attach_remote_workspace(&instance_id, &coder_identity.id, &workspace_name)
             .await?;
@@ -497,6 +516,7 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
             services.as_deref(),
             auto_forward,
             offset,
+            copy_git_creds,
             Some(logger.path()),
             verbose,
             Some(on_config_complete),

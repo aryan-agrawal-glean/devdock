@@ -104,6 +104,10 @@ enum Commands {
         #[arg(long)]
         auto_forward: bool,
 
+        /// Copy local GitHub credentials to a newly created remote workspace
+        #[arg(long)]
+        copy_git_creds: bool,
+
         /// Show detailed progress (all substeps)
         #[arg(long)]
         verbose: bool,
@@ -679,6 +683,7 @@ async fn main() {
             port_base,
             disk_size,
             auto_forward,
+            copy_git_creds,
             verbose,
             monitor,
             monitor_timeout,
@@ -687,7 +692,11 @@ async fn main() {
             enable_logs,
         } => {
             let effective_mode = if remote { StartMode::Remote } else { mode };
-            if matches!(effective_mode, StartMode::Remote) {
+            if copy_git_creds && !matches!(effective_mode, StartMode::Remote) {
+                Err(anyhow::anyhow!(
+                    "--copy-git-creds requires remote mode (`--remote` or `--mode remote`)"
+                ))
+            } else if matches!(effective_mode, StartMode::Remote) {
                 commands::remote::start_remote(commands::remote::RemoteStartConfig {
                     profile,
                     workspace_name,
@@ -697,6 +706,7 @@ async fn main() {
                     disk_size,
                     vm,
                     auto_forward,
+                    copy_git_creds,
                     services,
                     verbose,
                     log_level: devdock_sync::daemon::verbosity_to_log_level(cli.verbose)

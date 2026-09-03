@@ -7,6 +7,8 @@
 
 use crate::{RemoteError, Result};
 use devdock_core::profile::Profile;
+use serde::Serialize;
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::Command;
 use tracing::{debug, info};
@@ -303,6 +305,207 @@ fn scp_gcloud_to_remote(workspace: &str, temp_dir: &Path, verbose: bool) -> Resu
     Ok(())
 }
 
+// ─── GitHub credential staging and sync ───────────────────────────────────────
+
+#[derive(Serialize)]
+struct GhHosts {
+    #[serde(rename = "github.com")]
+    github_com: GhHost,
+}
+
+#[derive(Serialize)]
+struct GhHost {
+    git_protocol: &'static str,
+    users: BTreeMap<String, GhUser>,
+    user: String,
+}
+
+#[derive(Serialize)]
+struct GhUser {
+    oauth_token: String,
+}
+
+fn local_gh_output(args: &[&str], description: &str) -> Result<String> {
+    let output = Command::new("gh").args(args).output().map_err(|e| {
+        RemoteError::ConfigSyncError(format!("Failed to run local gh CLI ({description}): {e}"))
+    })?;
+
+    if !output.status.success() {
+        return Err(RemoteError::ConfigSyncError(format!(
+            "Local GitHub authentication is unavailable ({description}). \
+             Run `gh auth login --hostname github.com` and retry with --copy-git-creds."
+        )));
+    }
+
+    let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if value.is_empty() {
+        return Err(RemoteError::ConfigSyncError(format!(
+            "Local GitHub authentication returned no {description}. \
+             Run `gh auth login --hostname github.com` and retry with --copy-git-creds."
+        )));
+    }
+    Ok(value)
+}
+
+fn read_local_git_credentials() -> Result<(String, String)> {
+    which::which("git").map_err(|_| {
+        RemoteError::ConfigSyncError(
+            "git CLI not found; install git before using --copy-git-creds.".to_string(),
+        )
+    })?;
+    which::which("gh").map_err(|_| {
+        RemoteError::ConfigSyncError(
+            "GitHub CLI not found; install gh and run `gh auth login --hostname github.com` \
+             before using --copy-git-creds."
+                .to_string(),
+        )
+    })?;
+
+    let token =
+        local_gh_output(&["auth", "token", "--hostname", "github.com"], "authentication token")?;
+    let username = local_gh_output(
+        &["api", "--hostname", "github.com", "user", "--jq", ".login"],
+        "username",
+    )?;
+    Ok((username, token))
+}
+
+/// Fail fast before workspace creation when local GitHub credentials cannot be copied.
+pub fn check_local_git_credentials() -> Result<()> {
+    let _ = read_local_git_credentials()?;
+    Ok(())
+}
+
+/// Build a minimal github.com-only gh config in a private temporary directory.
+fn stage_git_credentials_locally() -> Result<tempfile::TempDir> {
+    let (username, token) = read_local_git_credentials()?;
+    let temp_dir = tempfile::tempdir().map_err(|e| {
+        RemoteError::ConfigSyncError(format!("Failed to stage GitHub credentials: {e}"))
+    })?;
+    let gh_dir = temp_dir.path().join("git-creds/gh");
+    std::fs::create_dir_all(&gh_dir).map_err(|e| {
+        RemoteError::ConfigSyncError(format!("Failed to stage GitHub credentials: {e}"))
+    })?;
+
+    let mut users = BTreeMap::new();
+    users.insert(username.clone(), GhUser { oauth_token: token });
+    let hosts = GhHosts { github_com: GhHost { git_protocol: "https", users, user: username } };
+    let hosts_yaml = serde_yaml::to_string(&hosts).map_err(|e| {
+        RemoteError::ConfigSyncError(format!("Failed to serialize GitHub credentials: {e}"))
+    })?;
+    let hosts_path = gh_dir.join("hosts.yml");
+    std::fs::write(&hosts_path, hosts_yaml).map_err(|e| {
+        RemoteError::ConfigSyncError(format!("Failed to stage GitHub credentials: {e}"))
+    })?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&hosts_path, std::fs::Permissions::from_mode(0o600)).map_err(
+            |e| RemoteError::ConfigSyncError(format!("Failed to secure staged credentials: {e}")),
+        )?;
+    }
+
+    Ok(temp_dir)
+}
+
+fn scp_git_credentials_to_remote(workspace: &str, temp_dir: &Path) -> Result<()> {
+    let source = temp_dir.join("git-creds");
+    let target = format!("{workspace}.coder:~/.secrets-sync/");
+    let output = Command::new("scp")
+        .arg("-O")
+        .arg("-q")
+        .arg("-o")
+        .arg("StrictHostKeyChecking=no")
+        .arg("-o")
+        .arg("UserKnownHostsFile=/dev/null")
+        .arg("-o")
+        .arg("ConnectTimeout=30")
+        .arg("-r")
+        .arg(source)
+        .arg(target)
+        .output()
+        .map_err(|e| {
+            RemoteError::ConfigSyncError(format!("Failed to transfer GitHub credentials: {e}"))
+        })?;
+
+    if !output.status.success() {
+        return Err(RemoteError::ConfigSyncError(format!(
+            "Failed to transfer GitHub credentials: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )));
+    }
+    Ok(())
+}
+
+fn git_credentials_finalize_script() -> &'static str {
+    r#"set -e
+
+test -s ~/.secrets-sync/git-creds/gh/hosts.yml
+
+# An empty user-level helper resets lower-priority helpers, including the system App helper.
+git config --global --unset-all credential.https://github.com.helper 2>/dev/null || true
+git config --global --add credential.https://github.com.helper ''
+git config --global --add credential.https://github.com.helper \
+  '!env -u GH_TOKEN -u GITHUB_TOKEN gh auth git-credential'
+git config --global credential.https://github.com.useHttpPath false
+
+# The cache may be root-owned and refreshed by the template. Remove it when permitted; the
+# empty helper reset and environment-stripping helper ensure it is ignored either way.
+sudo -n rm -f /run/glean/github-token 2>/dev/null || true
+
+mkdir -p ~/.config/gh ~/.config/devdock
+chmod 700 ~/.config/gh ~/.config/devdock
+install -m 600 ~/.secrets-sync/git-creds/gh/hosts.yml ~/.config/gh/hosts.yml
+
+cat > ~/.config/devdock/user-git-env.sh <<'DEVDOCK_GIT_ENV_EOF'
+unset GH_TOKEN
+unset GITHUB_TOKEN
+DEVDOCK_GIT_ENV_EOF
+chmod 600 ~/.config/devdock/user-git-env.sh
+
+for shell_file in ~/.profile ~/.bashrc; do
+  touch "$shell_file"
+  if ! grep -q 'DEVDOCK_USER_GIT_CREDS' "$shell_file"; then
+    printf '\n# DEVDOCK_USER_GIT_CREDS\n[ ! -f "$HOME/.config/devdock/user-git-env.sh" ] || . "$HOME/.config/devdock/user-git-env.sh"\n' >> "$shell_file"
+  fi
+done
+
+rm -rf ~/.secrets-sync/git-creds
+
+test "$(stat -c '%a' ~/.config/gh/hosts.yml)" = "600"
+test "$(git config --global --get-all credential.https://github.com.helper | sed -n '1p')" = ""
+
+# Verify the configured Git credential path directly. Avoid `gh auth status`, which can trigger
+# keyring migration and require desktop-only dependencies such as dbus-launch on remote hosts.
+printf 'protocol=https\nhost=github.com\n\n' |
+  env -u GH_TOKEN -u GITHUB_TOKEN git credential fill 2>/dev/null |
+  awk -F= '
+    $1 == "username" && length($2) { username = 1 }
+    $1 == "password" && length($2) { password = 1 }
+    END { exit !(username && password) }
+  '
+echo "DEVDOCK_GIT_CREDS:configured"
+"#
+}
+
+fn finalize_git_credentials(workspace: &str, log_file: Option<&Path>, verbose: bool) -> Result<()> {
+    let output =
+        crate::ssh::ssh_exec_with_log(workspace, git_credentials_finalize_script(), log_file)?;
+    if !output.lines().any(|line| line == "DEVDOCK_GIT_CREDS:configured") {
+        return Err(RemoteError::ConfigSyncError(
+            "GitHub credentials were transferred but remote verification failed; \
+             bot credentials were not retained as a fallback."
+                .to_string(),
+        ));
+    }
+    if verbose {
+        println!("      ✓ User GitHub credentials installed (hosts.yml mode 600)");
+        println!("      ✓ System GitHub App credential helper overridden for this user");
+    }
+    Ok(())
+}
+
 // ─── Main entry point ──────────────────────────────────────────────────────────
 
 /// Status returned from config sync, including credential verification results.
@@ -326,6 +529,7 @@ pub fn sync_all_config(
     workspace: &str,
     profile_path: &Path,
     custom_ini_path: Option<&Path>,
+    copy_git_creds: bool,
     log_file: Option<&Path>,
     verbose: bool,
 ) -> Result<ConfigSyncStatus> {
@@ -386,7 +590,8 @@ pub fn sync_all_config(
         None
     };
 
-    let needs_secrets_sync = gcloud_staging.is_some();
+    let git_staging = if copy_git_creds { Some(stage_git_credentials_locally()?) } else { None };
+    let needs_secrets_sync = gcloud_staging.is_some() || git_staging.is_some();
 
     // ─── Phase 1: Single SSH for all config file writes ────────────────────
 
@@ -521,6 +726,14 @@ print(f"✓ Claude MCP configuration updated at {claude_config_path}")
     // ─── Credential sync (Phase 2 + 3 for GCP, local-only for others) ─────
 
     let mut status = ConfigSyncStatus::default();
+
+    if let Some(ref temp_dir) = git_staging {
+        if verbose {
+            println!("    → Copying local GitHub credentials...");
+        }
+        scp_git_credentials_to_remote(workspace, temp_dir.path())?;
+        finalize_git_credentials(workspace, log_file, verbose)?;
+    }
 
     match platform.as_deref() {
         Some("google") | Some("gcp") => {
@@ -768,4 +981,38 @@ fi
 
     debug!("Phase 3 complete: gcloud setup finalized");
     Ok(adc_expired)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn git_credentials_finalize_clears_bot_helper_before_installing_user_auth() {
+        let script = git_credentials_finalize_script();
+        let reset = script
+            .find("git config --global --add credential.https://github.com.helper ''")
+            .expect("empty helper reset");
+        let user_helper = script
+            .find("!env -u GH_TOKEN -u GITHUB_TOKEN gh auth git-credential")
+            .expect("user gh helper");
+        let install = script.find("install -m 600").expect("credential install");
+
+        assert!(reset < user_helper, "system helper must be reset before adding the user helper");
+        assert!(user_helper < install, "helper must be cleared before credentials are installed");
+        assert!(script.contains("rm -f /run/glean/github-token"));
+        assert!(script.contains("unset GH_TOKEN"));
+        assert!(script.contains("git credential fill"));
+        assert!(script.contains("protocol=https\\nhost=github.com\\n\\n"));
+        assert!(!script.contains("gh auth status --hostname github.com"));
+    }
+
+    #[test]
+    fn git_credentials_finalize_never_embeds_a_token() {
+        let script = git_credentials_finalize_script();
+
+        assert!(!script.contains("oauth_token:"));
+        assert!(!script.contains("gh auth token"));
+        assert!(script.contains("~/.secrets-sync/git-creds/gh/hosts.yml"));
+    }
 }

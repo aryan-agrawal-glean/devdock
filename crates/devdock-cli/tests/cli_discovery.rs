@@ -14,12 +14,31 @@ fn start_help_exposes_remote_alias_and_legacy_mode() {
 
     assert!(stdout.contains("--remote"), "start help should expose --remote alias:\n{stdout}");
     assert!(
+        stdout.contains("--copy-git-creds"),
+        "start help should expose opt-in GitHub credential copy:\n{stdout}"
+    );
+    assert!(
         stdout.contains("--mode <MODE>"),
         "start help should keep legacy --mode option:\n{stdout}"
     );
     assert!(
         stdout.contains("[default: local]"),
         "start help should keep local as default:\n{stdout}"
+    );
+}
+
+#[test]
+fn copy_git_creds_is_rejected_in_local_mode() {
+    let output = devdock()
+        .args(["start", "example-profile", "--copy-git-creds", "--dry-run"])
+        .output()
+        .expect("run local start with remote-only credential flag");
+
+    assert!(!output.status.success(), "remote-only flag should fail in local mode");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--copy-git-creds requires remote mode"),
+        "unexpected stderr:\n{stderr}"
     );
 }
 
@@ -84,6 +103,23 @@ fn guide_help_lists_intent_entrypoint() {
         "guide help should list remote-start intent:\n{stdout}"
     );
     assert!(stdout.contains("add-service"), "guide help should list add-service intent:\n{stdout}");
+}
+
+#[test]
+fn remote_start_guide_documents_git_credential_opt_in() {
+    let output =
+        devdock().args(["guide", "remote-start"]).output().expect("run remote start guide");
+
+    assert!(output.status.success(), "remote start guide failed: {:?}", output);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("--copy-git-creds"),
+        "remote start guide should document credential opt-in:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("default automation credentials"),
+        "remote start guide should document unchanged default behavior:\n{stdout}"
+    );
 }
 
 #[test]

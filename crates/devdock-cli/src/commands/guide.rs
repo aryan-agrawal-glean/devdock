@@ -52,6 +52,12 @@ fn remote_start() {
     println!("  --workspace-name <name>    Use a stable Coder workspace name");
     println!("  --disk-size <gb>           Set Coder data disk size");
     println!("  --port-base <port>         Offset forwarded local ports");
+    println!(
+        "  --copy-git-creds           Copy local gh auth to a newly created workspace (opt-in)"
+    );
+    println!(
+        "\nWithout --copy-git-creds, remote workspaces keep the default automation credentials."
+    );
 }
 
 fn add_service() {

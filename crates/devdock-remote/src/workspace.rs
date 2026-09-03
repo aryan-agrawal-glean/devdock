@@ -167,6 +167,7 @@ pub async fn start_remote_devdock<F>(
     services: Option<&str>,
     auto_forward: bool,
     offset: u16,
+    copy_git_creds: bool,
     log_file: Option<&Path>,
     verbose: bool,
     on_config_complete: Option<F>,
@@ -201,6 +202,7 @@ where
         workspace,
         profile_path,
         custom_ini_path.as_deref(),
+        copy_git_creds,
         log_file,
         verbose,
     )?;

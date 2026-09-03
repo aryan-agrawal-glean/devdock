@@ -256,6 +256,9 @@ devdock start <profile> --remote --vm workspace-name
 # Remote start with auto port forwarding
 devdock start <profile> --remote --auto-forward
 
+# Copy your local GitHub credentials to a newly created remote workspace
+devdock start <profile> --remote --copy-git-creds
+
 # Remote start with custom port base
 devdock start <profile> --remote --port-base 8000
 
@@ -278,6 +281,10 @@ devdock start <profile> --enable-logs
 - `--region <region>`: GCP region for Coder workspace (default: `us-east4-a`)
 - `--port-base <port>`: Custom port base for remote mode
 - `--auto-forward`: Auto-forward all service ports (opt-in for remote)
+- `--copy-git-creds`: For a newly created remote workspace, replace the user-level bot
+  credential helper with local `gh` authentication. This is opt-in; without it, the Coder
+  template's automation credentials remain unchanged. Requires local `git` and authenticated
+  `gh` (`gh auth login --hostname github.com`) and cannot be combined with `--vm`.
 - `--verbose`: Show detailed progress (all substeps)
 
 ---
