@@ -5,7 +5,8 @@ use anyhow::{anyhow, Result};
 use colored::Colorize;
 use devdock_config::ProfileLoader;
 use devdock_remote::{
-    check_coder_installed, check_gcloud_auth, coder, workspace, CoderWorkspaceConfig, RemoteError,
+    check_coder_installed, check_gcloud_auth, coder, inspect_remote_runtime, workspace,
+    CoderWorkspaceConfig, PortForwardManager, RemoteError,
 };
 use devdock_state::{
     instance::{Instance, InstanceStatus, SessionOrigin},
@@ -821,11 +822,117 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
             ))?;
 
             output::error(&format!("DevDock setup failed: {e}"));
+            print_failed_start_recovery(
+                &profile_path,
+                &workspace_name,
+                offset,
+                services.as_deref(),
+                &instance_id,
+                Some(&branch_for_workspace),
+            );
             println!();
-            println!("To clean up: devdock stop -i {}", Instance::display_id(&instance_id));
+            println!(
+                "To clean up verified local state: devdock stop {}",
+                Instance::display_id(&instance_id)
+            );
             Err(e)
         }
     }
+}
+
+/// Print additive recovery guidance after remote startup fails.
+///
+/// The commands are deliberately raw `coder port-forward` invocations. They
+/// are not registered as managed forwards and are never adopted or killed by
+/// DevDock, which preserves the #240 ownership boundary.
+fn print_failed_start_recovery(
+    profile_path: &std::path::Path,
+    workspace_name: &str,
+    offset: u16,
+    services: Option<&str>,
+    instance_id: &str,
+    requested_revision: Option<&str>,
+) {
+    println!();
+    println!("{}", "Remote start recovery".bold());
+    println!("  If DevDock is running in Coder, attach the stopped local session with:",);
+    println!("    devdock recover --workspace {workspace_name}");
+
+    match PortForwardManager::manual_forward_commands(
+        profile_path,
+        workspace_name,
+        offset,
+        services,
+    ) {
+        Ok(commands) if !commands.is_empty() => {
+            println!("  Raw forwarding commands for this start:");
+            for command in commands {
+                println!("    {command}");
+            }
+        }
+        Ok(_) => {}
+        Err(error) => {
+            println!(
+                "  Could not resolve selected service ports locally ({error}); forward Tilt manually:"
+            );
+            println!(
+                "    {}",
+                coder::port_forward_command_line(workspace_name, offset + 10350, 10350)
+            );
+        }
+    }
+
+    match inspect_remote_runtime(workspace_name, None) {
+        Ok(snapshot) if snapshot.has_surviving_containers() => {
+            println!();
+            print_stale_container_warning(
+                &snapshot,
+                workspace_name,
+                instance_id,
+                requested_revision,
+            );
+        }
+        Ok(_) => {}
+        Err(_) => {
+            // The workspace may not have been created or may be unreachable;
+            // do not turn best-effort diagnostics into a second failure.
+        }
+    }
+}
+
+pub(crate) fn print_stale_container_warning(
+    snapshot: &devdock_remote::RemoteRuntimeSnapshot,
+    workspace_name: &str,
+    instance_id: &str,
+    requested_revision: Option<&str>,
+) {
+    println!("{}", "⚠️  STALE CONTAINER WARNING".yellow().bold());
+    println!(
+        "  Remote Docker still has service containers: {}",
+        snapshot.docker_containers.join(", ")
+    );
+    println!("  These surviving containers are from a prior run and are not valid test targets.");
+    println!(
+        "  Current session/Tilt identity is not trusted until recovery verifies tmux, Tilt, and DEVDOCK_ID."
+    );
+    println!("  Expected local session: {}", Instance::display_id(instance_id));
+    if let Some(revision) = requested_revision {
+        println!("  Requested Git revision/branch: {revision}");
+    }
+    if let Some(remote_id) = &snapshot.devdock_id {
+        println!("  Observed remote session: {remote_id}");
+    }
+    if let Some(revision) = &snapshot.git_revision {
+        println!("  Observed remote Git revision: {revision}");
+    }
+    if let Some(branch) = &snapshot.git_branch {
+        println!("  Observed remote Git branch: {branch}");
+    }
+    println!("  No automatic cleanup was performed because container ownership is not proven.");
+    println!(
+        "  Supported cleanup/retry: coder ssh {workspace_name} -- 'cd /home/workspace/scio && devdock cleanup --soft'"
+    );
+    println!("  Then retry: devdock recover --workspace {workspace_name}");
 }
 
 /// Build a `RemoteSessionMetrics` from all the tracked timing fields.

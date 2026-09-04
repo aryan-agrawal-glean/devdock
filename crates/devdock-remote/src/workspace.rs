@@ -16,6 +16,116 @@ pub struct RemoteGitState {
     pub dirty_entries: Vec<String>,
 }
 
+/// Bounded, read-only evidence about the remote DevDock runtime.
+///
+/// This is intentionally independent from local SQLite state. A stopped local
+/// session must not treat healthy Docker containers as a current test target
+/// until the remote tmux/Tilt/session identity has been proven.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteRuntimeSnapshot {
+    pub tmux_present: bool,
+    pub tilt_listening: bool,
+    pub docker_containers: Vec<String>,
+    pub devdock_id: Option<String>,
+    pub git_revision: Option<String>,
+    pub git_branch: Option<String>,
+}
+
+impl RemoteRuntimeSnapshot {
+    pub fn has_surviving_containers(&self) -> bool {
+        !self.docker_containers.is_empty()
+    }
+
+    pub fn matches_session(&self, instance_id: &str) -> bool {
+        self.tmux_present && self.tilt_listening && self.devdock_id.as_deref() == Some(instance_id)
+    }
+}
+
+/// Inspect the remote tmux/Tilt identity, Docker services, and Git revision.
+///
+/// The probe is best-effort at the call site: an unavailable workspace is not
+/// itself evidence that containers belong to the current run.
+pub fn inspect_remote_runtime(
+    workspace: &str,
+    log_file: Option<&Path>,
+) -> Result<RemoteRuntimeSnapshot> {
+    let script = r#"
+if tmux has-session -t devdock 2>/dev/null; then
+    printf 'DEVDOCK_RUNTIME_TMUX\t1\n'
+    tmux_id="$(tmux show-environment -t devdock DEVDOCK_ID 2>/dev/null | sed -n 's/^DEVDOCK_ID=//p' | head -n 1)"
+else
+    printf 'DEVDOCK_RUNTIME_TMUX\t0\n'
+    tmux_id=""
+fi
+printf 'DEVDOCK_RUNTIME_ID\t%s\n' "$tmux_id"
+if (ss -tln 2>/dev/null | grep -q ':10350 ' || lsof -nP -iTCP:10350 -sTCP:LISTEN >/dev/null 2>&1); then
+    printf 'DEVDOCK_RUNTIME_TILT\t1\n'
+else
+    printf 'DEVDOCK_RUNTIME_TILT\t0\n'
+fi
+printf 'DEVDOCK_RUNTIME_CONTAINERS_BEGIN\n'
+docker ps --filter 'name=devdock-' --format '{{.Names}}' 2>/dev/null || true
+printf 'DEVDOCK_RUNTIME_CONTAINERS_END\n'
+git -C /home/workspace/scio rev-parse HEAD 2>/dev/null | sed 's/^/DEVDOCK_RUNTIME_GIT\t/' || true
+git -C /home/workspace/scio symbolic-ref --quiet --short HEAD 2>/dev/null | sed 's/^/DEVDOCK_RUNTIME_GIT_BRANCH\t/' || true
+"#;
+    let output = ssh::ssh_exec_with_log(workspace, script, log_file)?;
+    parse_remote_runtime_snapshot(&output)
+}
+
+fn parse_remote_runtime_snapshot(output: &str) -> Result<RemoteRuntimeSnapshot> {
+    let mut tmux_present = false;
+    let mut tilt_listening = false;
+    let mut devdock_id = None;
+    let mut git_revision = None;
+    let mut git_branch = None;
+    let mut docker_containers = Vec::new();
+    let mut in_containers = false;
+
+    for line in output.lines() {
+        if line == "DEVDOCK_RUNTIME_CONTAINERS_BEGIN" {
+            in_containers = true;
+            continue;
+        }
+        if line == "DEVDOCK_RUNTIME_CONTAINERS_END" {
+            in_containers = false;
+            continue;
+        }
+        if in_containers {
+            let container = line.trim();
+            if !container.is_empty() {
+                docker_containers.push(container.to_string());
+            }
+            continue;
+        }
+        if let Some(value) = line.strip_prefix("DEVDOCK_RUNTIME_TMUX\t") {
+            tmux_present = value.trim() == "1";
+        } else if let Some(value) = line.strip_prefix("DEVDOCK_RUNTIME_TILT\t") {
+            tilt_listening = value.trim() == "1";
+        } else if let Some(value) = line.strip_prefix("DEVDOCK_RUNTIME_ID\t") {
+            devdock_id = non_empty_runtime_value(value);
+        } else if let Some(value) = line.strip_prefix("DEVDOCK_RUNTIME_GIT\t") {
+            git_revision = non_empty_runtime_value(value);
+        } else if let Some(value) = line.strip_prefix("DEVDOCK_RUNTIME_GIT_BRANCH\t") {
+            git_branch = non_empty_runtime_value(value);
+        }
+    }
+
+    Ok(RemoteRuntimeSnapshot {
+        tmux_present,
+        tilt_listening,
+        docker_containers,
+        devdock_id,
+        git_revision,
+        git_branch,
+    })
+}
+
+fn non_empty_runtime_value(value: &str) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_string())
+}
+
 impl RemoteGitState {
     pub fn is_dirty(&self) -> bool {
         !self.dirty_entries.is_empty()
@@ -590,5 +700,36 @@ mod tests {
 
         assert_eq!(state.branch, "main");
         assert!(state.dirty_entries.is_empty());
+    }
+
+    #[test]
+    fn parses_remote_runtime_snapshot_with_containers_and_identity() {
+        let output = "DEVDOCK_RUNTIME_TMUX\t0\nDEVDOCK_RUNTIME_ID\tdev-session\nDEVDOCK_RUNTIME_TILT\t0\nDEVDOCK_RUNTIME_CONTAINERS_BEGIN\ndevdock-qe\ndevdock-nginx\nDEVDOCK_RUNTIME_CONTAINERS_END\nDEVDOCK_RUNTIME_GIT\t0123456789abcdef\nDEVDOCK_RUNTIME_GIT_BRANCH\tmain\n";
+
+        let snapshot = parse_remote_runtime_snapshot(output).unwrap();
+
+        assert!(!snapshot.tmux_present);
+        assert!(!snapshot.tilt_listening);
+        assert_eq!(snapshot.devdock_id.as_deref(), Some("dev-session"));
+        assert_eq!(snapshot.git_revision.as_deref(), Some("0123456789abcdef"));
+        assert_eq!(snapshot.git_branch.as_deref(), Some("main"));
+        assert_eq!(snapshot.docker_containers, vec!["devdock-qe", "devdock-nginx"]);
+        assert!(snapshot.has_surviving_containers());
+        assert!(!snapshot.matches_session("dev-session"));
+    }
+
+    #[test]
+    fn runtime_snapshot_requires_exact_session_identity() {
+        let snapshot = RemoteRuntimeSnapshot {
+            tmux_present: true,
+            tilt_listening: true,
+            docker_containers: vec!["devdock-qe".to_string()],
+            devdock_id: Some("expected".to_string()),
+            git_revision: None,
+            git_branch: None,
+        };
+
+        assert!(snapshot.matches_session("expected"));
+        assert!(!snapshot.matches_session("other"));
     }
 }

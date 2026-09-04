@@ -6,7 +6,7 @@ use devdock_remote::{
     coder, managed_port_forward_status, start_managed_port_forward_logged,
     stop_managed_port_forward, ManagedForwardStatus, ManagedForwardStopOutcome,
 };
-use devdock_state::{PortMappingRecord, StateManager};
+use devdock_state::{Instance, InstanceStatus, PortMappingRecord, StateManager};
 use prettytable::{format, row, Table};
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -49,7 +49,14 @@ pub async fn list(instance: Option<String>) -> Result<()> {
 
         instances
             .into_iter()
-            .find(|i| i.workspace_path == worktree && i.status.as_str() == "running")
+            .find(|i| {
+                i.workspace_path == worktree
+                    && !i.is_quarantined
+                    && (i.status == InstanceStatus::Running
+                        || i.status == InstanceStatus::Starting
+                        || (i.mode == "remote"
+                            && matches!(i.status, InstanceStatus::Stopped | InstanceStatus::Error)))
+            })
             .map(|i| i.id)
             .ok_or_else(|| anyhow!("No running DevDock instance found for current worktree"))?
     };
@@ -63,6 +70,17 @@ pub async fn list(instance: Option<String>) -> Result<()> {
             "Tip: Use --auto-forward when starting remote DevDock to enable auto port forwarding"
         );
         return Ok(());
+    }
+
+    if owning_instance.as_ref().is_some_and(|instance| {
+        instance.mode == "remote"
+            && matches!(instance.status, InstanceStatus::Stopped | InstanceStatus::Error)
+    }) {
+        println!(
+            "{}",
+            "Session is stopped; mappings are inspectable but are not valid test targets until recovery succeeds."
+                .yellow()
+        );
     }
 
     // Display port table
@@ -145,11 +163,14 @@ pub async fn forward(
     service: Option<&str>,
     custom: Option<&str>,
     no_offset: bool,
+    workspace: Option<&str>,
 ) -> Result<()> {
     let state = StateManager::new().await?;
 
-    // Get current instance (full info including profile)
-    let instance_info = get_current_remote_instance(&state).await?;
+    // Get the current instance or resolve a retryable remote session by its
+    // immutable Coder workspace identity. Workspace-addressable forwarding is
+    // what makes a stopped wrapper session recoverable after manual startup.
+    let instance_info = get_remote_instance(&state, workspace).await?;
 
     if all {
         forward_all_ports(&state, &instance_info, no_offset).await
@@ -174,7 +195,7 @@ pub async fn stop(all: bool, service: Option<&str>) -> Result<()> {
     let state = StateManager::new().await?;
 
     // Get current instance
-    let info = get_current_remote_instance(&state).await?;
+    let info = get_remote_instance(&state, None).await?;
 
     if all {
         stop_all_port_forwards(&state, &info).await
@@ -185,50 +206,134 @@ pub async fn stop(all: bool, service: Option<&str>) -> Result<()> {
     }
 }
 
-struct RemoteInstanceInfo {
-    devdock_id: String,
-    workspace_name: String,
-    workspace_id: String,
-    port_base: u16,
-    profile: String,
+pub(crate) struct RemoteInstanceInfo {
+    pub(crate) devdock_id: String,
+    pub(crate) workspace_name: String,
+    pub(crate) workspace_id: String,
+    pub(crate) port_base: u16,
+    pub(crate) profile: String,
 }
 
-/// Get current remote DevDock instance.
-async fn get_current_remote_instance(state: &StateManager) -> Result<RemoteInstanceInfo> {
-    let worktree = get_current_worktree()?;
+/// Resolve a remote instance for the current worktree or an explicit Coder
+/// workspace. Stopped/error rows remain eligible only for remote forwarding;
+/// quarantined rows are always rejected before any state or process mutation.
+pub(crate) async fn get_remote_instance(
+    state: &StateManager,
+    requested_workspace: Option<&str>,
+) -> Result<RemoteInstanceInfo> {
+    let (worktree, coder_identity) = if let Some(workspace) = requested_workspace {
+        let identity = coder::get_workspace_identity(workspace)?
+            .ok_or_else(|| anyhow!("Coder workspace '{workspace}' was not found"))?;
+        (None, Some(identity))
+    } else {
+        (Some(get_current_worktree()?), None)
+    };
     let instances = state.list_instances().await?;
 
-    let instance = instances
-        .into_iter()
-        .find(|i| {
-            i.workspace_path == worktree && i.status.as_str() == "running" && i.mode == "remote"
-        })
-        .ok_or_else(|| anyhow!("No running remote DevDock instance found for current worktree"))?;
+    let instance = if let (Some(worktree), None) = (&worktree, &coder_identity) {
+        if let Some(quarantined) = instances.iter().find(|i| {
+            i.workspace_path == worktree.as_str()
+                && i.mode == "remote"
+                && (i.is_quarantined || i.status == InstanceStatus::Quarantined)
+        }) {
+            return Err(anyhow!(
+                "Refusing to modify quarantined remote session {} for the current worktree",
+                Instance::display_id(&quarantined.id)
+            ));
+        }
+        instances
+            .into_iter()
+            .find(|i| {
+                i.workspace_path == worktree.as_str()
+                    && i.mode == "remote"
+                    && !i.is_quarantined
+                    && matches!(
+                        i.status,
+                        InstanceStatus::Running
+                            | InstanceStatus::Starting
+                            | InstanceStatus::Stopped
+                            | InstanceStatus::Error
+                    )
+            })
+            .ok_or_else(|| {
+                anyhow!("No running remote DevDock instance found for current worktree")
+            })?
+    } else {
+        let identity = coder_identity.as_ref().expect("workspace identity is present");
+        if let Some(quarantined) = instances.iter().find(|i| {
+            i.mode == "remote"
+                && (i.is_quarantined || i.status == InstanceStatus::Quarantined)
+                && remote_identity_matches(i, identity)
+        }) {
+            return Err(anyhow!(
+                "Refusing to modify quarantined remote session {} for workspace '{}'",
+                Instance::display_id(&quarantined.id),
+                identity.name
+            ));
+        }
+
+        instances
+            .into_iter()
+            .filter(|i| {
+                i.mode == "remote"
+                    && i.superseded_by.is_none()
+                    && !i.is_quarantined
+                    && remote_identity_matches(i, identity)
+            })
+            .max_by(|left, right| {
+                remote_identity_rank(left, identity)
+                    .cmp(&remote_identity_rank(right, identity))
+                    .then_with(|| left.updated_at.cmp(&right.updated_at))
+                    .then_with(|| left.id.cmp(&right.id))
+            })
+            .ok_or_else(|| {
+                anyhow!(
+                    "No local remote session is recorded for Coder workspace '{}'. Run `devdock recover --workspace {}` first (or provide the original profile to recover it).",
+                    identity.name,
+                    identity.name
+                )
+            })?
+    };
 
     let mut workspace_name = instance
         .workspace_name
         .clone()
+        .or_else(|| coder_identity.as_ref().map(|identity| identity.name.clone()))
+        .or_else(|| instance.planned_workspace_name.clone())
         .ok_or_else(|| anyhow!("Remote instance missing workspace name"))?;
     // Sessions created by older DevDock binaries only recorded the mutable workspace name.
     // Resolve and persist the immutable Coder identity before this process creates any managed
     // forward, so legacy state remains usable without weakening ownership verification.
-    let workspace_id = match instance.workspace_id.clone() {
-        Some(workspace_id) => workspace_id,
-        None => {
-            let identity = coder::get_workspace_identity(&workspace_name)?.ok_or_else(|| {
+    let workspace_id = if let Some(workspace_id) = instance.workspace_id.clone() {
+        workspace_id
+    } else {
+        let identity = match coder_identity {
+            Some(identity) => identity,
+            None => coder::get_workspace_identity(&workspace_name)?.ok_or_else(|| {
                 anyhow!(
                     "Coder workspace '{workspace_name}' was not found while upgrading legacy session identity"
                 )
-            })?;
-            let attached =
-                state.attach_remote_workspace(&instance.id, &identity.id, &identity.name).await?;
-            workspace_name = attached
-                .workspace_name
-                .ok_or_else(|| anyhow!("Failed to persist canonical Coder workspace name"))?;
-            attached
-                .workspace_id
-                .ok_or_else(|| anyhow!("Failed to persist immutable Coder workspace identity"))?
+            })?,
+        };
+        let legacy_mappings = state.get_port_mapping_records(&instance.id).await?;
+        for mapping in &legacy_mappings {
+            if let ManagedForwardStatus::Unverified(reason) =
+                managed_port_forward_status(mapping, &identity.id, &identity.name)
+            {
+                return Err(anyhow!(
+                    "Refusing to reconcile legacy session because ownership of {} is unverifiable ({reason})",
+                    mapping.service_name
+                ));
+            }
         }
+        let attached =
+            state.attach_remote_workspace(&instance.id, &identity.id, &identity.name).await?;
+        workspace_name = attached
+            .workspace_name
+            .ok_or_else(|| anyhow!("Failed to persist canonical Coder workspace name"))?;
+        attached
+            .workspace_id
+            .ok_or_else(|| anyhow!("Failed to persist immutable Coder workspace identity"))?
     };
 
     Ok(RemoteInstanceInfo {
@@ -238,6 +343,28 @@ async fn get_current_remote_instance(state: &StateManager) -> Result<RemoteInsta
         port_base: instance.port_base,
         profile: instance.profile,
     })
+}
+
+fn remote_identity_matches(instance: &Instance, identity: &coder::CoderWorkspaceIdentity) -> bool {
+    match instance.workspace_id.as_deref() {
+        Some(workspace_id) => workspace_id == identity.id,
+        None => {
+            instance.workspace_name.as_deref() == Some(identity.name.as_str())
+                || instance.planned_workspace_name.as_deref() == Some(identity.name.as_str())
+        }
+    }
+}
+
+fn remote_identity_rank(
+    instance: &Instance,
+    identity: &coder::CoderWorkspaceIdentity,
+) -> (bool, bool, bool, bool) {
+    (
+        instance.workspace_id.as_deref() == Some(identity.id.as_str()),
+        instance.workspace_name.as_deref() == Some(identity.name.as_str()),
+        matches!(instance.status, InstanceStatus::Running | InstanceStatus::Starting),
+        instance.status != InstanceStatus::Quarantined,
+    )
 }
 
 /// Profile structure for reading service definitions.
@@ -666,6 +793,188 @@ async fn stop_service_port_forward(
     println!("View remaining mappings: {}", "devdock ports list".cyan());
 
     Ok(())
+}
+
+/// Stop only verified forwards belonging to a source session before a future
+/// session switch. No workspace/process cleanup is attempted for unverified
+/// rows, and no target session is attached if the source ownership check fails.
+pub(crate) async fn stop_workspace_for_attach(
+    state: &StateManager,
+    workspace: &str,
+) -> Result<(String, Vec<u16>)> {
+    let info = get_remote_instance(state, Some(workspace)).await?;
+    let mappings = state.get_port_mapping_records(&info.devdock_id).await?;
+
+    for mapping in &mappings {
+        if let ManagedForwardStatus::Unverified(reason) =
+            managed_port_forward_status(mapping, &info.workspace_id, &info.workspace_name)
+        {
+            return Err(anyhow!(
+                "Refusing session handoff: ownership of {} could not be verified ({reason})",
+                mapping.service_name
+            ));
+        }
+    }
+
+    let mut local_ports = Vec::new();
+    for mapping in mappings {
+        match stop_managed_port_forward(&mapping, &info.workspace_id, &info.workspace_name)? {
+            ManagedForwardStopOutcome::Stopped | ManagedForwardStopOutcome::AlreadyExited => {
+                local_ports.push(mapping.local_port);
+                state
+                    .remove_port_mapping_record(
+                        &mapping.devdock_id,
+                        &mapping.service_name,
+                        &mapping.port_type,
+                    )
+                    .await?;
+            }
+            ManagedForwardStopOutcome::Unverified(reason) => {
+                return Err(anyhow!(
+                    "Refusing session handoff: ownership of {} changed ({reason})",
+                    mapping.service_name
+                ));
+            }
+        }
+    }
+
+    // The source session no longer owns any live managed forwards. Mark it
+    // inactive before the socket probe so a failed handoff cannot leave a
+    // misleading Running row behind.
+    state.update_status(&info.devdock_id, InstanceStatus::Stopped).await?;
+
+    Ok((info.devdock_id, local_ports))
+}
+
+/// Attach the target session's all-service forward set and prove each local
+/// loopback socket is listening. The 30-second bound keeps this hook within
+/// the requested 45-second switch budget while leaving room for orchestration.
+pub(crate) async fn attach_workspace_for_recovery(
+    state: &StateManager,
+    info: &RemoteInstanceInfo,
+) -> Result<()> {
+    let existing = state.get_port_mapping_records(&info.devdock_id).await?;
+    for mapping in &existing {
+        if let ManagedForwardStatus::Unverified(reason) =
+            managed_port_forward_status(mapping, &info.workspace_id, &info.workspace_name)
+        {
+            return Err(anyhow!(
+                "refusing recovery because ownership of {} is unverifiable ({reason})",
+                mapping.service_name
+            ));
+        }
+    }
+
+    let expected_services = discover_service_ports(&info.profile)?;
+    let expected_ports: Vec<u16> = expected_services.iter().map(|(_, port)| *port).collect();
+    for (service_name, remote_port) in &expected_services {
+        let already_owned = existing.iter().find(|mapping| {
+            mapping.service_name == *service_name
+                && mapping.port_type == "Service"
+                && mapping.local_port == *remote_port
+                && mapping.remote_port == *remote_port
+        });
+        let already_active = already_owned.is_some_and(|mapping| {
+            managed_port_forward_status(mapping, &info.workspace_id, &info.workspace_name)
+                == ManagedForwardStatus::Active
+        });
+        if !already_active
+            && std::net::TcpStream::connect((devdock_state::LOOPBACK_BIND_ADDRESS, *remote_port))
+                .is_ok()
+        {
+            return Err(anyhow!(
+                "loopback port {remote_port} for {service_name} is occupied by an unowned listener; refusing recovery"
+            ));
+        }
+    }
+    forward_all_ports(state, info, true).await?;
+    let mappings = state.get_port_mapping_records(&info.devdock_id).await?;
+    if mappings.is_empty() || expected_services.is_empty() {
+        return Err(anyhow!("no managed forwards were registered for the recovered session"));
+    }
+    for (service_name, remote_port) in &expected_services {
+        let local_port = *remote_port;
+        let mapping = mappings.iter().find(|mapping| {
+            mapping.service_name == *service_name
+                && mapping.port_type == "Service"
+                && mapping.local_port == local_port
+                && mapping.remote_port == *remote_port
+        });
+        let Some(mapping) = mapping else {
+            return Err(anyhow!(
+                "forward for {service_name} did not register on 127.0.0.1:{local_port}"
+            ));
+        };
+        if managed_port_forward_status(mapping, &info.workspace_id, &info.workspace_name)
+            != ManagedForwardStatus::Active
+        {
+            return Err(anyhow!(
+                "forward for {service_name} is not an active, verified managed process"
+            ));
+        }
+    }
+    wait_for_ports_listening(&expected_ports, std::time::Duration::from_secs(30)).await?;
+
+    println!("\n{}", "Attached service URLs".bold());
+    for mapping in mappings.iter().filter(|mapping| mapping.port_type == "Service") {
+        println!(
+            "  {} {}",
+            mapping.service_name.cyan(),
+            format!("http://127.0.0.1:{}", mapping.local_port).green()
+        );
+    }
+    println!("  {} http://127.0.0.1:{}", "tilt".cyan(), TILT_PORT);
+    Ok(())
+}
+
+async fn wait_for_ports_listening(ports: &[u16], timeout: std::time::Duration) -> Result<()> {
+    let start = std::time::Instant::now();
+    let unique_ports: Vec<u16> = ports.iter().copied().fold(Vec::new(), |mut ports, port| {
+        if !ports.contains(&port) {
+            ports.push(port);
+        }
+        ports
+    });
+
+    loop {
+        if unique_ports.iter().all(|port| {
+            std::net::TcpStream::connect((devdock_state::LOOPBACK_BIND_ADDRESS, *port)).is_ok()
+        }) {
+            return Ok(());
+        }
+        if start.elapsed() >= timeout {
+            return Err(anyhow!(
+                "attached forwards did not listen on loopback within {}s; refusing to claim the session is ready",
+                timeout.as_secs()
+            ));
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+}
+
+pub(crate) async fn wait_for_ports_free(ports: &[u16], timeout: std::time::Duration) -> Result<()> {
+    let start = std::time::Instant::now();
+    let unique_ports: Vec<u16> = ports.iter().copied().fold(Vec::new(), |mut ports, port| {
+        if !ports.contains(&port) {
+            ports.push(port);
+        }
+        ports
+    });
+
+    loop {
+        if unique_ports.iter().all(|port| {
+            std::net::TcpStream::connect((devdock_state::LOOPBACK_BIND_ADDRESS, *port)).is_err()
+        }) {
+            return Ok(());
+        }
+        if start.elapsed() >= timeout {
+            return Err(anyhow!(
+                "source session ports remain occupied after {}s; refusing to attach a different workspace",
+                timeout.as_secs()
+            ));
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
 }
 
 #[cfg(test)]

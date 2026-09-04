@@ -12,6 +12,7 @@ pub mod monitor;
 pub mod plugin;
 pub mod ports;
 pub mod profile;
+pub mod recover;
 pub mod remote;
 pub mod report;
 pub mod service;

@@ -13,6 +13,17 @@ pub fn port_forward_tcp_spec(local_port: u16, remote_port: u16) -> String {
     format!("{PORT_FORWARD_BIND_ADDRESS}:{local_port}:{remote_port}")
 }
 
+/// Render the exact command users can run to recreate a forward manually.
+///
+/// Keep this beside the process-spawning implementation so recovery output and
+/// managed forwards cannot drift on the bind address or Coder argument order.
+pub fn port_forward_command_line(workspace: &str, local_port: u16, remote_port: u16) -> String {
+    format!(
+        "coder port-forward {workspace} --tcp {}",
+        port_forward_tcp_spec(local_port, remote_port)
+    )
+}
+
 /// Configuration for creating a Coder workspace.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CoderWorkspaceConfig {
@@ -283,6 +294,14 @@ mod tests {
     #[test]
     fn port_forward_spec_is_explicitly_ipv4_loopback_bound() {
         assert_eq!(port_forward_tcp_spec(11350, 10350), "127.0.0.1:11350:10350");
+    }
+
+    #[test]
+    fn renders_exact_manual_port_forward_command() {
+        assert_eq!(
+            port_forward_command_line("dev-1afa81a3", 11350, 10350),
+            "coder port-forward dev-1afa81a3 --tcp 127.0.0.1:11350:10350"
+        );
     }
 
     #[test]

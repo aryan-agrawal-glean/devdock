@@ -28,6 +28,32 @@ fn start_help_exposes_remote_alias_and_legacy_mode() {
 }
 
 #[test]
+fn recover_help_exposes_workspace_addressable_session_attachment() {
+    let output = devdock().args(["recover", "--help"]).output().expect("run recover --help");
+
+    assert!(output.status.success(), "recover --help failed: {:?}", output);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("--workspace"), "recover should require a workspace:\n{stdout}");
+    assert!(
+        stdout.contains("--from-workspace"),
+        "recover should expose the bounded switcher handoff hook:\n{stdout}"
+    );
+}
+
+#[test]
+fn ports_forward_help_exposes_workspace_addressing() {
+    let output =
+        devdock().args(["ports", "forward", "--help"]).output().expect("run ports forward --help");
+
+    assert!(output.status.success(), "ports forward --help failed: {:?}", output);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("--workspace <WORKSPACE>"),
+        "ports forward should resolve by Coder workspace:\n{stdout}"
+    );
+}
+
+#[test]
 fn copy_git_creds_is_rejected_in_local_mode() {
     let output = devdock()
         .args(["start", "example-profile", "--copy-git-creds", "--dry-run"])

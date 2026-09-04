@@ -673,6 +673,9 @@ devdock ports forward --all
 # Forward all service ports without port offset (local port = remote port)
 devdock ports forward --all --no-offset
 
+# Forward a retryable/stopped session by its Coder workspace
+devdock ports forward --workspace <workspace-name> --all --no-offset
+
 # Forward specific service port
 devdock ports forward --service qe
 devdock ports forward --service fe
@@ -685,6 +688,7 @@ devdock ports forward --custom 3000:3000
 
 **Options:**
 - `--all`: Forward all service ports discovered from the instance's profile
+- `--workspace <name>`: Resolve a remote session by immutable Coder workspace identity; works for retryable stopped sessions
 - `--service <name>`: Forward specific service port (e.g., `qe`, `fe`, `tilt`)
 - `--custom <mapping>`: Custom port mapping in format `local:remote`
 - `--no-offset`: Don't apply port_base offset to local ports (use remote port as local port)
@@ -706,6 +710,30 @@ devdock ports stop --service tilt
 **Options:**
 - `--all`: Stop all port forwards
 - `--service <name>`: Stop specific service port forward
+
+---
+
+### Recover a Manually Started Remote Session
+Reconcile a stopped local session after DevDock was started manually inside Coder. Recovery is
+fail-closed and requires matching tmux, Tilt, and `DEVDOCK_ID` evidence before marking the session
+running. It also attaches all service forwards on their remote ports and verifies local listeners.
+
+```bash
+devdock recover --workspace <workspace-name>
+```
+
+For a handoff between two existing remote sessions, stop only verified forwards from the source and
+probe that their loopback ports are free before attaching the target:
+
+```bash
+devdock recover --workspace <to-workspace> --from-workspace <from-workspace>
+```
+
+If there is no local session row yet, provide the profile once:
+
+```bash
+devdock recover --workspace <workspace-name> --profile <profile-name>
+```
 
 ---
 

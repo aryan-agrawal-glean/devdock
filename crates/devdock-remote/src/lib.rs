@@ -17,8 +17,8 @@ pub use port_forward::{
     PortMapping, PortType,
 };
 pub use workspace::{
-    cleanup_existing_devdock, inspect_remote_git_state, provision_workspace, start_remote_devdock,
-    RemoteGitState,
+    cleanup_existing_devdock, inspect_remote_git_state, inspect_remote_runtime,
+    provision_workspace, start_remote_devdock, RemoteGitState, RemoteRuntimeSnapshot,
 };
 
 use std::process::Command;

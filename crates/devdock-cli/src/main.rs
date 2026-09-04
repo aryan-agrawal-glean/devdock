@@ -154,6 +154,21 @@ enum Commands {
         detailed: bool,
     },
 
+    /// Reconcile a remote Coder workspace and attach its current DevDock session
+    Recover {
+        /// Existing Coder workspace to adopt/recover
+        #[arg(long)]
+        workspace: String,
+
+        /// Optional prior remote workspace whose verified forwards should be stopped first
+        #[arg(long)]
+        from_workspace: Option<String>,
+
+        /// Profile to use only when no local session record exists yet
+        #[arg(long)]
+        profile: Option<String>,
+    },
+
     /// List all DevDock instances
     List {
         /// Show only running instances
@@ -407,6 +422,9 @@ enum PortCommands {
         /// Forward all common service ports
         #[arg(long)]
         all: bool,
+        /// Resolve the remote session by Coder workspace instead of current worktree
+        #[arg(long)]
+        workspace: Option<String>,
         /// Forward specific service port (e.g., qe, fe, tilt)
         #[arg(long)]
         service: Option<String>,
@@ -734,6 +752,11 @@ async fn main() {
 
         Commands::Status { detailed } => commands::status::execute(detailed).await,
 
+        Commands::Recover { workspace, from_workspace, profile } => {
+            commands::recover::execute(&workspace, from_workspace.as_deref(), profile.as_deref())
+                .await
+        }
+
         Commands::List { running } => commands::list::execute(running).await,
 
         Commands::Validate { profile, strict } => {
@@ -772,9 +795,15 @@ async fn main() {
 
         Commands::Ports { command } => match command {
             PortCommands::List { instance } => commands::ports::list(instance).await,
-            PortCommands::Forward { all, service, custom, no_offset } => {
-                commands::ports::forward(all, service.as_deref(), custom.as_deref(), no_offset)
-                    .await
+            PortCommands::Forward { all, service, custom, no_offset, workspace } => {
+                commands::ports::forward(
+                    all,
+                    service.as_deref(),
+                    custom.as_deref(),
+                    no_offset,
+                    workspace.as_deref(),
+                )
+                .await
             }
             PortCommands::Stop { all, service } => {
                 commands::ports::stop(all, service.as_deref()).await

@@ -4,7 +4,7 @@ use crate::output;
 use anyhow::Result;
 use colored::Colorize;
 use devdock_monitor::{ResourceStatus, TiltClient, TiltResource, DEFAULT_TILT_ENDPOINT};
-use devdock_remote::{managed_port_forward_status, ManagedForwardStatus};
+use devdock_remote::{inspect_remote_runtime, managed_port_forward_status, ManagedForwardStatus};
 use devdock_state::{Instance, InstanceStatus, StateManager};
 use prettytable::{format, row, Table};
 use std::process::Command;
@@ -74,6 +74,27 @@ async fn print_instance_status(
     println!("  Branch:     {}", instance.branch);
     println!("  Port Base:  {}", instance.port_base);
     println!("  Mode:       {}", instance.mode);
+
+    // A failed remote wrapper can leave healthy-looking Docker services behind
+    // after the local session has been stopped. Treat those containers as
+    // stale until recovery proves the current tmux/Tilt/session identity.
+    if instance.mode == "remote"
+        && matches!(instance.status, InstanceStatus::Stopped | InstanceStatus::Error)
+        && !instance.is_quarantined
+    {
+        if let Some(workspace_name) = instance.workspace_name.as_deref() {
+            if let Ok(snapshot) = inspect_remote_runtime(workspace_name, None) {
+                if snapshot.has_surviving_containers() {
+                    crate::commands::remote::print_stale_container_warning(
+                        &snapshot,
+                        workspace_name,
+                        &instance.id,
+                        Some(&instance.branch),
+                    );
+                }
+            }
+        }
+    }
 
     if detailed {
         println!("\n{}", "Details".bold());

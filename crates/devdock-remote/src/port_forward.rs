@@ -347,6 +347,40 @@ impl PortForwardManager {
         })
     }
 
+    /// Render exact, raw Coder commands for the forwards selected by a remote
+    /// start request. This is recovery guidance only; it never registers or
+    /// adopts an externally started process.
+    pub fn manual_forward_commands(
+        profile_path: &Path,
+        workspace: &str,
+        offset: u16,
+        services: Option<&str>,
+    ) -> Result<Vec<String>> {
+        let manager = Self::from_profile(profile_path, workspace, "manual", "manual", offset)?;
+        let selected = services.map(|value| {
+            value
+                .split(',')
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .collect::<std::collections::HashSet<_>>()
+        });
+
+        Ok(manager
+            .mappings
+            .iter()
+            .filter(|mapping| {
+                selected.as_ref().map_or(true, |names| {
+                    names.contains(mapping.service_name.as_str())
+                        || mapping.service_name == TILT_SERVICE_NAME
+                        || mapping.service_name == NGINX_SERVICE_NAME
+                })
+            })
+            .map(|mapping| {
+                coder::port_forward_command_line(workspace, mapping.local_port, mapping.remote_port)
+            })
+            .collect())
+    }
+
     /// Create the compatibility-mode Tilt and nginx forwards without parsing
     /// the rest of the profile a second time.
     pub fn default_forwards(
@@ -1021,6 +1055,35 @@ mod tests {
                 && mapping.local_port == 8321
                 && mapping.remote_port == 8321
         }));
+    }
+
+    #[test]
+    fn manual_commands_include_supporting_forwards_and_selected_services() {
+        let tmp = TempDir::new().unwrap();
+        let profile_path = setup_profile(
+            &tmp,
+            "selected",
+            "services:\n  qe:\n    type: local\n    port: 7960\n  crawler:\n    type: local\n    port: 7961\n",
+        );
+
+        let commands = PortForwardManager::manual_forward_commands(
+            &profile_path,
+            "dev-1afa81a3",
+            1000,
+            Some("qe"),
+        )
+        .unwrap();
+
+        assert!(commands.iter().any(|command| {
+            command == "coder port-forward dev-1afa81a3 --tcp 127.0.0.1:11350:10350"
+        }));
+        assert!(commands.iter().any(|command| {
+            command == "coder port-forward dev-1afa81a3 --tcp 127.0.0.1:8321:8321"
+        }));
+        assert!(commands.iter().any(|command| {
+            command == "coder port-forward dev-1afa81a3 --tcp 127.0.0.1:8960:7960"
+        }));
+        assert!(!commands.iter().any(|command| command.contains(":8961:7961")));
     }
 
     #[test]
