@@ -9,10 +9,12 @@ pub mod docker;
 pub mod jira;
 pub mod report;
 pub mod slack;
+pub mod startup;
 pub mod system;
 pub mod tilt;
 
 pub use report::BugReporter;
+pub use startup::{collect_startup_diagnostics, StartupDiagnostics};
 
 use thiserror::Error;
 

@@ -1,0 +1,26 @@
+# Remote status --detailed: SSH probe timeout
+#
+# Seed case for the E2E catalog harness (Aug 31 Wave 1). Unit coverage lives in
+# crates/devdock-remote (diag.rs, ssh.rs, coder.rs) and crates/devdock-cli status.rs.
+
+id: flow.remote.diag.status_timeout
+title: status --detailed returns within timeout when the remote agent is down
+priority: P0
+wave: 1
+queue: e2e-2026-08-31
+kind: flow
+tags:
+  - remote
+  - diagnostics
+  - status
+assertions:
+  - remote SSH probes use a deadline (default 10s) instead of hanging on coder ssh
+  - coder list is also bounded so a stuck CLI cannot block status --detailed
+  - stopped Coder workspaces print "workspace stopped" without SSH
+  - SSH timeout prints "timed out"
+  - SSH/agent connection failures print "agent unavailable"
+coverage:
+  - crates/devdock-remote/src/diag.rs
+  - crates/devdock-remote/src/ssh.rs
+  - crates/devdock-remote/src/coder.rs
+  - crates/devdock-cli/src/commands/status.rs

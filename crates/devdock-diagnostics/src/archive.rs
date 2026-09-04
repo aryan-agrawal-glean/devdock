@@ -81,3 +81,40 @@ fn remove_path(path: &Path) -> std::io::Result<()> {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::system::{CpuInfo, DiskInfo, DockerInfo, MemoryInfo, SystemInfo};
+    use zip::ZipArchive;
+
+    fn dummy_system() -> SystemInfo {
+        SystemInfo {
+            timestamp: "t".into(),
+            cpu: CpuInfo { percent: 0.0, cores: 1, physical_cores: 1 },
+            memory: MemoryInfo { total: 1, available: 1, percent: 0.0 },
+            disk: DiskInfo { total: 1, used: 0, free: 1, percent: 0.0 },
+            docker: DockerInfo { containers: HashMap::new() },
+        }
+    }
+
+    #[test]
+    fn archive_includes_remote_start_log_and_failure_stage() {
+        let mut files = HashMap::new();
+        files.insert("remote_start.log".into(), "boom".into());
+        files.insert("failure_stage.txt".into(), "failure_stage=remote_devdock_start\n".into());
+        let path = create_report_archive(&dummy_system(), None, &files).unwrap();
+        let file = File::open(&path).unwrap();
+        let mut zip = ZipArchive::new(file).unwrap();
+        let mut names = Vec::new();
+        for i in 0..zip.len() {
+            names.push(zip.by_index(i).unwrap().name().to_string());
+        }
+        assert!(names.iter().any(|n| n == "remote_start.log"), "{names:?}");
+        assert!(names.iter().any(|n| n == "failure_stage.txt"), "{names:?}");
+        let mut log = zip.by_name("remote_start.log").unwrap();
+        let mut body = String::new();
+        std::io::Read::read_to_string(&mut log, &mut body).unwrap();
+        assert_eq!(body, "boom");
+    }
+}

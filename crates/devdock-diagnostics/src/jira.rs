@@ -1,6 +1,6 @@
 //! Jira integration for bug report submission.
 
-use crate::{system::SystemInfo, DiagnosticsError, Result};
+use crate::{startup::StartupDiagnostics, system::SystemInfo, DiagnosticsError, Result};
 use base64::Engine;
 use reqwest::multipart;
 use serde::{Deserialize, Serialize};
@@ -175,12 +175,14 @@ async fn get_user_account_id(
 }
 
 /// Format the Jira description with all collected information in ADF format.
+#[allow(clippy::vec_init_then_push)]
 pub fn format_description(
     description: &str,
     command: &str,
     git_branch: &str,
     system_info: &SystemInfo,
     config_files: &HashMap<String, String>,
+    startup: Option<&StartupDiagnostics>,
 ) -> JiraDescription {
     let mut content = Vec::new();
 
@@ -220,6 +222,59 @@ pub fn format_description(
         content: Some(vec![JiraText { text_type: "text".to_string(), text: command.to_string() }]),
         text: None,
     });
+
+    if let Some(startup) = startup {
+        if !startup.is_empty() {
+            content.push(JiraContent {
+                content_type: "heading".to_string(),
+                attrs: Some(JiraAttrs { level: Some(2), language: None }),
+                content: Some(vec![JiraText {
+                    text_type: "text".to_string(),
+                    text: "Remote Start Failure".to_string(),
+                }]),
+                text: None,
+            });
+            let mut summary = String::new();
+            if let Some(stage) = &startup.failure_stage {
+                summary.push_str(&format!("Failure stage: {stage}\n"));
+            }
+            if let Some(reason) = &startup.failure_reason {
+                summary.push_str(&format!("Failure reason: {reason}\n"));
+            }
+            if let Some(exit) = &startup.exit_status {
+                summary.push_str(&format!("Inner exit status: {exit}\n"));
+            }
+            if let Some(path) = &startup.log_path {
+                summary.push_str(&format!("Start log: {path}\n"));
+            }
+            if !summary.is_empty() {
+                content.push(JiraContent {
+                    content_type: "paragraph".to_string(),
+                    attrs: None,
+                    content: Some(vec![JiraText {
+                        text_type: "text".to_string(),
+                        text: summary.trim_end().to_string(),
+                    }]),
+                    text: None,
+                });
+            }
+            if let Some(log) = &startup.log_content {
+                let tail: Vec<&str> = log.lines().rev().take(40).collect();
+                let tail: Vec<&str> = tail.into_iter().rev().collect();
+                if !tail.is_empty() {
+                    content.push(JiraContent {
+                        content_type: "codeBlock".to_string(),
+                        attrs: Some(JiraAttrs { level: None, language: None }),
+                        content: Some(vec![JiraText {
+                            text_type: "text".to_string(),
+                            text: tail.join("\n"),
+                        }]),
+                        text: None,
+                    });
+                }
+            }
+        }
+    }
 
     // Git Branch section
     content.push(JiraContent {

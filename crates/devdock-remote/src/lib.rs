@@ -6,11 +6,15 @@
 
 pub mod coder;
 pub mod config_sync;
+pub mod diag;
 pub mod port_forward;
 pub mod ssh;
 pub mod workspace;
 
 pub use coder::{check_coder_installed, workspace_exists, CoderWorkspaceConfig};
+pub use diag::{
+    probe_remote_tilt, RemoteTiltProbe, REMOTE_START_LOG, REMOTE_STATUS_SSH_TIMEOUT_SECS,
+};
 pub use port_forward::{
     managed_port_forward_status, start_managed_port_forward, start_managed_port_forward_logged,
     stop_managed_port_forward, ManagedForwardStatus, ManagedForwardStopOutcome, PortForwardManager,
@@ -46,6 +50,9 @@ pub enum RemoteError {
 
     #[error("SSH connection failed: {0}")]
     SshError(String),
+
+    #[error("SSH command timed out after {0} seconds")]
+    SshTimeout(u64),
 
     #[error("Port forwarding failed: {0}")]
     PortForwardError(String),

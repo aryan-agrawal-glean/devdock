@@ -453,10 +453,9 @@ pub async fn start_remote(config: RemoteStartConfig) -> Result<()> {
             profile,
             services.as_ref().map(|s| format!("-s {s}")).unwrap_or_default()
         ))?;
-        logger.log(&format!(
-            "Remote logs: coder ssh {} -- tail -f /tmp/devdock-start.log",
-            workspace_name
-        ))?;
+        logger.log(
+            "Remote inner start stdout/stderr is captured on the workspace after launch (per-session log under /tmp/devdock-start-*.log)",
+        )?;
 
         // Step 1: Config sync
         let config_start = Instant::now();

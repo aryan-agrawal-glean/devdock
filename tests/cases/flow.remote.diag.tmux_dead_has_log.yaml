@@ -1,0 +1,26 @@
+# Remote start: tmux_dead has a durable log
+#
+# Seed case for the E2E catalog harness (Aug 31 Wave 1). Unit coverage lives in
+# crates/devdock-remote (diag.rs) and crates/devdock-diagnostics (startup.rs).
+
+id: flow.remote.diag.tmux_dead_has_log
+title: Remote tmux_dead advertises an existing start log and prints a bounded tail
+priority: P0
+wave: 1
+queue: e2e-2026-08-31
+kind: flow
+tags:
+  - remote
+  - diagnostics
+  - tmux
+assertions:
+  - start script creates the per-session log file before tmux new-session -d
+  - inner devdock start stdout/stderr is redirected into that log (>> log 2>&1)
+  - inner exit status is written to the sibling .exit file
+  - tmux_dead output includes DEVDOCK_EXIT and a bounded log tail
+  - advertised log path is omitted when the file does not exist
+  - devdock report attaches remote_start.log and failure_stage.txt when present
+coverage:
+  - crates/devdock-remote/src/diag.rs
+  - crates/devdock-remote/src/workspace.rs
+  - crates/devdock-diagnostics/src/startup.rs

@@ -1,6 +1,6 @@
 //! Main bug reporter orchestration.
 
-use crate::{archive, config, jira, slack, system, tilt, DiagnosticsError, Result};
+use crate::{archive, config, jira, slack, startup, system, tilt, DiagnosticsError, Result};
 use colored::Colorize;
 use dialoguer::{Confirm, Input};
 use tracing::warn;
@@ -11,12 +11,21 @@ pub struct BugReporter {
     description: Option<String>,
     command: Option<String>,
     interactive: bool,
+    failure_stage: Option<String>,
+    failure_reason: Option<String>,
 }
 
 impl BugReporter {
     /// Create a new bug reporter in interactive mode.
     pub fn new() -> Self {
-        Self { summary: None, description: None, command: None, interactive: true }
+        Self {
+            summary: None,
+            description: None,
+            command: None,
+            interactive: true,
+            failure_stage: None,
+            failure_reason: None,
+        }
     }
 
     /// Create a bug reporter with pre-filled information (non-interactive).
@@ -26,7 +35,16 @@ impl BugReporter {
             description: Some(description),
             command: Some(command),
             interactive: false,
+            failure_stage: None,
+            failure_reason: None,
         }
+    }
+
+    /// Attach session failure context (from the local instance or forwarded env).
+    pub fn with_failure_context(mut self, stage: Option<String>, reason: Option<String>) -> Self {
+        self.failure_stage = stage;
+        self.failure_reason = reason;
+        self
     }
 
     /// Set whether to run in interactive mode.
@@ -81,13 +99,36 @@ impl BugReporter {
             Default::default()
         };
 
+        println!("\n{}", "📎 Collecting remote start diagnostics...".yellow());
+        let startup = startup::collect_startup_diagnostics(
+            self.failure_stage.clone(),
+            self.failure_reason.clone(),
+        );
+        if startup.is_empty() {
+            println!("  {} No remote start log or failure stage found", "⊘".yellow());
+        } else {
+            if startup.log_content.is_some() {
+                println!(
+                    "  {} Attached start log{}",
+                    "✓".green(),
+                    startup.log_path.as_deref().map(|p| format!(" ({p})")).unwrap_or_default()
+                );
+            }
+            if let Some(stage) = &startup.failure_stage {
+                println!("  {} Failure stage: {stage}", "✓".green());
+            }
+        }
+
+        let mut archive_files = config_files.clone();
+        archive_files.extend(startup.archive_files());
+
         // Get git branch
         let git_branch = config::get_current_git_branch().unwrap_or_else(|_| "unknown".to_string());
 
         // Create archive
         println!("\n{}", "📦 Creating report archive...".yellow());
         let archive_path =
-            archive::create_report_archive(&system_info, snapshot_file.as_ref(), &config_files)?;
+            archive::create_report_archive(&system_info, snapshot_file.as_ref(), &archive_files)?;
         println!("  {} Archive created: {:?}", "✓".green(), archive_path);
 
         // Format Jira description (in ADF format)
@@ -97,6 +138,7 @@ impl BugReporter {
             &git_branch,
             &system_info,
             &config_files,
+            Some(&startup),
         );
 
         // Create Jira ticket

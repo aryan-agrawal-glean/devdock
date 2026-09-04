@@ -121,8 +121,15 @@ fn troubleshoot() {
     println!("  devdock sync status");
     println!("  devdock sync errors -n 20");
     println!("  devdock docker check\n");
+    println!("Remote sessions:");
+    println!("  status --detailed SSH probes time out instead of hanging if the agent is down");
+    println!("  Failed remote start writes /tmp/devdock-start-<session>.log on the workspace");
+    println!(
+        "  On tmux_dead, DevDock prints a bounded tail of that log (only if the file exists)\n"
+    );
     println!("If the issue is not obvious:");
     println!("  devdock report --summary \"<short summary>\" --description \"<what happened>\" --command \"<command you ran>\"");
+    println!("  report auto-attaches the remote start log and failure stage when available");
 }
 
 fn cleanup() {

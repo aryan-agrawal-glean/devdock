@@ -4,7 +4,10 @@ use crate::output;
 use anyhow::Result;
 use colored::Colorize;
 use devdock_monitor::{ResourceStatus, TiltClient, TiltResource, DEFAULT_TILT_ENDPOINT};
-use devdock_remote::{managed_port_forward_status, ManagedForwardStatus};
+use devdock_remote::{
+    managed_port_forward_status, probe_remote_tilt, ManagedForwardStatus, RemoteTiltProbe,
+    REMOTE_STATUS_SSH_TIMEOUT_SECS,
+};
 use devdock_state::{Instance, InstanceStatus, StateManager};
 use prettytable::{format, row, Table};
 use std::process::Command;
@@ -290,23 +293,22 @@ fn format_resource_status(status: &ResourceStatus) -> String {
 
 async fn print_tilt_status(mode: &str, state_manager: &StateManager) -> Result<()> {
     if mode == "remote" {
-        // For remote mode, check Tilt on the remote workspace
         let workspace_path = std::env::current_dir()?.display().to_string();
 
         if let Ok(Some(instance)) = state_manager.get_instance_by_workspace(&workspace_path).await {
-            if let Ok(Some((workspace_name, _, _, _))) =
+            let workspace_name = if let Some(name) = &instance.workspace_name {
+                Some(name.clone())
+            } else if let Ok(Some((name, _, _, _))) =
                 state_manager.get_sync_session(&instance.id).await
             {
-                // Check Tilt on remote using lsof
-                let check_cmd = format!("coder ssh {workspace_name} -- 'lsof -i:10350 >/dev/null 2>&1 && echo running || echo stopped'");
-
-                if let Ok(output) = Command::new("bash").args(["-c", &check_cmd]).output() {
-                    let result = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                    if result == "running" {
-                        println!("  {} (on remote workspace)", "Tilt is running".green());
-                        return Ok(());
-                    }
-                }
+                Some(name)
+            } else {
+                None
+            };
+            if let Some(workspace_name) = workspace_name {
+                let probe = probe_remote_tilt(&workspace_name, REMOTE_STATUS_SSH_TIMEOUT_SECS);
+                print_remote_tilt_probe(&probe);
+                return Ok(());
             }
         }
 
@@ -333,6 +335,34 @@ async fn print_tilt_status(mode: &str, state_manager: &StateManager) -> Result<(
     }
 
     Ok(())
+}
+
+fn print_remote_tilt_probe(probe: &RemoteTiltProbe) {
+    let label = probe.label();
+    let painted = match probe {
+        RemoteTiltProbe::TiltRunning => label.green(),
+        RemoteTiltProbe::TiltStopped => label.yellow(),
+        RemoteTiltProbe::WorkspaceStopped => label.yellow(),
+        RemoteTiltProbe::AgentUnavailable { .. } => label.yellow(),
+        RemoteTiltProbe::TimedOut { .. } => label.yellow(),
+    };
+    println!("  {painted} (on remote workspace)");
+    match probe {
+        RemoteTiltProbe::TimedOut { timeout_secs } => {
+            println!(
+                "  SSH probe exceeded {timeout_secs}s; workspace may be stopped or the agent unavailable"
+            );
+        }
+        RemoteTiltProbe::AgentUnavailable { detail } if !detail.is_empty() => {
+            println!("  {detail}");
+        }
+        RemoteTiltProbe::WorkspaceStopped => {
+            println!(
+                "  Coder workspace is not running; start it before retrying status --detailed"
+            );
+        }
+        _ => {}
+    }
 }
 
 fn format_timestamp(ts: i64) -> String {
@@ -415,5 +445,17 @@ mod tests {
         assert_eq!(values[3], "-");
         assert_eq!(values[4], "-");
         assert_eq!(values[5], "-");
+    }
+
+    #[test]
+    fn remote_tilt_probe_labels_match_required_states() {
+        assert_eq!(RemoteTiltProbe::WorkspaceStopped.label(), "workspace stopped");
+        assert_eq!(
+            RemoteTiltProbe::AgentUnavailable { detail: "x".into() }.label(),
+            "agent unavailable"
+        );
+        assert_eq!(RemoteTiltProbe::TimedOut { timeout_secs: 10 }.label(), "timed out");
+        assert_eq!(RemoteTiltProbe::TiltRunning.label(), "Tilt is running");
+        assert_eq!(RemoteTiltProbe::TiltStopped.label(), "Tilt is not running");
     }
 }

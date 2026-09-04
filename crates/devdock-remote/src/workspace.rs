@@ -1,6 +1,6 @@
 //! Workspace lifecycle management.
 
-use crate::{coder, config_sync, port_forward::PortForwardManager, ssh, RemoteError, Result};
+use crate::{coder, config_sync, diag, port_forward::PortForwardManager, ssh, RemoteError, Result};
 use devdock_state::StateManager;
 use std::path::{Path, PathBuf};
 use std::thread::sleep;
@@ -283,15 +283,17 @@ where
         println!("  AWS env vars exported: {}", exported_aws_vars.join(", "));
     }
 
-    let start_script = if let Some(svc) = services {
-        format!(
-            "{env_exports} && cd /home/workspace/scio && tmux new-session -d -s devdock 'devdock start {profile} -s {svc}'"
-        )
-    } else {
-        format!(
-            "{env_exports} && cd /home/workspace/scio && tmux new-session -d -s devdock 'devdock start {profile}'"
-        )
-    };
+    let log_path = diag::remote_start_log_path(devdock_id);
+    let exit_path = diag::remote_start_exit_path(devdock_id);
+    let meta_path = diag::remote_start_meta_path(devdock_id);
+    let start_script = diag::build_remote_start_script(
+        &env_exports,
+        profile,
+        services,
+        &log_path,
+        &exit_path,
+        &meta_path,
+    );
 
     info!("Starting DevDock in tmux session");
     if verbose {
@@ -301,19 +303,25 @@ where
         println!("  Port Offset: {offset}");
     }
 
-    match ssh::ssh_exec_with_log(workspace, &start_script, log_file) {
+    let remote_log_created = match ssh::ssh_exec_with_log(workspace, &start_script, log_file) {
         Ok(output) => {
+            let created = diag::start_log_created(&output);
             if verbose {
                 println!("  ✓ DevDock start command executed");
+                if created {
+                    println!("  Remote start log: coder ssh {workspace} -- tail -f {log_path}");
+                }
             }
             // Don't print environment variable dumps
             if verbose
                 && !output.trim().is_empty()
                 && !output.trim().contains("tmux")
                 && !output.trim().contains("declare -x")
+                && !output.contains("DEVDOCK_LOG_CREATED")
             {
                 println!("  Output: {}", output.trim());
             }
+            created
         }
         Err(e) => {
             let err_msg = format!("{e}");
@@ -332,7 +340,10 @@ where
                 // Retry
                 println!("  Retrying DevDock start...");
                 match ssh::ssh_exec_with_log(workspace, &start_script, log_file) {
-                    Ok(_) => println!("  ✓ Retry succeeded"),
+                    Ok(output) => {
+                        println!("  ✓ Retry succeeded");
+                        diag::start_log_created(&output)
+                    }
                     Err(e2) => {
                         eprintln!("  ❌ ERROR: Retry failed: {e2}");
                         return Err(e2);
@@ -343,11 +354,14 @@ where
                 return Err(e);
             }
         }
-    }
+    };
 
     if verbose {
         println!("  ✓ DevDock command started in background");
-        println!("  To view logs: coder ssh {workspace} -- tmux attach -t devdock");
+        if remote_log_created {
+            println!("  To view logs: coder ssh {workspace} -- tail -f {log_path}");
+        }
+        println!("  Tmux: coder ssh {workspace} -- tmux attach -t devdock");
     }
 
     // 3. Wait for Tilt process to start
@@ -361,24 +375,19 @@ where
     let mut last_print = 0u64;
 
     // Combined tmux + port check script (single SSH call per iteration)
-    // Always exits 0 so ssh_exec_with_log returns Ok; status is in stdout markers
-    let combined_check = r#"
-if ! tmux has-session -t devdock 2>/dev/null; then
-    echo "DEVDOCK_STATUS:tmux_dead"
-    exit 0
-fi
-if ss -tlnp 2>/dev/null | grep -q ':10350 ' 2>/dev/null; then
-    echo "DEVDOCK_STATUS:tilt_ready"
-    exit 0
-fi
-echo "DEVDOCK_STATUS:waiting"
-exit 0
-"#;
+    // Always exits 0 so ssh_exec_with_log returns Ok; status is in stdout markers.
+    // On tmux_dead, includes inner exit status and a bounded tail of the start log.
+    let combined_check = diag::tilt_wait_check_script(&log_path, &exit_path);
 
     loop {
         let elapsed = start.elapsed().as_secs();
 
-        match ssh::ssh_exec_with_log(workspace, combined_check, log_file) {
+        match ssh::ssh_exec_with_log_timeout(
+            workspace,
+            &combined_check,
+            log_file,
+            Some(diag::REMOTE_TILT_WAIT_SSH_TIMEOUT_SECS),
+        ) {
             Ok(output) if output.contains("DEVDOCK_STATUS:tilt_ready") => {
                 if verbose {
                     println!("  ✓ Tilt process is running on port 10350!");
@@ -386,17 +395,20 @@ exit 0
                 break;
             }
             Ok(output) if output.contains("DEVDOCK_STATUS:tmux_dead") => {
-                eprintln!("\n  ❌ ERROR: DevDock tmux session died while waiting for Tilt!");
-                eprintln!("\n  To debug:");
-                eprintln!("    1. SSH to workspace: coder ssh {workspace}");
-                eprintln!("    2. Check logs: cat /tmp/devdock-start.log");
-                eprintln!("    3. Try manual start: devdock start {profile}");
-                return Err(RemoteError::CommandFailed(
-                    "DevDock process died during startup".to_string(),
-                ));
+                let diag_info = diag::parse_tmux_dead_diagnostics(&output);
+                eprintln!(
+                    "\n  ❌ ERROR: {}",
+                    diag::format_tmux_dead_message(workspace, profile, &diag_info)
+                );
+                return Err(RemoteError::CommandFailed(diag::command_failed_for_tmux_dead(
+                    &diag_info,
+                )));
             }
             Ok(_) => {
                 // DEVDOCK_STATUS:waiting or unknown — not ready yet, continue
+            }
+            Err(RemoteError::SshTimeout(_)) => {
+                // Agent slow/unreachable this iteration — keep waiting until the outer timeout
             }
             Err(_) => {
                 // SSH connection error — transient, keep waiting
@@ -415,6 +427,9 @@ exit 0
                 timeout.as_secs()
             );
             eprintln!("  DevDock may still be starting up. Check logs:");
+            if remote_log_created {
+                eprintln!("    coder ssh {workspace} -- tail -n 80 {log_path}");
+            }
             eprintln!("    coder ssh {workspace} -- tmux attach -t devdock");
             break;
         }
@@ -425,6 +440,9 @@ exit 0
     if verbose {
         println!();
         println!("  To view DevDock logs:");
+        if remote_log_created {
+            println!("    coder ssh {workspace} -- tail -f {log_path}");
+        }
         println!("    coder ssh {workspace}");
         println!("    tmux attach -t devdock");
     }
@@ -468,7 +486,10 @@ exit 0
     if verbose {
         println!("\n  ✅ DevDock is running!");
         println!("  Tilt UI: http://localhost:{}", offset + 10350);
-        println!("  Logs: coder ssh {workspace} && tmux attach -t devdock");
+        if remote_log_created {
+            println!("  Start log: coder ssh {workspace} -- tail -f {log_path}");
+        }
+        println!("  Tmux: coder ssh {workspace} && tmux attach -t devdock");
     }
 
     Ok(port_mgr)

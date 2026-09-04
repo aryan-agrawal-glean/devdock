@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `prometheus.yaml` - Prometheus configuration for metrics
 
 ### Fixed
+- Remote start now redirects inner `devdock start` stdout/stderr to a durable per-session log created **before** tmux detach. On `tmux_dead`, DevDock retains the inner exit status and prints a bounded log tail; it only advertises log paths that exist.
+- `devdock status --detailed` remote SSH probes now time out instead of hanging (~90s) against stopped or unavailable Coder agents, and print `workspace stopped` / `agent unavailable` / `timed out`.
+- `devdock report` auto-attaches the remote start log and failure stage when available.
 - **CRITICAL**: Remote mode now correctly respects profile service types (local/remote)
   - Previously: Profile had `qe: type: local` but generated `temp_profile.yaml` incorrectly changed it to `remote`
   - Root cause: Code was using service type from `devdock_config.json` instead of user's profile

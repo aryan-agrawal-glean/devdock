@@ -1,10 +1,12 @@
 //! Coder CLI wrapper for workspace management.
 
+use crate::ssh::{run_command_with_timeout, CommandOutcome};
 use crate::{RemoteError, Result};
 use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
+use std::time::Duration;
 use tracing::{debug, info, warn};
 
 pub const PORT_FORWARD_BIND_ADDRESS: &str = devdock_state::LOOPBACK_BIND_ADDRESS;
@@ -209,25 +211,80 @@ fn parse_workspace_identity(
     }))
 }
 
-/// Get workspace status.
-pub fn get_workspace_status(name: &str) -> Result<String> {
-    check_coder_installed()?;
+#[derive(Debug, Deserialize)]
+struct CoderListStatusEntry {
+    name: String,
+    #[serde(default)]
+    owner_name: Option<String>,
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    latest_build: Option<CoderLatestBuild>,
+}
 
-    let output = Command::new("coder")
-        .arg("list")
+#[derive(Debug, Deserialize)]
+struct CoderLatestBuild {
+    #[serde(default)]
+    status: Option<String>,
+}
+
+fn names_match(entry: &CoderListStatusEntry, requested: &str) -> bool {
+    if entry.name == requested {
+        return true;
+    }
+    if let Some(owner) = &entry.owner_name {
+        return format!("{owner}/{}", entry.name) == requested;
+    }
+    false
+}
+
+/// Parse `coder list --output json` for a workspace's latest build status.
+pub fn parse_workspace_runtime_status(bytes: &[u8], requested: &str) -> Result<Option<String>> {
+    let entries: Vec<CoderListStatusEntry> = serde_json::from_slice(bytes).map_err(|error| {
+        RemoteError::CommandFailed(format!("Invalid JSON from coder list: {error}"))
+    })?;
+    Ok(entries
+        .into_iter()
+        .find(|entry| names_match(entry, requested))
+        .and_then(|entry| entry.latest_build.and_then(|build| build.status).or(entry.status)))
+}
+
+/// Get workspace status (best-effort; prefers latest_build.status).
+pub fn get_workspace_status(name: &str) -> Result<String> {
+    match get_workspace_runtime_status(name, 15)? {
+        Some(status) => Ok(status),
+        None => Ok("stopped".to_string()),
+    }
+}
+
+/// Timed `coder list` lookup of a workspace's runtime status (`running`, `stopped`, ...).
+pub fn get_workspace_runtime_status(name: &str, timeout_secs: u64) -> Result<Option<String>> {
+    check_coder_installed()?;
+    let search_name = name.rsplit('/').next().unwrap_or(name);
+
+    let mut cmd = Command::new("coder");
+    cmd.arg("list")
         .arg("--output")
         .arg("json")
-        .output()
+        .arg("--search")
+        .arg(format!("owner:me name:{search_name}"));
+
+    let outcome = run_command_with_timeout(cmd, Duration::from_secs(timeout_secs))
         .map_err(|e| RemoteError::CommandFailed(format!("Failed to list workspaces: {e}")))?;
 
-    if !output.status.success() {
-        return Err(RemoteError::CommandFailed("Failed to get workspace status".to_string()));
+    match outcome {
+        CommandOutcome::TimedOut => {
+            Err(RemoteError::CommandFailed(format!("coder list timed out after {timeout_secs}s")))
+        }
+        CommandOutcome::Completed { success, stdout, stderr, .. } => {
+            if !success {
+                return Err(RemoteError::CommandFailed(format!(
+                    "Failed to get workspace status: {stderr}"
+                )));
+            }
+            parse_workspace_runtime_status(stdout.as_bytes(), name)
+        }
     }
-
-    // Parse JSON output and find workspace
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    // For now, return simple status - can be enhanced with proper JSON parsing
-    Ok(if stdout.contains(name) { "running" } else { "stopped" }.to_string())
 }
 
 /// Start a single port forward for a workspace.
@@ -303,5 +360,33 @@ mod tests {
           {"id":"workspace-id","name":"feature-one-copy","owner_name":"owner"}
         ]"#;
         assert!(parse_workspace_identity(json, "feature-one").unwrap().is_none());
+    }
+
+    #[test]
+    fn parse_workspace_runtime_status_reads_latest_build() {
+        let json = br#"[
+          {
+            "id":"workspace-id",
+            "name":"feature-one",
+            "owner_name":"owner",
+            "latest_build": { "status": "stopped" }
+          }
+        ]"#;
+        let status = parse_workspace_runtime_status(json, "feature-one").unwrap();
+        assert_eq!(status.as_deref(), Some("stopped"));
+    }
+
+    #[test]
+    fn parse_workspace_runtime_status_falls_back_to_top_level_status() {
+        let json = br#"[{"name":"ws","status":"running"}]"#;
+        let status = parse_workspace_runtime_status(json, "ws").unwrap();
+        assert_eq!(status.as_deref(), Some("running"));
+    }
+
+    #[test]
+    fn parse_workspace_runtime_status_missing_workspace() {
+        let json = br#"[{"name":"other","latest_build":{"status":"running"}}]"#;
+        let status = parse_workspace_runtime_status(json, "ws").unwrap();
+        assert!(status.is_none());
     }
 }

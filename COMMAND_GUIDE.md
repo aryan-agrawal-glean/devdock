@@ -197,6 +197,8 @@ devdock cleanup && devdock start my-profile
 devdock report              # If issue persists
 ```
 
+Remote start failures capture inner `devdock start` output on the workspace (`/tmp/devdock-start-<session>.log`). `devdock report` attaches that log and the recorded failure stage when present. Do not `tail` a log path until DevDock has printed one that exists.
+
 ### 💡 Quick Tips
 - Use `devdock guide <intent>` when you know the workflow but not the exact flags
 - Use `--mode fast` for SQL (hourly snapshots, much faster)
@@ -325,6 +327,8 @@ devdock status --detailed
 
 **Options:**
 - `-d, --detailed`: Show detailed status information
+
+For remote instances, `--detailed` probes Tilt over `coder ssh` with a timeout. If the Coder workspace is stopped, the agent is down, or the probe exceeds the deadline, status prints `workspace stopped`, `agent unavailable`, or `timed out` instead of hanging.
 
 ---
 
@@ -924,6 +928,9 @@ devdock start my-profile
 ```bash
 # 1. Check status
 devdock status -d
+# Remote: prints workspace stopped / agent unavailable / timed out instead of hanging
+
+# 2. Verify Docker is running
 
 # 2. Verify Docker is running
 devdock docker check

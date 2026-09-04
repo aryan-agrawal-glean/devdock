@@ -2,10 +2,87 @@
 
 use crate::{RemoteError, Result};
 use std::fs::OpenOptions;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 use tracing::{debug, info};
+
+/// Outcome of a locally spawned command that may be given a deadline.
+#[derive(Debug)]
+pub enum CommandOutcome {
+    Completed { success: bool, exit_code: i32, stdout: String, stderr: String },
+    TimedOut,
+}
+
+/// Run `cmd` with piped stdio and kill it if it exceeds `timeout`.
+pub fn run_command_with_timeout(
+    mut cmd: Command,
+    timeout: Duration,
+) -> std::io::Result<CommandOutcome> {
+    cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = cmd.spawn()?;
+    let start = Instant::now();
+
+    loop {
+        match child.try_wait()? {
+            Some(status) => {
+                let mut stdout_buf = Vec::new();
+                let mut stderr_buf = Vec::new();
+                if let Some(mut out) = child.stdout.take() {
+                    let _ = out.read_to_end(&mut stdout_buf);
+                }
+                if let Some(mut err) = child.stderr.take() {
+                    let _ = err.read_to_end(&mut stderr_buf);
+                }
+                return Ok(CommandOutcome::Completed {
+                    success: status.success(),
+                    exit_code: status.code().unwrap_or(-1),
+                    stdout: String::from_utf8_lossy(&stdout_buf).into_owned(),
+                    stderr: String::from_utf8_lossy(&stderr_buf).into_owned(),
+                });
+            }
+            None => {
+                if start.elapsed() >= timeout {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Ok(CommandOutcome::TimedOut);
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
+    }
+}
+
+fn coder_ssh_command(workspace: &str, command: &str) -> Command {
+    let mut cmd = Command::new("coder");
+    cmd.arg("ssh").arg(workspace).arg("--").arg(command);
+    cmd
+}
+
+fn log_ssh_result(
+    log_file: Option<&Path>,
+    workspace: &str,
+    command: &str,
+    exit_code: i32,
+    stdout: &str,
+    stderr: &str,
+) {
+    let Some(log_path) = log_file else {
+        return;
+    };
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(log_path) {
+        let _ = writeln!(file, "\n=== SSH Command on {workspace} ===");
+        let _ = writeln!(file, "Command: {command}");
+        let _ = writeln!(file, "Exit code: {exit_code}");
+        if !stdout.is_empty() {
+            let _ = writeln!(file, "STDOUT:\n{stdout}");
+        }
+        if !stderr.is_empty() {
+            let _ = writeln!(file, "STDERR:\n{stderr}");
+        }
+    }
+}
 
 /// Execute a command on a remote workspace via SSH.
 pub fn ssh_exec(workspace: &str, command: &str) -> Result<String> {
@@ -18,37 +95,53 @@ pub fn ssh_exec_with_log(
     command: &str,
     log_file: Option<&Path>,
 ) -> Result<String> {
+    ssh_exec_with_log_timeout(workspace, command, log_file, None)
+}
+
+/// Execute a remote command and fail with [`RemoteError::SshTimeout`] if it exceeds `timeout_secs`.
+pub fn ssh_exec_with_timeout(workspace: &str, command: &str, timeout_secs: u64) -> Result<String> {
+    ssh_exec_with_log_timeout(workspace, command, None, Some(timeout_secs))
+}
+
+/// Execute a remote command with optional local logging and an optional deadline.
+pub fn ssh_exec_with_log_timeout(
+    workspace: &str,
+    command: &str,
+    log_file: Option<&Path>,
+    timeout_secs: Option<u64>,
+) -> Result<String> {
     info!("Executing on {}: {}", workspace, command);
 
-    // Pass command as-is. Coder SSH handles the shell invocation automatically.
-    let output = Command::new("coder")
-        .arg("ssh")
-        .arg(workspace)
-        .arg("--")
-        .arg(command)
-        .output()
+    let (stdout, stderr, exit_code, success) = if let Some(timeout) = timeout_secs {
+        let outcome = run_command_with_timeout(
+            coder_ssh_command(workspace, command),
+            Duration::from_secs(timeout),
+        )
         .map_err(|e| RemoteError::SshError(format!("Failed to execute SSH command: {e}")))?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    let exit_code = output.status.code().unwrap_or(-1);
-
-    // Log to file if provided
-    if let Some(log_path) = log_file {
-        if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(log_path) {
-            let _ = writeln!(file, "\n=== SSH Command on {workspace} ===");
-            let _ = writeln!(file, "Command: {command}");
-            let _ = writeln!(file, "Exit code: {exit_code}");
-            if !stdout.is_empty() {
-                let _ = writeln!(file, "STDOUT:\n{stdout}");
+        match outcome {
+            CommandOutcome::TimedOut => {
+                return Err(RemoteError::SshTimeout(timeout));
             }
-            if !stderr.is_empty() {
-                let _ = writeln!(file, "STDERR:\n{stderr}");
+            CommandOutcome::Completed { success, exit_code, stdout, stderr } => {
+                (stdout, stderr, exit_code, success)
             }
         }
-    }
+    } else {
+        let output = coder_ssh_command(workspace, command)
+            .stdin(Stdio::null())
+            .output()
+            .map_err(|e| RemoteError::SshError(format!("Failed to execute SSH command: {e}")))?;
+        (
+            String::from_utf8_lossy(&output.stdout).into_owned(),
+            String::from_utf8_lossy(&output.stderr).into_owned(),
+            output.status.code().unwrap_or(-1),
+            output.status.success(),
+        )
+    };
 
-    if !output.status.success() {
+    log_ssh_result(log_file, workspace, command, exit_code, &stdout, &stderr);
+
+    if !success {
         return Err(RemoteError::SshError(format!("Command failed (exit {exit_code}): {stderr}")));
     }
 
@@ -70,86 +163,12 @@ pub fn ssh_check_with_timeout(
 ) -> Result<bool> {
     debug!("Checking on {}: {}", workspace, command);
 
-    let mut cmd = Command::new("coder");
-    cmd.arg("ssh").arg(workspace).arg("--").arg(command);
-
-    let output = if let Some(timeout) = timeout_secs {
-        // Spawn and wait with timeout
-        use std::time::Duration;
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| RemoteError::SshError(format!("Failed to spawn SSH command: {e}")))?;
-
-        let start = std::time::Instant::now();
-        loop {
-            match child.try_wait() {
-                Ok(Some(status)) => {
-                    // Process completed
-                    let exit_code = status.code().unwrap_or(-1);
-                    let success = status.success();
-
-                    // Log to file if provided
-                    if let Some(log_path) = log_file {
-                        if let Ok(mut file) =
-                            OpenOptions::new().create(true).append(true).open(log_path)
-                        {
-                            let _ = writeln!(file, "\n=== SSH Check on {workspace} ===");
-                            let _ = writeln!(file, "Command: {command}");
-                            let _ = writeln!(file, "Exit code: {exit_code}");
-                            let _ = writeln!(file, "Success: {success}");
-                        }
-                    }
-
-                    return Ok(success);
-                }
-                Ok(None) => {
-                    // Still running
-                    if start.elapsed() > Duration::from_secs(timeout) {
-                        // Timeout - kill the process
-                        let _ = child.kill();
-                        return Err(RemoteError::SshError(format!(
-                            "SSH command timed out after {timeout}s"
-                        )));
-                    }
-                    std::thread::sleep(Duration::from_millis(100));
-                }
-                Err(e) => {
-                    return Err(RemoteError::SshError(format!(
-                        "Failed to wait for SSH command: {e}"
-                    )));
-                }
-            }
-        }
-    } else {
-        // No timeout, use normal output()
-        let out = cmd
-            .output()
-            .map_err(|e| RemoteError::SshError(format!("Failed to execute SSH command: {e}")))?;
-        out
-    };
-
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    let exit_code = output.status.code().unwrap_or(-1);
-    let success = output.status.success();
-
-    // Log to file if provided
-    if let Some(log_path) = log_file {
-        if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(log_path) {
-            let _ = writeln!(file, "\n=== SSH Check on {workspace} ===");
-            let _ = writeln!(file, "Command: {command}");
-            let _ = writeln!(file, "Exit code: {exit_code}");
-            let _ = writeln!(file, "Success: {success}");
-            if !stdout.is_empty() {
-                let _ = writeln!(file, "STDOUT:\n{stdout}");
-            }
-            if !stderr.is_empty() {
-                let _ = writeln!(file, "STDERR:\n{stderr}");
-            }
-        }
+    match ssh_exec_with_log_timeout(workspace, command, log_file, timeout_secs) {
+        Ok(_) => Ok(true),
+        Err(RemoteError::SshTimeout(secs)) => Err(RemoteError::SshTimeout(secs)),
+        Err(RemoteError::SshError(msg)) if msg.starts_with("Command failed") => Ok(false),
+        Err(e) => Err(e),
     }
-
-    Ok(success)
 }
 
 /// Check if SSH connection to workspace is available.
@@ -163,11 +182,10 @@ pub fn check_ssh_connectivity(workspace: &str) -> Result<bool> {
 /// Wait for SSH to become available (with timeout).
 pub fn wait_for_ssh_ready(workspace: &str, timeout_secs: u64) -> Result<()> {
     use std::thread::sleep;
-    use std::time::Duration;
 
     info!("Waiting for SSH connectivity to {}", workspace);
 
-    let start = std::time::Instant::now();
+    let start = Instant::now();
     let timeout = Duration::from_secs(timeout_secs);
 
     loop {
@@ -183,5 +201,57 @@ pub fn wait_for_ssh_ready(workspace: &str, timeout_secs: u64) -> Result<()> {
         }
 
         sleep(Duration::from_secs(5));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn run_command_with_timeout_completes_quickly() {
+        let outcome = run_command_with_timeout(Command::new("true"), Duration::from_secs(5))
+            .expect("spawn true");
+        match outcome {
+            CommandOutcome::Completed { success, exit_code, .. } => {
+                assert!(success);
+                assert_eq!(exit_code, 0);
+            }
+            CommandOutcome::TimedOut => panic!("true should not time out"),
+        }
+    }
+
+    #[test]
+    fn run_command_with_timeout_kills_sleep() {
+        let start = Instant::now();
+        let mut cmd = Command::new("sleep");
+        cmd.arg("30");
+        let outcome =
+            run_command_with_timeout(cmd, Duration::from_millis(400)).expect("spawn sleep");
+        assert!(matches!(outcome, CommandOutcome::TimedOut));
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "timeout must return in well under the child sleep"
+        );
+    }
+
+    #[test]
+    fn run_command_captures_stdout() {
+        let outcome = run_command_with_timeout(
+            {
+                let mut cmd = Command::new("printf");
+                cmd.arg("hello-diag");
+                cmd
+            },
+            Duration::from_secs(5),
+        )
+        .expect("spawn printf");
+        match outcome {
+            CommandOutcome::Completed { stdout, success, .. } => {
+                assert!(success);
+                assert!(stdout.contains("hello-diag"));
+            }
+            CommandOutcome::TimedOut => panic!("printf should not time out"),
+        }
     }
 }
