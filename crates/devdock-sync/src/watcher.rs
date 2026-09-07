@@ -38,36 +38,44 @@ impl FileWatcher {
     }
 
     /// Get changed files with debouncing.
-    /// Returns a batch of files that changed within the debounce window.
+    /// Returns a batch after the filesystem has been quiet for the debounce window.
     pub fn get_changed_files(&self, timeout: Duration) -> Result<Vec<PathBuf>> {
         let mut changed_files: HashMap<PathBuf, Instant> = HashMap::new();
         let start = Instant::now();
+        let mut last_event_at: Option<Instant> = None;
 
-        // Collect events for debounce duration
-        while start.elapsed() < timeout {
-            match self.rx.recv_timeout(self.debounce_duration) {
+        // Wait for the first event, then extend the receive window after every event.
+        // The old fixed timeout returned immediately after the first quiet period and
+        // discarded events newer than debounce_duration, which made ordinary edits
+        // disappear from sync history.
+        loop {
+            let remaining = timeout.saturating_sub(start.elapsed());
+            if remaining.is_zero() {
+                break;
+            }
+            let wait = last_event_at
+                .map(|event_at| self.debounce_duration.saturating_sub(event_at.elapsed()))
+                .unwrap_or(remaining)
+                .min(remaining);
+            match self.rx.recv_timeout(wait) {
                 Ok(Ok(event)) => {
+                    let event_at = Instant::now();
                     for path in event.paths {
-                        changed_files.insert(path.clone(), Instant::now());
+                        changed_files.insert(path, event_at);
                     }
+                    last_event_at = Some(event_at);
                 }
                 Ok(Err(e)) => {
                     debug!("Watcher error: {}", e);
                 }
                 Err(_) => {
-                    // Timeout - check if we have any changes
+                    // No event arrived during the quiet window.
                     break;
                 }
             }
         }
 
-        // Filter out very recent changes (still being written)
-        let now = Instant::now();
-        let files: Vec<PathBuf> = changed_files
-            .into_iter()
-            .filter(|(_, time)| now.duration_since(*time) >= self.debounce_duration)
-            .map(|(path, _)| path)
-            .collect();
+        let files: Vec<PathBuf> = changed_files.into_keys().collect();
 
         if !files.is_empty() {
             debug!("Detected {} changed files", files.len());
@@ -80,5 +88,34 @@ impl FileWatcher {
     pub fn stop(&mut self) -> Result<()> {
         // RecommendedWatcher will be dropped, automatically stopping watching
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::FileWatcher;
+    use std::fs;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn reports_an_edit_after_the_quiet_window() {
+        let suffix =
+            SystemTime::now().duration_since(UNIX_EPOCH).expect("clock before epoch").as_nanos();
+        let dir = std::env::temp_dir().join(format!("devdock-sync-watcher-{suffix}"));
+        fs::create_dir_all(&dir).expect("create temp directory");
+        let path = dir.join("sentinel.yaml");
+        fs::write(&path, "before\n").expect("write initial file");
+
+        let mut watcher = FileWatcher::new().expect("create watcher");
+        watcher.watch(&dir).expect("watch temp directory");
+        fs::write(&path, "after\n").expect("write sentinel");
+
+        let changed =
+            watcher.get_changed_files(Duration::from_secs(3)).expect("collect changed files");
+        assert!(
+            changed.iter().any(|candidate| candidate.ends_with("sentinel.yaml")),
+            "changed files: {changed:?}"
+        );
+        let _ = fs::remove_dir_all(&dir);
     }
 }
