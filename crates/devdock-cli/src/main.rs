@@ -116,7 +116,7 @@ enum Commands {
         #[arg(long)]
         monitor: bool,
 
-        /// Startup monitor timeout in seconds (default: 1200 = 20 minutes)
+        /// Startup monitor timeout in seconds (default: 1500 = 25 minutes)
         #[arg(long)]
         monitor_timeout: Option<u64>,
 
@@ -292,7 +292,7 @@ enum Commands {
         #[arg(long, default_value = devdock_monitor::DEFAULT_TILT_ENDPOINT)]
         tilt_endpoint: String,
 
-        /// Timeout in seconds (default: 1200 = 20 minutes)
+        /// Timeout in seconds (default: 1500 = 25 minutes)
         #[arg(short, long)]
         timeout: Option<u64>,
 

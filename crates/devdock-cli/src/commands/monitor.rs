@@ -22,7 +22,7 @@ pub async fn execute(
 
     let config = StartupMonitorConfig {
         tilt_endpoint: tilt_endpoint.to_string(),
-        timeout_secs: timeout.unwrap_or(1200),
+        timeout_secs: timeout.unwrap_or(1500),
         poll_interval_secs: interval.unwrap_or(2),
         notifications_enabled: !no_notify,
         show_progress: true,
