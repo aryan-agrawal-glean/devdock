@@ -21,7 +21,7 @@ use tracing::{debug, info, warn};
 pub struct StartupMonitorConfig {
     /// Explicit loopback Tilt web endpoint.
     pub tilt_endpoint: String,
-    /// Timeout in seconds (default: 1200 = 20 minutes)
+    /// Timeout in seconds (default: 1500 = 25 minutes)
     pub timeout_secs: u64,
     /// Polling interval in seconds (default: 2)
     pub poll_interval_secs: u64,
@@ -41,7 +41,7 @@ impl Default for StartupMonitorConfig {
     fn default() -> Self {
         StartupMonitorConfig {
             tilt_endpoint: DEFAULT_TILT_ENDPOINT.to_string(),
-            timeout_secs: 1200,
+            timeout_secs: 1500,
             poll_interval_secs: 2,
             notifications_enabled: true,
             show_progress: true,
@@ -533,7 +533,7 @@ mod tests {
     #[test]
     fn test_config_default() {
         let config = StartupMonitorConfig::default();
-        assert_eq!(config.timeout_secs, 1200);
+        assert_eq!(config.timeout_secs, 1500);
         assert_eq!(config.poll_interval_secs, 2);
         assert!(config.notifications_enabled);
     }
@@ -545,7 +545,7 @@ mod tests {
         assert!(success.is_success());
 
         let timeout = StartupResult::Timeout {
-            duration_secs: 1200,
+            duration_secs: 1500,
             healthy: vec![],
             pending: vec!["svc".to_string()],
             failed: vec![],

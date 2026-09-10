@@ -189,7 +189,7 @@ pub async fn execute(
     println!("  {}", "──────────────────────────────────────────────────────────".cyan());
 
     if run_monitor {
-        println!("\nResource monitor enabled (timeout: {}s)...\n", monitor_timeout.unwrap_or(1200));
+        println!("\nResource monitor enabled (timeout: {}s)...\n", monitor_timeout.unwrap_or(1500));
     } else {
         println!("\n  {}", "Press Ctrl+C to stop DevDock".dimmed());
     }
@@ -499,7 +499,7 @@ async fn wait_for_tilt(
 
         let monitor_config = StartupMonitorConfig {
             tilt_endpoint: devdock_monitor::DEFAULT_TILT_ENDPOINT.to_string(),
-            timeout_secs: monitor_timeout.unwrap_or(1200),
+            timeout_secs: monitor_timeout.unwrap_or(1500),
             poll_interval_secs: 2,
             notifications_enabled: true,
             show_progress: true,
