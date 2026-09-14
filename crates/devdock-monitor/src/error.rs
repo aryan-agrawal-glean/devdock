@@ -32,6 +32,18 @@ pub enum MonitorError {
     #[error("Tilt resource trigger failed: {0}")]
     TiltTrigger(String),
 
+    #[error("Tilt resource '{0}' has no completed build span for this update")]
+    TiltTriggerPending(String),
+
+    #[error("Tilt resource '{0}' only exposes a prior build span")]
+    TiltTriggerStale(String),
+
+    #[error("Tilt resource '{resource}' build span '{span_id}' failed: {error}")]
+    TiltBuildFailed { resource: String, span_id: String, error: String },
+
+    #[error("Tilt resource '{0}' is not ready for this update")]
+    TiltResourceNotReady(String),
+
     #[error("Tilt restarted while collecting evidence")]
     TiltRestarted,
 

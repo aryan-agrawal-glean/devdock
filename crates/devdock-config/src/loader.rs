@@ -3,6 +3,20 @@
 use devdock_core::{profile::Profile, Error, Result};
 use std::path::{Path, PathBuf};
 
+use crate::env_expansion::resolve_identity;
+
+/// Resolve identity-bearing profile values immediately after deserialization.
+///
+/// Keeping this operation at the loader boundary ensures validators,
+/// generators, platform clients, and remote commands all consume the same
+/// project value rather than independently expanding or forwarding raw input.
+pub fn resolve_profile(mut profile: Profile) -> Result<Profile> {
+    profile.project = resolve_identity(&profile.project).map_err(|error| {
+        Error::InvalidProfile(format!("profile project could not be resolved: {error}"))
+    })?;
+    Ok(profile)
+}
+
 /// Loads DevDock profiles from various locations.
 ///
 /// Profile resolution follows Python devdock.sh behavior:
@@ -77,7 +91,7 @@ impl ProfileLoader {
             Error::InvalidProfile(format!("Failed to parse profile {}: {}", path.display(), e))
         })?;
 
-        Ok(profile)
+        resolve_profile(profile)
     }
 
     /// Find a profile file by name.
@@ -240,6 +254,33 @@ services:
 
         let result = loader.load("nonexistent");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn load_resolves_project_before_returning_profile() {
+        std::env::set_var("DEVDock_LOADER_PROJECT", "resolved-project");
+        let temp_dir = TempDir::new().unwrap();
+        let profile_path = temp_dir.path().join("resolved.yaml");
+        std::fs::write(&profile_path, "project: ${DEVDock_LOADER_PROJECT}\n").unwrap();
+
+        let profile = ProfileLoader::with_paths(vec![temp_dir.path().to_path_buf()])
+            .load("resolved")
+            .unwrap();
+        assert_eq!(profile.project, "resolved-project");
+    }
+
+    #[test]
+    fn load_rejects_unresolved_project_before_any_consumer_runs() {
+        std::env::remove_var("DEVDock_UNRESOLVED_PROJECT");
+        let temp_dir = TempDir::new().unwrap();
+        let profile_path = temp_dir.path().join("unresolved.yaml");
+        std::fs::write(&profile_path, "project: ${DEVDock_UNRESOLVED_PROJECT}\n").unwrap();
+
+        let error = ProfileLoader::with_paths(vec![temp_dir.path().to_path_buf()])
+            .load("unresolved")
+            .unwrap_err();
+        assert!(error.to_string().contains("DEVDock_UNRESOLVED_PROJECT"));
+        assert!(!error.to_string().contains("${"));
     }
 
     #[test]

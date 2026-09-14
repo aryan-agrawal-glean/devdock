@@ -1,5 +1,7 @@
 //! Service configuration structures.
 
+use devdock_core::service::{RedeployMetadata, ServiceStatusMetadata};
+use devdock_core::update::ServiceIdentity;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -37,6 +39,18 @@ pub struct ServiceConfig {
 
     #[serde(default)]
     pub ini_overrides: Vec<IniOverride>,
+
+    /// Optional generation identity emitted by a transaction-aware service.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity: Option<ServiceIdentity>,
+
+    /// Optional update status. Missing metadata remains unknown to callers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<ServiceStatusMetadata>,
+
+    /// Optional redeploy/reload strategy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub redeploy: Option<RedeployMetadata>,
 
     /// Deployment type from profile (local/remote) - set after loading
     #[serde(skip)]
@@ -187,6 +201,16 @@ mod tests {
 
         let config: ServiceConfig = serde_json::from_str(json).unwrap();
         assert!(config.entrypoint.is_none());
+    }
+
+    #[test]
+    fn old_config_keeps_optional_identity_metadata_unknown() {
+        let config: ServiceConfig =
+            serde_json::from_str(r#"{"base_image":"test:latest","type":"python","env":{}}"#)
+                .unwrap();
+        assert!(config.identity.is_none());
+        assert!(config.status.is_none());
+        assert!(config.redeploy.is_none());
     }
 
     #[test]

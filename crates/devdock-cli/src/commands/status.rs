@@ -398,6 +398,8 @@ mod tests {
             build_finish_time: None,
             build_duration_secs: None,
             build_history: Vec::new(),
+            identity: None,
+            redeploy: None,
         }
     }
 

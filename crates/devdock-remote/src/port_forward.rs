@@ -1,6 +1,8 @@
 //! Port forwarding management for remote workspaces.
 
 use crate::{coder, RemoteError, Result};
+use devdock_config::resolve_profile;
+use devdock_core::profile::Profile as CoreProfile;
 use devdock_state::{
     PortMappingRecord, SessionManifestV1, StateManager, DEVDOCK_FORWARD_OWNER,
     LOOPBACK_BIND_ADDRESS,
@@ -152,6 +154,8 @@ struct ProfileService {
 /// Profile structure (simplified).
 #[derive(Debug, Deserialize)]
 struct Profile {
+    #[serde(default)]
+    project: String,
     services: Option<HashMap<String, ProfileService>>,
 }
 
@@ -266,8 +270,18 @@ impl PortForwardManager {
         let contents = fs::read_to_string(profile_path)
             .map_err(|e| RemoteError::ConfigSyncError(format!("Failed to read profile: {e}")))?;
 
-        let profile: Profile = serde_yaml::from_str(&contents)
+        let mut profile: Profile = serde_yaml::from_str(&contents)
             .map_err(|e| RemoteError::ConfigSyncError(format!("Failed to parse profile: {e}")))?;
+
+        // Preserve this module's intentionally simplified service shape while
+        // routing the identity-bearing project through the shared loader boundary.
+        let identity_profile: CoreProfile =
+            serde_json::from_value(serde_json::json!({"project": profile.project})).map_err(
+                |e| RemoteError::ConfigSyncError(format!("Failed to parse profile identity: {e}")),
+            )?;
+        profile.project = resolve_profile(identity_profile)
+            .map_err(|e| RemoteError::ConfigSyncError(format!("Failed to resolve profile: {e}")))?
+            .project;
 
         let mut mappings = Vec::new();
 
@@ -1113,6 +1127,33 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn from_profile_rejects_unresolved_project_before_accepting_mappings() {
+        std::env::remove_var("DEVDock_PORT_FORWARD_PROJECT");
+        let tmp = TempDir::new().unwrap();
+        let profile_path = setup_profile(
+            &tmp,
+            "unresolved",
+            "project: ${DEVDock_PORT_FORWARD_PROJECT}\nservices: {}\n",
+        );
+
+        let error = match PortForwardManager::from_profile(
+            &profile_path,
+            "workspace",
+            "workspace-id",
+            "devdock-id",
+            0,
+        ) {
+            Ok(_) => panic!("unresolved project identity must fail before mappings are accepted"),
+            Err(error) => error,
+        };
+
+        let message = error.to_string();
+        assert!(message.contains("DEVDock_PORT_FORWARD_PROJECT"));
+        assert!(!message.contains("${DEVDock_PORT_FORWARD_PROJECT}"));
+        assert!(matches!(error, RemoteError::ConfigSyncError(_)));
     }
 
     #[test]

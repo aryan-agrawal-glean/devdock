@@ -15,7 +15,9 @@ mod tilt;
 pub use error::{MonitorError, Result};
 pub use health_tracker::{HealthTracker, StabilityConfig, StabilityInfo};
 pub use notification::Notifier;
-pub use resource::{ResourceLabel, ResourceStatus, ResourceType, TiltBuild, TiltResource};
+pub use resource::{
+    ResourceLabel, ResourceStatus, ResourceType, TiltBuild, TiltResource, TiltTriggerSpan,
+};
 pub use session::{SessionState, SessionTiming};
 pub use startup::{StartupMonitor, StartupMonitorConfig, StartupResult};
 pub use stats::{HostStats, ResourceStats, StatsCollector};

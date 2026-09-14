@@ -12,6 +12,7 @@ description = "Startup monitoring and resource health tracking for DevDock"
 workspace = true
 
 [dependencies]
+devdock-core = { path = "../devdock-core" }
 anyhow.workspace = true
 thiserror.workspace = true
 serde.workspace = true

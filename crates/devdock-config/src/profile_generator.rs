@@ -4,6 +4,7 @@ use crate::dependency_graph::{ComponentType, DependencyGraph};
 use crate::ini_parser::ParsedIniConfig;
 use crate::opensearch::get_elastic_namespace;
 use crate::platform::{Platform, TempProfile};
+use crate::sql_policy::{resolve_table_copy_plan, KeyValPolicy};
 use anyhow::Result;
 use devdock_core::profile::Profile;
 use serde::Serialize;
@@ -526,18 +527,32 @@ impl TempProfileGenerator {
                 if !extra.contains_key("mode") {
                     extra.insert("mode".to_string(), serde_json::Value::String("fast".to_string()));
                 }
-                if !extra.contains_key("copy_tables") {
-                    extra.insert(
-                        "copy_tables".to_string(),
-                        serde_json::Value::String(String::new()),
-                    );
-                }
                 if !extra.contains_key("full_cleanup") {
                     extra.insert("full_cleanup".to_string(), serde_json::Value::Bool(false));
                 }
-                if !extra.contains_key("copy_keyval") {
-                    extra.insert("copy_keyval".to_string(), serde_json::Value::Bool(true));
-                }
+
+                // Normalize the table plan once at the engine boundary. Keep
+                // the legacy boolean shape for existing Scio consumers while
+                // accepting the additive auto/always/never form.
+                let copy_keyval = extra.remove("copy_keyval");
+                let keyval_policy =
+                    KeyValPolicy::from_value(copy_keyval.as_ref()).unwrap_or_default();
+                let copy_tables = extra
+                    .remove("copy_tables")
+                    .and_then(|value| value.as_str().map(ToString::to_string))
+                    .unwrap_or_default();
+                let table_plan = resolve_table_copy_plan(&copy_tables, keyval_policy, false);
+                extra.insert(
+                    "copy_tables".to_string(),
+                    serde_json::Value::String(table_plan.as_spec()),
+                );
+                let copy_keyval_value = match copy_keyval {
+                    Some(serde_json::Value::String(_)) => {
+                        serde_json::Value::String(keyval_policy.as_str().to_string())
+                    }
+                    _ => serde_json::Value::Bool(keyval_policy.allows_keyval()),
+                };
+                extra.insert("copy_keyval".to_string(), copy_keyval_value);
                 if !extra.contains_key("copy_where_queries") {
                     extra
                         .insert("copy_where_queries".to_string(), serde_json::Value::Array(vec![]));
@@ -1025,6 +1040,50 @@ infra:
                 "port_forwards": [[3307, 13306], [3308, 13307]],
             })
         );
+    }
+
+    #[test]
+    fn test_local_sql_normalizes_legacy_keyval_policy_and_table_identity() {
+        let profile: Profile = serde_yaml::from_str(
+            r#"
+project: test-project
+infra:
+  sql:
+    type: local
+    copy_tables: " entity: b, a ;entity:a,b;keyval:KeyVal;keyval:KeyVal "
+    copy_keyval: false
+"#,
+        )
+        .unwrap();
+        let mut generator = TempProfileGenerator::new(&PathBuf::from("/tmp"), None);
+
+        generator.apply_infra_config("sql", &profile);
+
+        let extra = &generator.profile.infra["sql"].extra;
+        assert_eq!(extra["copy_keyval"], serde_json::json!(false));
+        assert_eq!(extra["copy_tables"], serde_json::json!("entity:a,b"));
+    }
+
+    #[test]
+    fn test_local_sql_accepts_new_keyval_policy_without_fabricating_legacy_boolean() {
+        let profile: Profile = serde_yaml::from_str(
+            r#"
+project: test-project
+infra:
+  sql:
+    type: local
+    copy_tables: entity
+    copy_keyval: never
+"#,
+        )
+        .unwrap();
+        let mut generator = TempProfileGenerator::new(&PathBuf::from("/tmp"), None);
+
+        generator.apply_infra_config("sql", &profile);
+
+        let extra = &generator.profile.infra["sql"].extra;
+        assert_eq!(extra["copy_keyval"], serde_json::json!("never"));
+        assert_eq!(extra["copy_tables"], serde_json::json!("entity"));
     }
 
     #[test]

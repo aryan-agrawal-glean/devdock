@@ -72,6 +72,26 @@ pub struct TiltBuild {
     pub error: Option<String>,
 }
 
+impl TiltBuild {
+    pub fn is_complete(&self) -> bool {
+        self.finish_time.is_some()
+    }
+}
+
+/// A completed build span correlated to one Tilt session and resource.
+///
+/// This is intentionally narrower than a generic healthy resource: callers
+/// obtain it only after comparing a post-trigger snapshot with a pre-trigger
+/// baseline, so an older healthy span cannot satisfy a new update.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TiltTriggerSpan {
+    pub tilt_start_time: String,
+    pub resource_name: String,
+    pub span_id: String,
+    pub start_time: String,
+    pub finish_time: String,
+}
+
 impl ResourceStatus {
     pub fn is_terminal(&self) -> bool {
         matches!(self, ResourceStatus::Healthy | ResourceStatus::Failed)
@@ -101,6 +121,12 @@ pub struct TiltResource {
     pub build_finish_time: Option<String>,
     pub build_duration_secs: Option<f64>,
     pub build_history: Vec<TiltBuild>,
+    /// Optional non-secret generation identity emitted by an integration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity: Option<devdock_core::update::ServiceIdentity>,
+    /// Optional redeploy metadata. Missing fields remain unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub redeploy: Option<devdock_core::service::RedeployMetadata>,
 }
 
 impl TiltResource {
@@ -151,6 +177,11 @@ impl TiltResource {
         let (build_start, build_finish, build_duration) =
             Self::extract_build_timing(&build_history);
 
+        let identity =
+            status.get("identity").and_then(|value| serde_json::from_value(value.clone()).ok());
+        let redeploy =
+            status.get("redeploy").and_then(|value| serde_json::from_value(value.clone()).ok());
+
         Some(TiltResource {
             name,
             labels,
@@ -164,6 +195,8 @@ impl TiltResource {
             build_finish_time: build_finish,
             build_duration_secs: build_duration,
             build_history,
+            identity,
+            redeploy,
         })
     }
 
@@ -310,5 +343,9 @@ impl TiltResource {
     /// Returns true if this resource should be monitored during startup.
     pub fn should_monitor(&self) -> bool {
         !self.is_disabled && self.labels.iter().any(ResourceLabel::is_monitored)
+    }
+
+    pub fn latest_build(&self) -> Option<&TiltBuild> {
+        self.build_history.first()
     }
 }

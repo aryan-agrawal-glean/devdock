@@ -580,6 +580,10 @@ enum InfraSqlCommands {
         #[arg(long, default_value_t = true, action = ArgAction::Set)]
         copy_keyval: bool,
 
+        /// Presence-aware KeyVal policy (auto, always, or never)
+        #[arg(long)]
+        keyval_policy: Option<String>,
+
         /// Use pre-seeded MySQL data directory (fastest startup)
         #[arg(long)]
         use_mysql_seed: bool,
@@ -889,24 +893,57 @@ async fn main() {
                     force_copy,
                     full_cleanup,
                     copy_keyval,
+                    keyval_policy,
                     use_mysql_seed,
                     use_full_instance,
                     use_gac_container,
                 } => {
-                    commands::infra::sql_setup(
-                        &project,
-                        &platform,
-                        &region,
-                        &db_tables,
-                        &mode,
-                        force_copy,
-                        full_cleanup,
-                        copy_keyval,
-                        use_mysql_seed,
-                        use_full_instance,
-                        use_gac_container,
-                    )
-                    .await
+                    let keyval_policy = match keyval_policy.as_deref() {
+                        Some(value) => match devdock_config::KeyValPolicy::from_value(Some(
+                            &serde_json::Value::String(value.to_string()),
+                        )) {
+                            Ok(policy) => Some(policy),
+                            Err(error) => {
+                                eprintln!("{} {}", "Error:".red().bold(), error);
+                                process::exit(2);
+                            }
+                        },
+                        None => None,
+                    };
+                    match keyval_policy {
+                        Some(keyval_policy) => {
+                            commands::infra::sql_setup_with_policy(
+                                &project,
+                                &platform,
+                                &region,
+                                &db_tables,
+                                &mode,
+                                force_copy,
+                                full_cleanup,
+                                keyval_policy,
+                                use_mysql_seed,
+                                use_full_instance,
+                                use_gac_container,
+                            )
+                            .await
+                        }
+                        None => {
+                            commands::infra::sql_setup(
+                                &project,
+                                &platform,
+                                &region,
+                                &db_tables,
+                                &mode,
+                                force_copy,
+                                full_cleanup,
+                                copy_keyval,
+                                use_mysql_seed,
+                                use_full_instance,
+                                use_gac_container,
+                            )
+                            .await
+                        }
+                    }
                 }
                 InfraSqlCommands::Clean { project, platform, region, db_tables } => {
                     commands::infra::sql_clean(&project, &platform, &region, &db_tables).await

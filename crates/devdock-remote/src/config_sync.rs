@@ -6,6 +6,7 @@
 //! - Phase 3 (1 SSH): Finalize gcloud - move creds, verify auth, set project (GCP/unknown platform only)
 
 use crate::{RemoteError, Result};
+use devdock_config::resolve_profile;
 use devdock_core::profile::Profile;
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -23,7 +24,8 @@ fn get_profile(profile_path: &Path) -> Result<Profile> {
     let profile: Profile = serde_yaml::from_str(&content)
         .map_err(|e| RemoteError::ConfigSyncError(format!("Failed to parse profile: {e}")))?;
 
-    Ok(profile)
+    resolve_profile(profile)
+        .map_err(|e| RemoteError::ConfigSyncError(format!("Failed to resolve profile: {e}")))
 }
 
 /// Get GCP project from profile YAML.

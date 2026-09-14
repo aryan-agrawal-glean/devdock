@@ -16,6 +16,9 @@ use devdock_config::ini_parser::ParsedIniConfig;
 use devdock_config::opensearch_import::OpenSearchCopier;
 use devdock_config::s3_storage::S3DynamicIniLoader;
 use devdock_config::sql_import::SqlOperationsManager;
+use devdock_config::sql_policy::{
+    normalize_table_identities, resolve_table_copy_plan, KeyValPolicy, KEYVAL_TABLE_IDENTITY,
+};
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
@@ -459,6 +462,37 @@ pub async fn sql_setup(
     use_full_instance: bool,
     use_gac_container: bool,
 ) -> Result<()> {
+    sql_setup_with_policy(
+        project,
+        platform,
+        region,
+        db_tables,
+        mode,
+        force_copy,
+        full_cleanup,
+        KeyValPolicy::from_legacy_bool(copy_keyval),
+        use_mysql_seed,
+        use_full_instance,
+        use_gac_container,
+    )
+    .await
+}
+
+/// Full SQL setup with the additive presence-aware KeyVal policy.
+#[allow(clippy::too_many_arguments)]
+pub async fn sql_setup_with_policy(
+    project: &str,
+    platform: &str,
+    region: &str,
+    db_tables: &str,
+    mode: &str,
+    force_copy: bool,
+    full_cleanup: bool,
+    keyval_policy: KeyValPolicy,
+    use_mysql_seed: bool,
+    use_full_instance: bool,
+    use_gac_container: bool,
+) -> Result<()> {
     // Handle seed mode (fastest startup)
     if use_mysql_seed {
         return sql_setup_with_seed(
@@ -508,18 +542,13 @@ pub async fn sql_setup(
     let prev_tables = state.prev_tables();
     let prev_full_cleanup = state.prev_full_cleanup();
 
-    // Determine what tables to copy
-    let mut tables_to_copy = db_tables.to_string();
+    // Determine what tables to copy. This is deliberately presence-aware:
+    // omitted/auto retains the existing behavior, explicit legacy false maps
+    // to never, and never can neither add nor refresh KeyVal.
+    let table_plan = resolve_table_copy_plan(db_tables, keyval_policy, force_copy);
+    let mut tables_to_copy = table_plan.as_spec();
     let mut update_project = false;
     let mut update_tables = false;
-
-    // Add keyval if not present and copy_keyval is enabled
-    if !force_copy && copy_keyval && !tables_to_copy.contains("keyval:KeyVal") {
-        if !tables_to_copy.is_empty() {
-            tables_to_copy.push(';');
-        }
-        tables_to_copy.push_str("keyval:KeyVal");
-    }
 
     // Load INI config (default.ini merged with dynamic.ini from cloud storage)
     // Uses GCS for Google, S3 for AWS - the dynamic.ini contains project-specific values like SQL instance names
@@ -569,15 +598,14 @@ pub async fn sql_setup(
     }
     // Handle table comparison
     else {
-        let mut prev_sorted: Vec<&str> = prev_tables.split(';').filter(|s| !s.is_empty()).collect();
-        let mut curr_sorted: Vec<&str> =
-            tables_to_copy.split(';').filter(|s| !s.is_empty()).collect();
+        let mut prev_sorted = normalize_table_identities(&prev_tables);
+        let mut curr_sorted = normalize_table_identities(&tables_to_copy);
         prev_sorted.sort_unstable();
         curr_sorted.sort_unstable();
 
         if prev_sorted == curr_sorted && !force_copy {
-            if copy_keyval {
-                tables_to_copy = "keyval:KeyVal".to_string();
+            if keyval_policy.allows_keyval() {
+                tables_to_copy = KEYVAL_TABLE_IDENTITY.to_string();
                 output::info("Tables match, refreshing keyval only");
             } else {
                 tables_to_copy.clear();

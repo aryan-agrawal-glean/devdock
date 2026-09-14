@@ -26,5 +26,6 @@ tempfile = { workspace = true }
 sysinfo = "0.30"
 
 # Internal dependencies
+devdock-config = { path = "../devdock-config" }
 devdock-core = { path = "../devdock-core" }
 devdock-state = { path = "../devdock-state" }

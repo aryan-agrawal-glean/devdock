@@ -1,6 +1,6 @@
 //! Loopback-only Tilt web client and shared snapshot broker.
 
-use crate::{MonitorError, Result, TiltResource};
+use crate::{MonitorError, Result, TiltResource, TiltTriggerSpan};
 use reqwest::blocking::{Client, Response};
 use reqwest::header::{CONTENT_TYPE, COOKIE, SET_COOKIE};
 use reqwest::{StatusCode, Url};
@@ -39,6 +39,55 @@ impl TiltSnapshot {
         } else {
             Err(MonitorError::TiltRestarted)
         }
+    }
+
+    /// Observe the completed build span for `resource_name` after a trigger.
+    ///
+    /// `baseline` must be the snapshot captured before the trigger. The same
+    /// Tilt session and a different span ID are required; a prior healthy span
+    /// is therefore never accepted as the result of a new update.
+    pub fn observe_new_trigger_span(
+        &self,
+        baseline: &Self,
+        resource_name: &str,
+    ) -> Result<TiltTriggerSpan> {
+        baseline.ensure_same_tilt_session(self)?;
+
+        let current =
+            self.resources.iter().find(|resource| resource.name == resource_name).ok_or_else(
+                || MonitorError::TiltTriggerUnknownResource(resource_name.to_string()),
+            )?;
+        let prior = baseline.resources.iter().find(|resource| resource.name == resource_name);
+        let prior_span =
+            prior.and_then(TiltResource::latest_build).map(|build| build.span_id.as_str());
+        let Some(build) = current.latest_build() else {
+            return Err(MonitorError::TiltTriggerPending(resource_name.to_string()));
+        };
+
+        if prior.is_none() || prior_span.is_some_and(|span_id| span_id == build.span_id) {
+            return Err(MonitorError::TiltTriggerStale(resource_name.to_string()));
+        }
+        if let Some(error) = &build.error {
+            return Err(MonitorError::TiltBuildFailed {
+                resource: resource_name.to_string(),
+                span_id: build.span_id.clone(),
+                error: error.clone(),
+            });
+        }
+        let Some(finish_time) = &build.finish_time else {
+            return Err(MonitorError::TiltTriggerPending(resource_name.to_string()));
+        };
+        if !current.status.is_healthy() {
+            return Err(MonitorError::TiltResourceNotReady(resource_name.to_string()));
+        }
+
+        Ok(TiltTriggerSpan {
+            tilt_start_time: self.tilt_start_time.clone(),
+            resource_name: resource_name.to_string(),
+            span_id: build.span_id.clone(),
+            start_time: build.start_time.clone(),
+            finish_time: finish_time.clone(),
+        })
     }
 }
 
@@ -617,6 +666,55 @@ mod tests {
         assert!(matches!(
             first.ensure_same_tilt_session(&second),
             Err(MonitorError::TiltRestarted)
+        ));
+    }
+
+    #[test]
+    fn accepts_only_a_new_completed_span_for_the_same_tilt_session() {
+        let updated = VIEW.replace("build:3", "build:4");
+        let (endpoint, _) = serve(vec![
+            http("200 OK", "application/json", VIEW),
+            http("200 OK", "application/json", &updated),
+        ]);
+        let client = TiltClient::new(endpoint).unwrap();
+        let baseline = client.get_snapshot().unwrap();
+        let current = client.get_snapshot().unwrap();
+        let span = current.observe_new_trigger_span(&baseline, "test-service").unwrap();
+        assert_eq!(span.span_id, "build:4");
+        assert_eq!(span.tilt_start_time, baseline.tilt_start_time);
+    }
+
+    #[test]
+    fn prior_healthy_span_cannot_satisfy_a_new_update() {
+        let (endpoint, _) = serve(vec![
+            http("200 OK", "application/json", VIEW),
+            http("200 OK", "application/json", VIEW),
+        ]);
+        let client = TiltClient::new(endpoint).unwrap();
+        let baseline = client.get_snapshot().unwrap();
+        let current = client.get_snapshot().unwrap();
+        assert!(matches!(
+            current.observe_new_trigger_span(&baseline, "test-service"),
+            Err(MonitorError::TiltTriggerStale(resource)) if resource == "test-service"
+        ));
+    }
+
+    #[test]
+    fn failed_new_span_is_reported_as_a_build_failure() {
+        let failed = VIEW
+            .replace(r#""error": """#, r#""error": "hydration failed""#)
+            .replace("build:3", "build:4");
+        let (endpoint, _) = serve(vec![
+            http("200 OK", "application/json", VIEW),
+            http("200 OK", "application/json", &failed),
+        ]);
+        let client = TiltClient::new(endpoint).unwrap();
+        let baseline = client.get_snapshot().unwrap();
+        let current = client.get_snapshot().unwrap();
+        assert!(matches!(
+            current.observe_new_trigger_span(&baseline, "test-service"),
+            Err(MonitorError::TiltBuildFailed { resource, span_id, error })
+                if resource == "test-service" && span_id == "build:4" && error == "hydration failed"
         ));
     }
 
