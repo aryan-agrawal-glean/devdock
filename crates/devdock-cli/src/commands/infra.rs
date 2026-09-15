@@ -16,10 +16,12 @@ use devdock_config::ini_parser::ParsedIniConfig;
 use devdock_config::opensearch_import::OpenSearchCopier;
 use devdock_config::s3_storage::S3DynamicIniLoader;
 use devdock_config::sql_import::SqlOperationsManager;
-use std::path::Path;
-use std::path::PathBuf;
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
+use tempfile::TempDir;
 
 /// Load merged INI config (default.ini + dynamic.ini) from the appropriate cloud storage
 /// based on platform (GCS for Google, S3 for AWS)
@@ -68,32 +70,107 @@ async fn get_aws_account_id() -> Result<String> {
     Ok(account_id)
 }
 
-/// State tracking for SQL hydration
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SqlTarget {
+    Main,
+    Gac,
+}
+
+impl SqlTarget {
+    fn from_gac_flag(use_gac_container: bool) -> Self {
+        if use_gac_container {
+            Self::Gac
+        } else {
+            Self::Main
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Main => "main",
+            Self::Gac => "gac",
+        }
+    }
+
+    fn container(self) -> &'static str {
+        match self {
+            Self::Main => "devdock-mysql",
+            Self::Gac => "devdock-mysql-gac",
+        }
+    }
+
+    fn uses_gac_container(self) -> bool {
+        self == Self::Gac
+    }
+}
+
+struct SqlTargetLock {
+    path: PathBuf,
+}
+
+impl SqlTargetLock {
+    fn acquire(target_dir: &Path, project: &str) -> Result<Self> {
+        let locks_dir = target_dir.join("locks");
+        std::fs::create_dir_all(&locks_dir)?;
+        let path = locks_dir.join("hydration.lock");
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .with_context(|| {
+                format!(
+                    "SQL hydration target is already locked or has ambiguous stale lock state at {}",
+                    path.display()
+                )
+            })?;
+        writeln!(file, "project={project}")?;
+        writeln!(file, "pid={}", std::process::id())?;
+        Ok(Self { path })
+    }
+}
+
+impl Drop for SqlTargetLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+/// Target- and project-scoped persistent state for SQL hydration.
 struct SqlState {
-    state_dir: PathBuf,
+    root_dir: PathBuf,
+    target_dir: PathBuf,
+    project_dir: PathBuf,
+    _lock: SqlTargetLock,
 }
 
 impl SqlState {
-    fn new() -> Result<Self> {
+    fn new(target: SqlTarget, project: &str) -> Result<Self> {
         let home = std::env::var("HOME")?;
-        let state_dir = PathBuf::from(home).join(".devdock/sql");
-        std::fs::create_dir_all(&state_dir)?;
-        Ok(Self { state_dir })
+        Self::new_in(&PathBuf::from(home).join(".devdock/sql"), target, project)
+    }
+
+    fn new_in(root_dir: &Path, target: SqlTarget, project: &str) -> Result<Self> {
+        validate_scope_component(project)?;
+        let target_dir = root_dir.join("v2/targets").join(target.name());
+        let project_dir = target_dir.join("projects").join(project);
+        std::fs::create_dir_all(&project_dir)?;
+        let lock = SqlTargetLock::acquire(&target_dir, project)?;
+        Ok(Self { root_dir: root_dir.to_path_buf(), target_dir, project_dir, _lock: lock })
     }
 
     fn read_file(&self, name: &str) -> String {
-        let path = self.state_dir.join(name);
+        let path = self.project_dir.join(name);
         std::fs::read_to_string(&path).unwrap_or_default()
     }
 
     fn write_file(&self, name: &str, content: &str) -> Result<()> {
-        let path = self.state_dir.join(name);
+        let path = self.project_dir.join(name);
         std::fs::write(&path, content)?;
         Ok(())
     }
 
     fn prev_project(&self) -> String {
-        self.read_file("project.txt")
+        std::fs::read_to_string(self.target_dir.join("active_project.txt")).unwrap_or_default()
     }
 
     fn prev_tables(&self) -> String {
@@ -105,7 +182,9 @@ impl SqlState {
     }
 
     fn set_project(&self, project: &str) -> Result<()> {
-        self.write_file("project.txt", project)
+        self.write_file("project.txt", project)?;
+        std::fs::write(self.target_dir.join("active_project.txt"), project)?;
+        Ok(())
     }
 
     fn set_tables(&self, tables: &str) -> Result<()> {
@@ -116,27 +195,15 @@ impl SqlState {
         self.write_file("full_cleanup.txt", if value { "true" } else { "false" })
     }
 
-    fn scripts_dir(&self) -> PathBuf {
-        self.state_dir.join("scripts")
-    }
-
-    fn clear_scripts(&self) -> Result<()> {
-        let scripts = self.scripts_dir();
-        if scripts.exists() {
-            std::fs::remove_dir_all(&scripts)?;
-        }
-        Ok(())
-    }
-
     /// Get the path to the MySQL seed cache directory
     fn seed_cache_path(&self) -> PathBuf {
-        self.state_dir.join("mysql-seed")
+        self.project_dir.join("mysql-seed")
     }
 
     /// Check if the seed cache is valid (exists and not expired)
     /// Cache validity: 4 hours (matches shell script behavior)
     fn is_seed_cache_valid(&self, max_age_hours: u64) -> bool {
-        let timestamp_file = self.state_dir.join("seed_timestamp.txt");
+        let timestamp_file = self.project_dir.join("seed_timestamp.txt");
         if !timestamp_file.exists() {
             return false;
         }
@@ -181,12 +248,78 @@ impl SqlState {
         if seed_dir.exists() {
             std::fs::remove_dir_all(&seed_dir)?;
         }
-        let timestamp_file = self.state_dir.join("seed_timestamp.txt");
+        let timestamp_file = self.project_dir.join("seed_timestamp.txt");
         if timestamp_file.exists() {
             std::fs::remove_file(&timestamp_file)?;
         }
         Ok(())
     }
+
+    fn invocation(&self, target: SqlTarget) -> Result<SqlInvocation> {
+        SqlInvocation::new(self, target)
+    }
+
+    fn has_ambiguous_legacy_state(&self) -> bool {
+        ["project.txt", "copy_tables.txt", "full_cleanup.txt", "scripts"]
+            .iter()
+            .any(|name| self.root_dir.join(name).exists())
+    }
+}
+
+struct SqlInvocation {
+    _root: TempDir,
+    schema_dir: PathBuf,
+    export_dir: PathBuf,
+    manifest_path: PathBuf,
+}
+
+impl SqlInvocation {
+    fn new(state: &SqlState, target: SqlTarget) -> Result<Self> {
+        let staging_parent = state.target_dir.join("staging");
+        std::fs::create_dir_all(&staging_parent)?;
+        let root = tempfile::Builder::new()
+            .prefix(&format!("{}-", target.name()))
+            .tempdir_in(&staging_parent)?;
+        let schema_dir = root.path().join("schemas");
+        let export_dir = root.path().join("exports");
+        std::fs::create_dir_all(&schema_dir)?;
+        std::fs::create_dir_all(&export_dir)?;
+        let manifest_path = root.path().join("export-manifest.txt");
+        std::fs::write(&manifest_path, "")?;
+        Ok(Self { _root: root, schema_dir, export_dir, manifest_path })
+    }
+
+    fn export_manifest(&self) -> Result<Vec<PathBuf>> {
+        let mut files: Vec<_> = std::fs::read_dir(&self.export_dir)?
+            .filter_map(std::result::Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.is_file()
+                    && path.extension().is_some_and(|extension| extension == "sql")
+                    && !path.to_string_lossy().ends_with(".template")
+            })
+            .collect();
+        files.sort();
+        let manifest = files
+            .iter()
+            .filter_map(|path| path.file_name())
+            .map(|name| name.to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(&self.manifest_path, format!("{manifest}\n"))?;
+        Ok(files)
+    }
+}
+
+fn validate_scope_component(value: &str) -> Result<()> {
+    if value.is_empty()
+        || !value.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.')
+        })
+    {
+        anyhow::bail!("SQL project name is not safe for scoped state: {value:?}");
+    }
+    Ok(())
 }
 
 /// Wait for MySQL container to be healthy and accepting connections.
@@ -488,12 +621,13 @@ pub async fn sql_setup(
 
     output::info(&format!("Setting up SQL for project {project} ({platform})"));
 
+    let target = SqlTarget::from_gac_flag(use_gac_container);
+
     let devdock_root =
         std::env::var("DEVDOCK_ROOT").context("DEVDOCK_ROOT environment variable not set")?;
     let devdock_root = PathBuf::from(&devdock_root);
 
-    // Container name: devdock-mysql for main setup, devdock-mysql-gac for secondary GAC setup
-    let container = if use_gac_container { "devdock-mysql-gac" } else { "devdock-mysql" };
+    let container = target.container();
 
     // Wait for MySQL
     wait_for_mysql(container, Duration::from_secs(120))?;
@@ -503,7 +637,13 @@ pub async fn sql_setup(
     let full_cleanup = full_cleanup || std::env::var("CODER").is_ok();
 
     // State tracking
-    let state = SqlState::new()?;
+    let state = SqlState::new(target, project)?;
+    if state.has_ambiguous_legacy_state() && state.prev_project().is_empty() {
+        output::warn(
+            "Ignoring ambiguous unscoped legacy SQL state; it will not be migrated or removed",
+        );
+    }
+    let invocation = state.invocation(target)?;
     let prev_project = state.prev_project();
     let prev_tables = state.prev_tables();
     let prev_full_cleanup = state.prev_full_cleanup();
@@ -512,6 +652,7 @@ pub async fn sql_setup(
     let mut tables_to_copy = db_tables.to_string();
     let mut update_project = false;
     let mut update_tables = false;
+    let mut update_full_cleanup = false;
 
     // Add keyval if not present and copy_keyval is enabled
     if !force_copy && copy_keyval && !tables_to_copy.contains("keyval:KeyVal") {
@@ -530,7 +671,13 @@ pub async fn sql_setup(
     // idempotent (CREATE DATABASE IF NOT EXISTS), so safe to run before schema hydration.
     auto_create_databases_from_config(&config, container)?;
 
-    let manager = SqlOperationsManager::new(project, platform, region, config);
+    let manager = SqlOperationsManager::with_container(
+        project,
+        platform,
+        region,
+        config,
+        target.uses_gac_container(),
+    );
 
     // Handle project change
     if prev_project.is_empty() {
@@ -544,15 +691,13 @@ pub async fn sql_setup(
             output::info(
                 "First run with full cleanup requested, dropping pre-existing databases...",
             );
-            state.clear_scripts()?;
             manager.clean_sql("")?;
-            state.set_full_cleanup(true)?;
+            update_full_cleanup = true;
         }
         update_project = true;
         update_tables = true;
     } else if project != prev_project {
         output::info(&format!("Project changed from {prev_project} to {project}, cleaning up..."));
-        state.clear_scripts()?;
         manager.clean_sql("")?;
         update_project = true;
         update_tables = true;
@@ -561,9 +706,8 @@ pub async fn sql_setup(
     // On Coder (remote), always clean up regardless of previous state to avoid stale schemas.
     else if full_cleanup && (!prev_full_cleanup || std::env::var("CODER").is_ok()) {
         output::info("Full cleanup requested, cleaning up...");
-        state.clear_scripts()?;
         manager.clean_sql("")?;
-        state.set_full_cleanup(true)?;
+        update_full_cleanup = true;
         update_project = true;
         update_tables = true;
     }
@@ -595,8 +739,7 @@ pub async fn sql_setup(
 
     // Copy and run schema scripts
     let source_script_dirs = get_sql_scripts_paths(&devdock_root, project);
-    let target_scripts = state.scripts_dir().join(project);
-    std::fs::create_dir_all(&target_scripts)?;
+    let target_scripts = &invocation.schema_dir;
 
     for source_scripts in &source_script_dirs {
         if source_scripts.exists() {
@@ -614,7 +757,7 @@ pub async fn sql_setup(
 
     // Run schema files
     output::info("Running schema hydration...");
-    let mut sql_files: Vec<_> = std::fs::read_dir(&target_scripts)?
+    let mut sql_files: Vec<_> = std::fs::read_dir(target_scripts)?
         .filter_map(std::result::Result::ok)
         .map(|e| e.path())
         .filter(|p| {
@@ -637,8 +780,7 @@ pub async fn sql_setup(
     if !tables_to_copy.is_empty() {
         output::info(&format!("Exporting tables: {tables_to_copy}"));
 
-        let export_dir = state.scripts_dir();
-        std::fs::create_dir_all(&export_dir)?;
+        let export_dir = &invocation.export_dir;
 
         // Collect all entries to export
         let entries: Vec<&str> =
@@ -748,7 +890,7 @@ pub async fn sql_setup(
                 let mut last_error = None;
 
                 while retry_count < max_retries {
-                    match manager.export_from_cloud(entry, &export_dir, mode).await {
+                    match manager.export_from_cloud(entry, export_dir, mode).await {
                         Ok(()) => {
                             output::success(&format!("  ✅ Slow done: {entry}"));
                             last_error = None;
@@ -802,15 +944,7 @@ pub async fn sql_setup(
 
         // Import exported dumps (sequential - MySQL handles one write connection best)
         output::info("Importing exported data...");
-        let mut dump_files: Vec<_> = std::fs::read_dir(&export_dir)?
-            .filter_map(std::result::Result::ok)
-            .map(|e| e.path())
-            .filter(|p| {
-                p.extension().is_some_and(|e| e == "sql")
-                    && !p.to_string_lossy().ends_with(".template")
-            })
-            .collect();
-        dump_files.sort();
+        let dump_files = invocation.export_manifest()?;
 
         for dump_file in &dump_files {
             output::info(&format!("⏩ Importing {:?}", dump_file.file_name().unwrap()));
@@ -826,9 +960,9 @@ pub async fn sql_setup(
     if update_project {
         state.set_project(project)?;
     }
-
-    // Cleanup
-    state.clear_scripts()?;
+    if update_full_cleanup {
+        state.set_full_cleanup(true)?;
+    }
 
     output::success("✅ SQL setup complete");
     Ok(())
@@ -851,7 +985,14 @@ async fn sql_setup_with_seed(
 ) -> Result<()> {
     output::info(&format!("Setting up SQL with MySQL seed for project {project}"));
 
-    let state = SqlState::new()?;
+    let target = SqlTarget::from_gac_flag(use_gac_container);
+    let state = SqlState::new(target, project)?;
+    if state.has_ambiguous_legacy_state() && state.prev_project().is_empty() {
+        output::warn(
+            "Ignoring ambiguous unscoped legacy SQL state; it will not be migrated or removed",
+        );
+    }
+    let invocation = state.invocation(target)?;
     let seed_cache_max_age_hours = 4; // Match shell script behavior
 
     // Check if we have a valid cached seed
@@ -867,7 +1008,13 @@ async fn sql_setup_with_seed(
 
         // Load config using platform-appropriate storage (GCS for Google, S3 for AWS)
         let config = load_platform_config(project, platform, region, devdock_root).await?;
-        let manager = SqlOperationsManager::new(project, platform, region, config);
+        let manager = SqlOperationsManager::with_container(
+            project,
+            platform,
+            region,
+            config,
+            target.uses_gac_container(),
+        );
 
         // Clear old cache
         state.clear_seed_cache()?;
@@ -904,7 +1051,7 @@ async fn sql_setup_with_seed(
 
         // Wait for MySQL to be ready with the seed data
         // Container name: devdock-mysql for main setup, devdock-mysql-gac for secondary GAC setup
-        let container = if use_gac_container { "devdock-mysql-gac" } else { "devdock-mysql" };
+        let container = target.container();
         wait_for_mysql(container, Duration::from_secs(120))?;
 
         // Reset master and import overlay tables
@@ -915,10 +1062,15 @@ async fn sql_setup_with_seed(
             std::env::var("DEVDOCK_ROOT").context("DEVDOCK_ROOT environment variable not set")?;
         let devdock_root = PathBuf::from(&devdock_root);
         let config = load_platform_config(project, platform, region, devdock_root).await?;
-        let manager = SqlOperationsManager::new(project, platform, region, config);
+        let manager = SqlOperationsManager::with_container(
+            project,
+            platform,
+            region,
+            config,
+            target.uses_gac_container(),
+        );
 
-        let export_dir = state.scripts_dir();
-        std::fs::create_dir_all(&export_dir)?;
+        let export_dir = &invocation.export_dir;
 
         for entry in db_tables.split(';') {
             let entry = entry.trim();
@@ -926,28 +1078,18 @@ async fn sql_setup_with_seed(
                 continue;
             }
             output::info(&format!("Processing overlay: {entry}"));
-            manager.export_from_cloud(entry, &export_dir, mode).await?;
+            manager.export_from_cloud(entry, export_dir, mode).await?;
         }
 
         // Import exported dumps
         output::info("Importing overlay data...");
-        let mut dump_files: Vec<_> = std::fs::read_dir(&export_dir)?
-            .filter_map(std::result::Result::ok)
-            .map(|e| e.path())
-            .filter(|p| {
-                p.extension().is_some_and(|e| e == "sql")
-                    && !p.to_string_lossy().ends_with(".template")
-            })
-            .collect();
-        dump_files.sort();
+        let dump_files = invocation.export_manifest()?;
 
         for dump_file in &dump_files {
             output::info(&format!("⏩ Importing {:?}", dump_file.file_name().unwrap()));
             docker_mysql_import(container, dump_file)?;
             output::success(&format!("✅ Imported {:?}", dump_file.file_name().unwrap()));
         }
-
-        state.clear_scripts()?;
     }
 
     output::success("✅ SQL setup with seed complete");
@@ -972,18 +1114,25 @@ async fn sql_setup_with_full_instance(
 ) -> Result<()> {
     output::info(&format!("Setting up SQL with full instance dump for project {project}"));
 
+    let target = SqlTarget::from_gac_flag(use_gac_container);
+
     let devdock_root =
         std::env::var("DEVDOCK_ROOT").context("DEVDOCK_ROOT environment variable not set")?;
     let devdock_root = PathBuf::from(&devdock_root);
 
-    // Container name: devdock-mysql for main setup, devdock-mysql-gac for secondary GAC setup
-    let container = if use_gac_container { "devdock-mysql-gac" } else { "devdock-mysql" };
+    let container = target.container();
 
     // Wait for MySQL
     wait_for_mysql(container, Duration::from_secs(120))?;
 
     // State tracking
-    let state = SqlState::new()?;
+    let state = SqlState::new(target, project)?;
+    if state.has_ambiguous_legacy_state() && state.prev_project().is_empty() {
+        output::warn(
+            "Ignoring ambiguous unscoped legacy SQL state; it will not be migrated or removed",
+        );
+    }
+    let invocation = state.invocation(target)?;
 
     // Load config using platform-appropriate storage (GCS for Google, S3 for AWS)
     let config = load_platform_config(project, platform, region, devdock_root.clone()).await?;
@@ -991,7 +1140,13 @@ async fn sql_setup_with_full_instance(
     // Auto-create databases from dynamic.ini (see sql_setup for details)
     auto_create_databases_from_config(&config, container)?;
 
-    let manager = SqlOperationsManager::new(project, platform, region, config);
+    let manager = SqlOperationsManager::with_container(
+        project,
+        platform,
+        region,
+        config,
+        target.uses_gac_container(),
+    );
 
     // Reset MySQL master
     output::info("Resetting MySQL master...");
@@ -1000,8 +1155,7 @@ async fn sql_setup_with_full_instance(
 
     // Copy and run schema scripts first (same as regular setup)
     let source_script_dirs = get_sql_scripts_paths(&devdock_root, project);
-    let target_scripts = state.scripts_dir().join(project);
-    std::fs::create_dir_all(&target_scripts)?;
+    let target_scripts = &invocation.schema_dir;
 
     for source_scripts in &source_script_dirs {
         if source_scripts.exists() {
@@ -1019,7 +1173,7 @@ async fn sql_setup_with_full_instance(
 
     // Run schema files
     output::info("Running schema hydration...");
-    let mut sql_files: Vec<_> = std::fs::read_dir(&target_scripts)?
+    let mut sql_files: Vec<_> = std::fs::read_dir(target_scripts)?
         .filter_map(std::result::Result::ok)
         .map(|e| e.path())
         .filter(|p| {
@@ -1041,11 +1195,10 @@ async fn sql_setup_with_full_instance(
     // Download and import full instance dump
     output::info("Downloading full instance dump from GCS...");
 
-    let export_dir = state.scripts_dir();
-    std::fs::create_dir_all(&export_dir)?;
+    let export_dir = &invocation.export_dir;
 
     let dump_path = manager
-        .download_full_instance(&export_dir)
+        .download_full_instance(export_dir)
         .await
         .map_err(|e| {
             output::warn(&format!("Full instance download failed: {e}"));
@@ -1071,21 +1224,13 @@ async fn sql_setup_with_full_instance(
                 continue;
             }
             output::info(&format!("Processing overlay: {entry}"));
-            manager.export_from_cloud(entry, &export_dir, mode).await?;
+            manager.export_from_cloud(entry, export_dir, mode).await?;
         }
 
         // Import exported overlay dumps
         output::info("Importing overlay data...");
-        let mut dump_files: Vec<_> = std::fs::read_dir(&export_dir)?
-            .filter_map(std::result::Result::ok)
-            .map(|e| e.path())
-            .filter(|p| {
-                p.extension().is_some_and(|e| e == "sql")
-                    && !p.to_string_lossy().ends_with(".template")
-                    && !p.to_string_lossy().contains("-full.sql") // Skip the full dump we already imported
-            })
-            .collect();
-        dump_files.sort();
+        let dump_files: Vec<_> =
+            invocation.export_manifest()?.into_iter().filter(|path| path != &dump_path).collect();
 
         for dump_file in &dump_files {
             output::info(&format!("⏩ Importing {:?}", dump_file.file_name().unwrap()));
@@ -1094,16 +1239,22 @@ async fn sql_setup_with_full_instance(
         }
     }
 
-    // Cleanup
-    state.clear_scripts()?;
-
     output::success("✅ SQL setup with full instance complete");
     Ok(())
 }
 
 /// SQL cleanup
-pub async fn sql_clean(project: &str, platform: &str, region: &str, db_tables: &str) -> Result<()> {
+pub async fn sql_clean(
+    project: &str,
+    platform: &str,
+    region: &str,
+    db_tables: &str,
+    use_gac_container: bool,
+) -> Result<()> {
     output::info(&format!("Cleaning SQL for project {project}"));
+
+    let target = SqlTarget::from_gac_flag(use_gac_container);
+    let _state = SqlState::new(target, project)?;
 
     let devdock_root =
         std::env::var("DEVDOCK_ROOT").context("DEVDOCK_ROOT environment variable not set")?;
@@ -1112,7 +1263,13 @@ pub async fn sql_clean(project: &str, platform: &str, region: &str, db_tables: &
     // Load merged config using platform-appropriate storage (GCS for Google, S3 for AWS)
     let config = load_platform_config(project, platform, region, devdock_root).await?;
 
-    let manager = SqlOperationsManager::new(project, platform, region, config);
+    let manager = SqlOperationsManager::with_container(
+        project,
+        platform,
+        region,
+        config,
+        target.uses_gac_container(),
+    );
     manager.clean_sql(db_tables)?;
 
     output::success("SQL cleanup complete");
@@ -1171,4 +1328,84 @@ pub async fn opensearch_health() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sql_targets_have_distinct_containers_and_project_state() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        {
+            let main = SqlState::new_in(root.path(), SqlTarget::Main, "main-project")?;
+            main.set_tables("keyval:KeyVal")?;
+            main.set_project("main-project")?;
+            assert_eq!(main.prev_tables(), "keyval:KeyVal");
+            assert_eq!(main.prev_project(), "main-project");
+        }
+        {
+            let gac = SqlState::new_in(root.path(), SqlTarget::Gac, "gac-project")?;
+            assert_eq!(gac.prev_tables(), "");
+            assert_eq!(gac.prev_project(), "");
+        }
+
+        assert_eq!(SqlTarget::Main.container(), "devdock-mysql");
+        assert_eq!(SqlTarget::Gac.container(), "devdock-mysql-gac");
+        Ok(())
+    }
+
+    #[test]
+    fn target_lock_serializes_one_target_but_not_main_and_gac() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let main = SqlState::new_in(root.path(), SqlTarget::Main, "project-one")?;
+        assert!(SqlState::new_in(root.path(), SqlTarget::Main, "project-two").is_err());
+        let gac = SqlState::new_in(root.path(), SqlTarget::Gac, "project-two")?;
+
+        drop(main);
+        assert!(SqlState::new_in(root.path(), SqlTarget::Main, "project-two").is_ok());
+        drop(gac);
+        Ok(())
+    }
+
+    #[test]
+    fn invocation_manifest_and_cleanup_are_owned() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let control = root.path().join("control.sql");
+        std::fs::write(&control, "control")?;
+        let state = SqlState::new_in(root.path(), SqlTarget::Main, "project")?;
+        let invocation = state.invocation(SqlTarget::Main)?;
+        let invocation_root = invocation._root.path().to_path_buf();
+        std::fs::write(invocation.export_dir.join("main.sql"), "main")?;
+        std::fs::write(invocation.export_dir.join("ignored.sql.template"), "ignored")?;
+
+        assert_eq!(invocation.export_manifest()?, vec![invocation.export_dir.join("main.sql")]);
+        assert_eq!(std::fs::read_to_string(&invocation.manifest_path)?, "main.sql\n");
+        drop(invocation);
+
+        assert!(!invocation_root.exists());
+        assert_eq!(std::fs::read_to_string(control)?, "control");
+        Ok(())
+    }
+
+    #[test]
+    fn ambiguous_legacy_state_is_detected_but_preserved() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let legacy = root.path().join("scripts");
+        std::fs::create_dir_all(&legacy)?;
+        std::fs::write(legacy.join("legacy.sql"), "legacy")?;
+        let state = SqlState::new_in(root.path(), SqlTarget::Main, "project")?;
+
+        assert!(state.has_ambiguous_legacy_state());
+        drop(state);
+        assert_eq!(std::fs::read_to_string(legacy.join("legacy.sql"))?, "legacy");
+        Ok(())
+    }
+
+    #[test]
+    fn unsafe_project_names_are_rejected() {
+        assert!(validate_scope_component("").is_err());
+        assert!(validate_scope_component("../other-project").is_err());
+        assert!(validate_scope_component("valid-project_1.example").is_ok());
+    }
 }

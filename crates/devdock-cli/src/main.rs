@@ -592,6 +592,10 @@ enum InfraSqlCommands {
         /// Database/tables to clean (empty = all non-system DBs)
         #[arg(long, default_value = "")]
         db_tables: String,
+
+        /// Use GAC container (devdock-mysql-gac) for secondary GAC project cleanup
+        #[arg(long)]
+        use_gac_container: bool,
     },
 }
 
@@ -879,8 +883,21 @@ async fn main() {
                     )
                     .await
                 }
-                InfraSqlCommands::Clean { project, platform, region, db_tables } => {
-                    commands::infra::sql_clean(&project, &platform, &region, &db_tables).await
+                InfraSqlCommands::Clean {
+                    project,
+                    platform,
+                    region,
+                    db_tables,
+                    use_gac_container,
+                } => {
+                    commands::infra::sql_clean(
+                        &project,
+                        &platform,
+                        &region,
+                        &db_tables,
+                        use_gac_container,
+                    )
+                    .await
                 }
             },
 
