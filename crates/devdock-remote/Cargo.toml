@@ -24,6 +24,8 @@ regex = { workspace = true }
 dirs = { workspace = true }
 tempfile = { workspace = true }
 sysinfo = "0.30"
+sha2 = "0.10"
+libc.workspace = true
 
 # Internal dependencies
 devdock-core = { path = "../devdock-core" }

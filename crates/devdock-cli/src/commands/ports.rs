@@ -17,6 +17,7 @@ const TILT_SERVICE_NAME: &str = "tilt";
 const TILT_PORT: u16 = 10350;
 const NGINX_SERVICE_NAME: &str = "nginx";
 const NGINX_PORT: u16 = 8321;
+const RECOVERY_FORWARD_STABILITY: std::time::Duration = std::time::Duration::from_secs(1);
 
 fn push_unique_port(ports: &mut Vec<(String, u16)>, service_name: &str, port: u16) {
     if !ports.iter().any(|(name, _)| name == service_name) {
@@ -866,7 +867,6 @@ pub(crate) async fn attach_workspace_for_recovery(
     }
 
     let expected_services = discover_service_ports(&info.profile)?;
-    let expected_ports: Vec<u16> = expected_services.iter().map(|(_, port)| *port).collect();
     for (service_name, remote_port) in &expected_services {
         let already_owned = existing.iter().find(|mapping| {
             mapping.service_name == *service_name
@@ -913,7 +913,13 @@ pub(crate) async fn attach_workspace_for_recovery(
             ));
         }
     }
-    wait_for_ports_listening(&expected_ports, std::time::Duration::from_secs(30)).await?;
+    wait_for_recovered_forwards_to_stabilize(
+        state,
+        info,
+        &expected_services,
+        std::time::Duration::from_secs(30),
+    )
+    .await?;
 
     println!("\n{}", "Attached service URLs".bold());
     for mapping in mappings.iter().filter(|mapping| mapping.port_type == "Service") {
@@ -927,25 +933,53 @@ pub(crate) async fn attach_workspace_for_recovery(
     Ok(())
 }
 
-async fn wait_for_ports_listening(ports: &[u16], timeout: std::time::Duration) -> Result<()> {
-    let start = std::time::Instant::now();
-    let unique_ports: Vec<u16> = ports.iter().copied().fold(Vec::new(), |mut ports, port| {
-        if !ports.contains(&port) {
-            ports.push(port);
-        }
-        ports
-    });
+/// A recovered session is not ready merely because its child was spawned or a
+/// port was briefly reachable. Keep checking the persisted exact identities
+/// and loopback listeners for a short stability window before recovery claims
+/// success. This catches children that disappear when a noninteractive parent
+/// process exits.
+async fn wait_for_recovered_forwards_to_stabilize(
+    state: &StateManager,
+    info: &RemoteInstanceInfo,
+    expected_services: &[(String, u16)],
+    timeout: std::time::Duration,
+) -> Result<()> {
+    let started = std::time::Instant::now();
+    let mut stable_since = None;
 
     loop {
-        if unique_ports.iter().all(|port| {
-            std::net::TcpStream::connect((devdock_state::LOOPBACK_BIND_ADDRESS, *port)).is_ok()
-        }) {
-            return Ok(());
+        let mappings = state.get_port_mapping_records(&info.devdock_id).await?;
+        let active_and_listening = expected_services.iter().all(|(service_name, remote_port)| {
+            let mapping = mappings.iter().find(|mapping| {
+                mapping.service_name == *service_name
+                    && mapping.port_type == "Service"
+                    && mapping.local_port == *remote_port
+                    && mapping.remote_port == *remote_port
+            });
+            mapping.is_some_and(|mapping| {
+                managed_port_forward_status(mapping, &info.workspace_id, &info.workspace_name)
+                    == ManagedForwardStatus::Active
+                    && std::net::TcpStream::connect((
+                        devdock_state::LOOPBACK_BIND_ADDRESS,
+                        mapping.local_port,
+                    ))
+                    .is_ok()
+            })
+        });
+
+        if active_and_listening {
+            let stable_at = stable_since.get_or_insert_with(std::time::Instant::now);
+            if stable_at.elapsed() >= RECOVERY_FORWARD_STABILITY {
+                return Ok(());
+            }
+        } else {
+            stable_since = None;
         }
-        if start.elapsed() >= timeout {
+
+        if started.elapsed() >= timeout {
             return Err(anyhow!(
-                "attached forwards did not listen on loopback within {}s; refusing to claim the session is ready",
-                timeout.as_secs()
+                "recovered forwards did not remain active and listening on loopback for {}ms; refusing to claim the session is ready",
+                RECOVERY_FORWARD_STABILITY.as_millis()
             ));
         }
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;

@@ -23,8 +23,8 @@ impl OperationLogger {
 
         std::fs::create_dir_all(&log_dir)?;
 
-        let timestamp = Local::now().format("%Y%m%d-%H%M%S");
-        let log_path = log_dir.join(format!("devdock-remote-{timestamp}.log"));
+        let timestamp = Local::now().format("%Y%m%d-%H%M%S").to_string();
+        let log_path = log_dir.join(operation_log_file_name(&timestamp, devdock_id));
 
         let file = OpenOptions::new().create(true).append(true).open(&log_path)?;
 
@@ -83,8 +83,40 @@ impl OperationLogger {
     }
 }
 
+fn operation_log_file_name(timestamp: &str, devdock_id: &str) -> String {
+    let safe_id = devdock_id
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_') {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    format!("devdock-remote-{timestamp}-{safe_id}.log")
+}
+
 impl Clone for OperationLogger {
     fn clone(&self) -> Self {
         Self { file: Arc::clone(&self.file), log_path: self.log_path.clone() }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn operation_log_filename_is_correlated_to_one_safe_session_id() {
+        let first = operation_log_file_name("20260910-120000", "dev-1111");
+        let second = operation_log_file_name("20260910-120000", "dev-2222");
+
+        assert_eq!(first, "devdock-remote-20260910-120000-dev-1111.log");
+        assert_ne!(first, second);
+        assert_eq!(
+            operation_log_file_name("20260910-120000", "dev/unsafe value"),
+            "devdock-remote-20260910-120000-dev-unsafe-value.log"
+        );
     }
 }

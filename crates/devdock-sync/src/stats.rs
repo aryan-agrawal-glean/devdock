@@ -52,6 +52,28 @@ pub struct HistoryEntry {
     pub bytes: u64,
     pub dur_ms: u64,
     pub ok: bool,
+    #[serde(default)]
+    pub initial: bool,
+    /// Correlates the initial history record to its watermark. Older history
+    /// records deserialize as `None` and cannot satisfy a new startup gate.
+    #[serde(default)]
+    pub initial_sync_id: Option<String>,
+}
+
+/// Durable proof that the daemon completed its initial scan before startup
+/// proceeds to the remote runtime. This is separate from watcher events so a
+/// no-op scan is still an explicit success, rather than an absence of evidence.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct InitialSyncWatermark {
+    pub devdock_id: String,
+    pub workspace_name: String,
+    pub repo_path: String,
+    pub local_head_oid: Option<String>,
+    pub completed_at: String,
+    /// New watermarks carry a unique initial-scan attempt identifier. `None`
+    /// preserves deserialization compatibility but is never accepted as proof.
+    #[serde(default)]
+    pub initial_sync_id: Option<String>,
 }
 
 /// Error entry (written to .errors.jsonl)
@@ -444,6 +466,8 @@ async fn append_history_entries(history_file: &Path, updates: &[StatsUpdate]) ->
             bytes: update.bytes,
             dur_ms: update.duration_ms,
             ok: update.success,
+            initial: false,
+            initial_sync_id: None,
         };
 
         let json = serde_json::to_string(&entry)
@@ -554,6 +578,123 @@ pub fn read_history_entries(devdock_id: &str, tail: Option<usize>) -> Result<Vec
     Ok(entries)
 }
 
+/// Clear only the current DevDock ID's startup evidence before a newly spawned
+/// daemon starts its initial scan. This prevents a retry from trusting a prior
+/// attempt's watermark or errors.
+pub fn clear_initial_sync_evidence(devdock_id: &str) -> Result<()> {
+    let sync_dir = sync_dir();
+    for suffix in ["initial-sync.json", "history.jsonl", "errors.jsonl"] {
+        let path = sync_dir.join(format!("{devdock_id}.{suffix}"));
+        if path.exists() {
+            std::fs::remove_file(path)?;
+        }
+    }
+    Ok(())
+}
+
+/// Record a synchronous initial-scan success watermark and matching history
+/// entry. This must be called only after the initial transfer (including a
+/// no-op scan) has succeeded.
+pub fn record_initial_sync_success(
+    devdock_id: &str,
+    workspace_name: &str,
+    repo_path: &Path,
+) -> Result<InitialSyncWatermark> {
+    use std::io::Write;
+
+    let sync_dir = sync_dir();
+    std::fs::create_dir_all(&sync_dir)?;
+    let completed_at = format_timestamp(current_timestamp());
+    let initial_sync_id = format!(
+        "{devdock_id}:{}:{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or_default()
+    );
+    let watermark = InitialSyncWatermark {
+        devdock_id: devdock_id.to_string(),
+        workspace_name: workspace_name.to_string(),
+        repo_path: repo_path.display().to_string(),
+        local_head_oid: git2::Repository::open(repo_path).ok().and_then(|repo| {
+            repo.head()
+                .ok()
+                .and_then(|head| head.peel_to_commit().ok().map(|commit| commit.id().to_string()))
+        }),
+        completed_at: completed_at.clone(),
+        initial_sync_id: Some(initial_sync_id.clone()),
+    };
+
+    let history_entry = HistoryEntry {
+        ts: completed_at,
+        files: Vec::new(),
+        count: 0,
+        bytes: 0,
+        dur_ms: 0,
+        ok: true,
+        initial: true,
+        initial_sync_id: Some(initial_sync_id),
+    };
+    let mut history = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(sync_dir.join(format!("{devdock_id}.history.jsonl")))?;
+    writeln!(
+        history,
+        "{}",
+        serde_json::to_string(&history_entry).map_err(|error| SyncError::DaemonError(format!(
+            "Failed to serialize initial sync history: {error}"
+        )))?
+    )?;
+    history.sync_data()?;
+
+    let watermark_path = sync_dir.join(format!("{devdock_id}.initial-sync.json"));
+    let temp_path = watermark_path.with_extension("initial-sync.tmp");
+    std::fs::write(
+        &temp_path,
+        serde_json::to_vec(&watermark).map_err(|error| {
+            SyncError::DaemonError(format!("Failed to serialize initial sync watermark: {error}"))
+        })?,
+    )?;
+    std::fs::rename(temp_path, watermark_path)?;
+    Ok(watermark)
+}
+
+/// Read the initial-scan watermark for one DevDock session.
+pub fn read_initial_sync_watermark(devdock_id: &str) -> Result<Option<InitialSyncWatermark>> {
+    let path = sync_dir().join(format!("{devdock_id}.initial-sync.json"));
+    if !path.exists() {
+        return Ok(None);
+    }
+    serde_json::from_slice(&std::fs::read(path)?).map(Some).map_err(|error| {
+        SyncError::DaemonError(format!("Failed to parse initial sync watermark: {error}"))
+    })
+}
+
+/// Return whether an initial watermark and its matching successful history
+/// record prove the same fresh initial-sync attempt. Legacy records lacking an
+/// identifier intentionally fail closed rather than being reused after retry.
+pub(crate) fn initial_sync_evidence_matches(
+    watermark: &InitialSyncWatermark,
+    history: &[HistoryEntry],
+) -> bool {
+    watermark.initial_sync_id.as_deref().is_some_and(|initial_sync_id| {
+        history.iter().any(|entry| {
+            entry.initial && entry.ok && entry.initial_sync_id.as_deref() == Some(initial_sync_id)
+        })
+    })
+}
+
+/// Return whether the current attempt has any scoped sync error evidence.
+pub fn has_sync_errors(devdock_id: &str) -> Result<bool> {
+    Ok(!read_error_entries(devdock_id, None)?.is_empty())
+}
+
+fn sync_dir() -> PathBuf {
+    dirs::home_dir().unwrap_or_else(|| PathBuf::from("/tmp")).join(".devdock/sync")
+}
+
 /// Read error entries from file
 pub fn read_error_entries(devdock_id: &str, tail: Option<usize>) -> Result<Vec<ErrorEntry>> {
     let sync_dir = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/tmp")).join(".devdock/sync");
@@ -574,4 +715,63 @@ pub fn read_error_entries(devdock_id: &str, tail: Option<usize>) -> Result<Vec<E
     }
 
     Ok(entries)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn watermark(initial_sync_id: Option<&str>) -> InitialSyncWatermark {
+        InitialSyncWatermark {
+            devdock_id: "dev-test".to_string(),
+            workspace_name: "workspace-test".to_string(),
+            repo_path: "/tmp/repo".to_string(),
+            local_head_oid: None,
+            completed_at: "2026-09-09T00:00:00Z".to_string(),
+            initial_sync_id: initial_sync_id.map(str::to_string),
+        }
+    }
+
+    fn initial_history(initial_sync_id: Option<&str>) -> HistoryEntry {
+        HistoryEntry {
+            ts: "2026-09-09T00:00:00Z".to_string(),
+            files: Vec::new(),
+            count: 0,
+            bytes: 0,
+            dur_ms: 0,
+            ok: true,
+            initial: true,
+            initial_sync_id: initial_sync_id.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn initial_sync_evidence_requires_the_same_attempt_identifier() {
+        let initial_watermark = watermark(Some("attempt-a"));
+
+        assert!(initial_sync_evidence_matches(
+            &initial_watermark,
+            &[initial_history(Some("attempt-a"))]
+        ));
+        assert!(!initial_sync_evidence_matches(
+            &initial_watermark,
+            &[initial_history(Some("attempt-b"))]
+        ));
+        assert!(!initial_sync_evidence_matches(&initial_watermark, &[initial_history(None)]));
+        assert!(!initial_sync_evidence_matches(
+            &watermark(None),
+            &[initial_history(Some("attempt-a"))]
+        ));
+    }
+
+    #[test]
+    fn old_history_entries_deserialize_without_initial_evidence() {
+        let history: HistoryEntry = serde_json::from_str(
+            r#"{"ts":"2026-09-09T00:00:00Z","files":[],"count":0,"bytes":0,"dur_ms":0,"ok":true}"#,
+        )
+        .expect("legacy history entry deserializes");
+
+        assert!(!history.initial);
+        assert_eq!(history.initial_sync_id, None);
+    }
 }

@@ -1,6 +1,6 @@
 //! SSH utilities for remote workspace communication.
 
-use crate::{RemoteError, Result};
+use crate::{process::output_with_timeout, RemoteError, Result};
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::Path;
@@ -21,12 +21,9 @@ pub fn ssh_exec_with_log(
     info!("Executing on {}: {}", workspace, command);
 
     // Pass command as-is. Coder SSH handles the shell invocation automatically.
-    let output = Command::new("coder")
-        .arg("ssh")
-        .arg(workspace)
-        .arg("--")
-        .arg(command)
-        .output()
+    let mut coder = Command::new("coder");
+    coder.arg("ssh").arg(workspace).arg("--").arg(command);
+    let output = output_with_timeout(&mut coder, "coder ssh")
         .map_err(|e| RemoteError::SshError(format!("Failed to execute SSH command: {e}")))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
@@ -122,8 +119,7 @@ pub fn ssh_check_with_timeout(
         }
     } else {
         // No timeout, use normal output()
-        let out = cmd
-            .output()
+        let out = output_with_timeout(&mut cmd, "coder ssh check")
             .map_err(|e| RemoteError::SshError(format!("Failed to execute SSH command: {e}")))?;
         out
     };

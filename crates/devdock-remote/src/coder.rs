@@ -1,6 +1,6 @@
 //! Coder CLI wrapper for workspace management.
 
-use crate::{RemoteError, Result};
+use crate::{process::output_with_timeout, RemoteError, Result};
 use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::path::Path;
@@ -100,8 +100,7 @@ pub fn create_workspace(config: &CoderWorkspaceConfig) -> Result<String> {
 
     debug!("Running: {:?}", cmd);
 
-    let output = cmd
-        .output()
+    let output = output_with_timeout(&mut cmd, "coder create")
         .map_err(|e| RemoteError::CommandFailed(format!("Failed to run coder create: {e}")))?;
 
     if !output.status.success() {
@@ -119,11 +118,9 @@ pub fn start_workspace(name: &str) -> Result<String> {
 
     info!("Starting Coder workspace: {}", name);
 
-    let output = Command::new("coder")
-        .arg("start")
-        .arg(name)
-        .arg("--yes")
-        .output()
+    let mut command = Command::new("coder");
+    command.arg("start").arg(name).arg("--yes");
+    let output = output_with_timeout(&mut command, "coder start")
         .map_err(|e| RemoteError::CommandFailed(format!("Failed to start workspace: {e}")))?;
 
     if !output.status.success() {
@@ -141,11 +138,9 @@ pub fn stop_workspace(name: &str) -> Result<()> {
 
     info!("Stopping Coder workspace: {}", name);
 
-    let output = Command::new("coder")
-        .arg("stop")
-        .arg(name)
-        .arg("--yes")
-        .output()
+    let mut command = Command::new("coder");
+    command.arg("stop").arg(name).arg("--yes");
+    let output = output_with_timeout(&mut command, "coder stop")
         .map_err(|e| RemoteError::CommandFailed(format!("Failed to stop workspace: {e}")))?;
 
     if !output.status.success() {
@@ -162,11 +157,9 @@ pub fn delete_workspace(name: &str) -> Result<()> {
 
     info!("Deleting Coder workspace: {}", name);
 
-    let output = Command::new("coder")
-        .arg("delete")
-        .arg(name)
-        .arg("--yes")
-        .output()
+    let mut command = Command::new("coder");
+    command.arg("delete").arg(name).arg("--yes");
+    let output = output_with_timeout(&mut command, "coder delete")
         .map_err(|e| RemoteError::CommandFailed(format!("Failed to delete workspace: {e}")))?;
 
     if !output.status.success() {
@@ -187,13 +180,14 @@ pub fn get_workspace_identity(name: &str) -> Result<Option<CoderWorkspaceIdentit
     check_coder_installed()?;
     let search_name = name.rsplit('/').next().unwrap_or(name);
 
-    let output = Command::new("coder")
+    let mut command = Command::new("coder");
+    command
         .arg("list")
         .arg("--output")
         .arg("json")
         .arg("--search")
-        .arg(format!("owner:me name:{search_name}"))
-        .output()
+        .arg(format!("owner:me name:{search_name}"));
+    let output = output_with_timeout(&mut command, "coder list")
         .map_err(|e| RemoteError::CommandFailed(format!("Failed to list workspaces: {e}")))?;
 
     if !output.status.success() {
@@ -224,11 +218,9 @@ fn parse_workspace_identity(
 pub fn get_workspace_status(name: &str) -> Result<String> {
     check_coder_installed()?;
 
-    let output = Command::new("coder")
-        .arg("list")
-        .arg("--output")
-        .arg("json")
-        .output()
+    let mut command = Command::new("coder");
+    command.arg("list").arg("--output").arg("json");
+    let output = output_with_timeout(&mut command, "coder list")
         .map_err(|e| RemoteError::CommandFailed(format!("Failed to list workspaces: {e}")))?;
 
     if !output.status.success() {
@@ -248,10 +240,8 @@ pub fn port_forward_single(workspace: &str, local_port: u16, remote_port: u16) -
     info!("Port forwarding {}:{} -> {}", workspace, remote_port, local_port);
 
     let mut command = port_forward_command(workspace, local_port, remote_port);
-    let child =
-        command.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().map_err(
-            |e| RemoteError::PortForwardError(format!("Failed to start port forward: {e}")),
-        )?;
+    command.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    let child = spawn_detached_port_forward(&mut command)?;
 
     debug!("Port forward started with PID: {}", child.id());
     Ok(child)
@@ -272,9 +262,42 @@ pub fn port_forward_single_logged(
         ))
     })?;
     let mut command = port_forward_command(workspace, local_port, remote_port);
-    command.stdin(Stdio::null()).stdout(log.try_clone()?).stderr(log).spawn().map_err(|error| {
+    command.stdin(Stdio::null()).stdout(log.try_clone()?).stderr(log);
+    spawn_detached_port_forward(&mut command)
+}
+
+/// Spawn an owned Coder forwarding child in its own session. Non-interactive
+/// command runners can clean up their own process group when the parent exits;
+/// a managed forward must not be part of that group because its persisted exact
+/// PID/start-time/command identity owns its later cleanup.
+fn spawn_detached_port_forward(command: &mut Command) -> Result<Child> {
+    detach_port_forward_process(command);
+    command.spawn().map_err(|error| {
         RemoteError::PortForwardError(format!("Failed to start port forward: {error}"))
     })
+}
+
+#[cfg(unix)]
+fn detach_port_forward_process(command: &mut Command) {
+    use std::os::unix::process::CommandExt;
+
+    // SAFETY: `pre_exec` runs in the child after fork and before exec. `setsid`
+    // is an async-signal-safe libc call and is the only operation in the hook.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setsid() == -1 {
+                Err(std::io::Error::last_os_error())
+            } else {
+                Ok(())
+            }
+        });
+    }
+}
+
+#[cfg(not(unix))]
+fn detach_port_forward_process(_command: &mut Command) {
+    // Windows child-process group cleanup does not use Unix sessions. The
+    // exact persisted PID and command fingerprint remain the ownership check.
 }
 
 fn port_forward_command(workspace: &str, local_port: u16, remote_port: u16) -> Command {
@@ -302,6 +325,44 @@ mod tests {
             port_forward_command_line("dev-1afa81a3", 11350, 10350),
             "coder port-forward dev-1afa81a3 --tcp 127.0.0.1:11350:10350"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn managed_forward_child_survives_a_launch_wrapper_exit_in_its_own_session() {
+        let caller_session = unsafe { libc::getsid(0) };
+        assert_ne!(caller_session, -1);
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let child_pid_path = temp_dir.path().join("forward-child.pid");
+        let mut command = Command::new("sh");
+        // The shell models a noninteractive launcher. It exits as soon as it
+        // starts the long-lived forwarding child, which must remain in the
+        // independent session created by `spawn_detached_port_forward`.
+        command
+            .arg("-c")
+            .arg("sleep 5 & printf '%s' \"$!\" > \"$1\"")
+            .arg("forward-launcher")
+            .arg(&child_pid_path);
+        let mut child = spawn_detached_port_forward(&mut command).unwrap();
+        let launcher_pid = child.id() as libc::pid_t;
+        assert!(child.wait().unwrap().success(), "launch wrapper should exit cleanly");
+        let forward_pid = std::fs::read_to_string(&child_pid_path)
+            .unwrap()
+            .trim()
+            .parse::<libc::pid_t>()
+            .unwrap();
+        let forward_session = unsafe { libc::getsid(forward_pid) };
+
+        assert_eq!(forward_session, launcher_pid);
+        assert_ne!(forward_session, caller_session);
+        assert_eq!(
+            unsafe { libc::kill(forward_pid, 0) },
+            0,
+            "forward remains alive after wrapper exit"
+        );
+
+        let _ = unsafe { libc::kill(forward_pid, libc::SIGTERM) };
     }
 
     #[test]

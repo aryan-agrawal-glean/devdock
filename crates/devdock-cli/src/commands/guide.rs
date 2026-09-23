@@ -44,7 +44,8 @@ fn remote_start() {
     println!("  1. devdock setup --remote");
     println!("  2. devdock start <profile> --remote --auto-forward");
     println!("  3. devdock status -d");
-    println!("  4. devdock sync status\n");
+    println!("  4. devdock sync status");
+    println!("     devdock sync history -n 20\n");
     println!("Equivalent legacy form:");
     println!("  devdock start <profile> -m remote --auto-forward\n");
     println!("Useful options:");
@@ -53,10 +54,19 @@ fn remote_start() {
     println!("  --disk-size <gb>           Set Coder data disk size");
     println!("  --port-base <port>         Offset forwarded local ports");
     println!(
-        "  --copy-git-creds           Copy local gh auth to a newly created workspace (opt-in)"
+        "  --copy-git-creds           Copy local gh auth to a new or explicitly selected --vm workspace (opt-in)"
     );
     println!(
         "\nWithout --copy-git-creds, remote workspaces keep the default automation credentials."
+    );
+    println!("Credential transfer uses legacy scp -O transport.");
+    println!("\nAuthentication and validation:");
+    println!("  - If local gcloud/ADC expires, ask the user to run locally: gcloud auth login --update-adc");
+    println!("    Then retry remote start so DevDock can sync the refreshed credentials.");
+    println!("  - Never run interactive gcloud auth in the remote VM.");
+    println!("  - Validate with the explicit candidate binary and a native Linux build in Coder.");
+    println!(
+        "  - Inspect remote logs, status, and sync history; --monitor alone is not validation."
     );
 }
 

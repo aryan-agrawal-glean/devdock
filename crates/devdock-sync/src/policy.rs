@@ -52,7 +52,8 @@ const BASELINE_SYNC_EXTENSIONS: &[&str] = &[
     ".csv",
 ];
 
-const BASELINE_SYNC_FILENAMES: &[&str] = &["pom.xml", "Makefile", "package.json", "pnpm-lock.yaml"];
+const BASELINE_SYNC_FILENAMES: &[&str] =
+    &["pom.xml", "Makefile", "package.json", "pnpm-lock.yaml", "Tiltfile"];
 
 const BASELINE_SYNC_WITHOUT_TRACKING: &[&str] = &["config/custom.ini", "devdock/custom.ini"];
 
@@ -444,6 +445,13 @@ mod tests {
         assert!(!matcher.is_syncable(Path::new("python_scio/service/rules.bzl")));
         assert!(!matcher.is_syncable(Path::new("python_scio/README.md")));
         assert!(!matcher.is_syncable(Path::new("python_scio_evil/main.py")));
+    }
+
+    #[test]
+    fn universal_matcher_syncs_extensionless_devdock_tiltfile() {
+        let matcher = SyncMatcher::universal();
+
+        assert!(matcher.is_syncable(Path::new("devdock/Tiltfile")));
     }
 
     #[test]

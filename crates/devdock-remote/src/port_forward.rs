@@ -18,6 +18,8 @@ const TILT_SERVICE_NAME: &str = "tilt";
 const TILT_PORT: u16 = 10350;
 const NGINX_SERVICE_NAME: &str = "nginx";
 const NGINX_PORT: u16 = 8321;
+const FORWARD_TERM_GRACE: Duration = Duration::from_secs(5);
+const FORWARD_KILL_GRACE: Duration = Duration::from_secs(2);
 
 fn push_unique_mapping(
     mappings: &mut Vec<PortMapping>,
@@ -888,9 +890,10 @@ fn terminate_spawned_child(child: &mut Child) {
     let _ = child.wait();
 }
 
-fn wait_for_process_exit(pid: Pid, start_time: u64) -> bool {
+fn wait_for_process_exit(pid: Pid, start_time: u64, timeout: Duration) -> bool {
     let mut system = System::new();
-    for _ in 0..20 {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
         system.refresh_process(pid);
         match system.process(pid) {
             None => return true,
@@ -900,10 +903,10 @@ fn wait_for_process_exit(pid: Pid, start_time: u64) -> bool {
                 return true;
             }
             Some(process) if process.start_time() != start_time => return true,
+            Some(_) if std::time::Instant::now() >= deadline => return false,
             Some(_) => std::thread::sleep(Duration::from_millis(50)),
         }
     }
-    false
 }
 
 /// Stop only when persisted ownership, immutable workspace identity, process
@@ -991,7 +994,7 @@ pub fn stop_managed_port_forward(
             "failed to terminate verified managed forward PID {pid}"
         )));
     }
-    if wait_for_process_exit(verified.pid, start_time) {
+    if wait_for_process_exit(verified.pid, start_time, FORWARD_TERM_GRACE) {
         return Ok(ManagedForwardStopOutcome::Stopped);
     }
 
@@ -1007,7 +1010,7 @@ pub fn stop_managed_port_forward(
         .system
         .process(verified.pid)
         .expect("re-verified process remains in the captured system snapshot");
-    if !process.kill() || !wait_for_process_exit(verified.pid, start_time) {
+    if !process.kill() || !wait_for_process_exit(verified.pid, start_time, FORWARD_KILL_GRACE) {
         return Err(RemoteError::PortForwardError(format!(
             "verified managed forward PID {pid} did not exit"
         )));

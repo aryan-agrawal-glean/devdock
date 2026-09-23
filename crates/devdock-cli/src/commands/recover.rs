@@ -3,13 +3,28 @@
 use crate::commands::{ports, remote};
 use crate::output;
 use anyhow::{anyhow, Context, Result};
+use devdock_config::ProfileLoader;
 use devdock_remote::{check_coder_installed, coder, inspect_remote_runtime};
 use devdock_state::{Instance, InstanceStatus, RemoteSessionRequest, SessionOrigin, StateManager};
+use devdock_sync::{daemon as sync_daemon, universal_matcher};
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const SOURCE_PORT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+const RECOVERY_INITIAL_SYNC_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SyncRecoveryPlan {
+    Reuse { pid: u32 },
+    Restart { full_mode: bool },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SyncRecoveryOutcome {
+    Reused { pid: u32 },
+    Restarted { pid: u32 },
+}
 
 /// Reconcile a manually started DevDock inside an existing Coder workspace.
 ///
@@ -147,10 +162,24 @@ pub async fn execute(
         ));
     }
 
+    // Recover the exact session's sync daemon before creating local forwards.
+    // This keeps a recovery failure from claiming an attached, Running session
+    // when source propagation is no longer available.
+    let sync_recovery = match recover_sync_daemon(&state, &instance, &target_identity.name).await {
+        Ok(recovery) => recovery,
+        Err(error) => {
+            persist_recovery_failure(&state, &instance.id, "sync_daemon", &error).await;
+            return Err(error);
+        }
+    };
+
     // Attach uses no-offset ports, matching the session-switcher contract.
     // The manager reuses only exact verified forwards and registers new ones
     // with the existing PID/start-time/command/workspace identity checks.
-    ports::attach_workspace_for_recovery(&state, &target_info).await?;
+    if let Err(error) = ports::attach_workspace_for_recovery(&state, &target_info).await {
+        persist_recovery_failure(&state, &instance.id, "port_forward", &error).await;
+        return Err(error);
+    }
     state.update_status(&instance.id, InstanceStatus::Running).await?;
 
     output::success(&format!(
@@ -161,11 +190,137 @@ pub async fn execute(
     if let Some(revision) = runtime.git_revision {
         println!("  Remote Git revision: {revision}");
     }
+    match sync_recovery {
+        SyncRecoveryOutcome::Reused { pid } => {
+            println!("  Sync daemon: verified existing PID {pid}");
+        }
+        SyncRecoveryOutcome::Restarted { pid } => {
+            println!("  Sync daemon: restarted and verified PID {pid}");
+        }
+    }
     println!(
         "  Retryable forwarding: devdock ports forward --workspace {} --all --no-offset",
         target_identity.name
     );
     Ok(())
+}
+
+async fn persist_recovery_failure(
+    state: &StateManager,
+    instance_id: &str,
+    stage: &str,
+    error: &anyhow::Error,
+) {
+    let reason = format!("{stage} recovery failed: {error}");
+    if let Err(record_error) =
+        state.record_failure(instance_id, InstanceStatus::Stopped, stage, &reason).await
+    {
+        tracing::warn!(%record_error, "Failed to persist recovery failure");
+    }
+}
+
+/// Recover a dead or absent sync daemon using the persisted session settings.
+/// A live daemon must have the exact instance command identity; two distinct
+/// live PIDs are ambiguous and are left untouched rather than duplicated.
+async fn recover_sync_daemon(
+    state: &StateManager,
+    instance: &Instance,
+    workspace_name: &str,
+) -> Result<SyncRecoveryOutcome> {
+    let stored = state.get_sync_session(&instance.id).await?;
+    let (stored_workspace, database_pid, full_mode) = stored
+        .as_ref()
+        .map(|(workspace, pid, full_mode, _)| (workspace.as_str(), *pid, *full_mode))
+        .unwrap_or(("", None, false));
+    if !stored_workspace.is_empty() && stored_workspace != workspace_name {
+        return Err(anyhow!(
+            "sync session for {} belongs to workspace '{}', not requested workspace '{}'",
+            Instance::display_id(&instance.id),
+            stored_workspace,
+            workspace_name
+        ));
+    }
+
+    let pid_file = sync_daemon::read_daemon_pid(&instance.id).ok().flatten();
+    let database_pid_live =
+        database_pid.filter(|pid| sync_daemon::is_daemon_running(&instance.id, *pid));
+    let file_pid_live = pid_file.filter(|pid| sync_daemon::is_daemon_running(&instance.id, *pid));
+    let plan = plan_sync_daemon_recovery(full_mode, database_pid_live, file_pid_live)?;
+
+    if let SyncRecoveryPlan::Reuse { pid } = plan {
+        state.update_sync_session_liveness(&instance.id, Some(pid), "running").await?;
+        return Ok(SyncRecoveryOutcome::Reused { pid });
+    }
+
+    // The database must not keep a dead PID marked running while the fresh
+    // daemon is being established. Persist error first, then replace it only
+    // after the exact child and initial watermark are verified.
+    state.save_sync_session(&instance.id, workspace_name, None, full_mode, "error").await?;
+
+    let force_patterns = ProfileLoader::new()
+        .load(&instance.profile)
+        .map_err(|error| {
+            anyhow!("could not load recovery sync profile '{}': {error}", instance.profile)
+        })?
+        .sync
+        .force_patterns;
+    let repo_path = PathBuf::from(&instance.workspace_path);
+    let branch_mode = instance.branch != "master";
+    let pid = match sync_daemon::start_daemon(
+        &instance.id,
+        workspace_name,
+        &repo_path,
+        full_mode,
+        branch_mode,
+        "info",
+        &force_patterns,
+        universal_matcher(),
+    ) {
+        Ok(pid) => pid,
+        Err(error) => {
+            state.save_sync_session(&instance.id, workspace_name, None, full_mode, "error").await?;
+            return Err(error.into());
+        }
+    };
+
+    if !sync_daemon::is_daemon_running(&instance.id, pid) {
+        state.save_sync_session(&instance.id, workspace_name, None, full_mode, "error").await?;
+        return Err(anyhow!("restarted sync daemon PID {pid} is not alive"));
+    }
+    if let Err(error) = sync_daemon::wait_for_initial_sync_watermark(
+        &instance.id,
+        workspace_name,
+        &repo_path,
+        pid,
+        RECOVERY_INITIAL_SYNC_TIMEOUT,
+    ) {
+        state.save_sync_session(&instance.id, workspace_name, None, full_mode, "error").await?;
+        return Err(error.into());
+    }
+    let recorded_pid = sync_daemon::read_daemon_pid(&instance.id)?;
+    if recorded_pid != Some(pid) || !sync_daemon::is_daemon_running(&instance.id, pid) {
+        state.save_sync_session(&instance.id, workspace_name, None, full_mode, "error").await?;
+        return Err(anyhow!(
+            "restarted sync daemon PID/state does not match its initial watermark"
+        ));
+    }
+
+    state.save_sync_session(&instance.id, workspace_name, Some(pid), full_mode, "running").await?;
+    Ok(SyncRecoveryOutcome::Restarted { pid })
+}
+
+fn plan_sync_daemon_recovery(
+    full_mode: bool,
+    database_pid_live: Option<u32>,
+    file_pid_live: Option<u32>,
+) -> Result<SyncRecoveryPlan> {
+    match (database_pid_live, file_pid_live) {
+        (Some(database_pid), Some(file_pid)) if database_pid != file_pid => Err(anyhow!(
+            "two distinct live sync daemon PIDs ({database_pid} and {file_pid}) claim this session"
+        )),
+        (Some(pid), _) | (_, Some(pid)) => Ok(SyncRecoveryPlan::Reuse { pid }),
+        (None, None) => Ok(SyncRecoveryPlan::Restart { full_mode }),
+    }
 }
 
 fn is_missing_local_session_error(error: &anyhow::Error) -> bool {
@@ -222,4 +377,24 @@ fn current_branch() -> Result<String> {
 
 fn now() -> Result<i64> {
     Ok(SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dead_sync_daemon_restarts_then_a_healthy_daemon_is_reused() {
+        let restarted = plan_sync_daemon_recovery(false, None, None).unwrap();
+        assert_eq!(restarted, SyncRecoveryPlan::Restart { full_mode: false });
+
+        let reused = plan_sync_daemon_recovery(false, Some(4242), Some(4242)).unwrap();
+        assert_eq!(reused, SyncRecoveryPlan::Reuse { pid: 4242 });
+    }
+
+    #[test]
+    fn conflicting_live_sync_daemons_are_not_adopted_or_duplicated() {
+        let error = plan_sync_daemon_recovery(true, Some(4242), Some(4343)).unwrap_err();
+        assert!(error.to_string().contains("two distinct live sync daemon PIDs"));
+    }
 }

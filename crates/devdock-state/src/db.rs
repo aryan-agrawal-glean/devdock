@@ -18,6 +18,7 @@ const INSTANCE_COLUMNS: &str = "id, workspace_path, workspace_name, workspace_id
     planned_workspace_name, session_key, branch, profile, mode, status, port_base, \
     failure_stage, failure_reason, is_quarantined, quarantine_reason, superseded_by, \
     manifest_path, last_observed_at, created_at, updated_at";
+const STARTING_SESSION_STALE_AFTER_SECS: i64 = 300;
 
 /// Manages DevDock state in SQLite database.
 #[derive(Clone)]
@@ -720,7 +721,34 @@ async fn claim_remote_session_in_transaction(
     });
 
     if let Some(mut winner) = candidates.pop() {
-        if matches!(winner.status, InstanceStatus::Starting | InstanceStatus::Stopping) {
+        let stale_starting = winner.status == InstanceStatus::Starting
+            && request
+                .created_at
+                .saturating_sub(winner.last_observed_at.unwrap_or(winner.updated_at))
+                >= STARTING_SESSION_STALE_AFTER_SECS;
+        if stale_starting {
+            let last_observed_at = winner.last_observed_at.unwrap_or(winner.updated_at);
+            let reason = format!(
+                "startup made no progress for at least {STARTING_SESSION_STALE_AFTER_SECS}s; last_observed_at={last_observed_at}"
+            );
+            sqlx::query(
+                "UPDATE instances
+                 SET failure_stage = 'startup_timeout', failure_reason = ?, updated_at = ?
+                 WHERE id = ?",
+            )
+            .bind(&reason)
+            .bind(request.created_at)
+            .bind(&winner.id)
+            .execute(&mut *connection)
+            .await?;
+            winner.failure_stage = Some("startup_timeout".to_string());
+            winner.failure_reason = Some(reason);
+            winner.updated_at = request.created_at;
+        }
+
+        if (winner.status == InstanceStatus::Starting && !stale_starting)
+            || winner.status == InstanceStatus::Stopping
+        {
             bail!(
                 "remote session conflict: session {} is already {}; wait for it to finish or stop it before retrying",
                 winner.id,
@@ -747,10 +775,16 @@ async fn claim_remote_session_in_transaction(
         } else {
             provisional_key.to_string()
         };
+        // A stale claim remains diagnostically visible during its retry. A normal
+        // stopped/error retry starts clean, since its prior failure has already
+        // been observed and explicitly retried by the caller.
+        let retained_failure_stage = stale_starting.then(|| winner.failure_stage.clone()).flatten();
+        let retained_failure_reason =
+            stale_starting.then(|| winner.failure_reason.clone()).flatten();
         sqlx::query(
             "UPDATE instances
              SET workspace_path = ?, planned_workspace_name = ?, session_key = ?, branch = ?,
-                 profile = ?, status = 'starting', failure_stage = NULL, failure_reason = NULL,
+                 profile = ?, status = 'starting', failure_stage = ?, failure_reason = ?,
                  superseded_by = NULL, updated_at = ?, last_observed_at = ?
              WHERE id = ?",
         )
@@ -759,6 +793,8 @@ async fn claim_remote_session_in_transaction(
         .bind(&session_key)
         .bind(&request.branch)
         .bind(&request.profile)
+        .bind(&retained_failure_stage)
+        .bind(&retained_failure_reason)
         .bind(request.created_at)
         .bind(request.created_at)
         .bind(&winner.id)
@@ -771,8 +807,8 @@ async fn claim_remote_session_in_transaction(
         winner.branch.clone_from(&request.branch);
         winner.profile.clone_from(&request.profile);
         winner.status = InstanceStatus::Starting;
-        winner.failure_stage = None;
-        winner.failure_reason = None;
+        winner.failure_stage = retained_failure_stage;
+        winner.failure_reason = retained_failure_reason;
         winner.superseded_by = None;
         winner.updated_at = request.created_at;
         winner.last_observed_at = Some(request.created_at);
@@ -1335,6 +1371,42 @@ mod tests {
         assert_eq!(retried.instance.id, "dev-session");
         assert!(retried.instance.failure_stage.is_none());
         assert!(retried.instance.failure_reason.is_none());
+    }
+
+    #[tokio::test]
+    async fn stale_starting_remote_session_is_reclaimed_without_changing_identity() {
+        let (_state_dir, worktree, manager) = state_fixture().await;
+        // `created_at` is the injected clock at this command boundary. Use a
+        // real epoch timestamp here while advancing it deterministically to
+        // exercise the stale threshold without waiting five minutes.
+        let started_at =
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs()
+                as i64;
+        let first = manager
+            .claim_remote_session(request(worktree.path(), "dev-stale", "workspace", started_at))
+            .await
+            .unwrap();
+
+        let retried = manager
+            .claim_remote_session(request(
+                worktree.path(),
+                "dev-retry",
+                "workspace",
+                started_at + STARTING_SESSION_STALE_AFTER_SECS,
+            ))
+            .await
+            .unwrap();
+
+        assert!(retried.reused);
+        assert_eq!(retried.instance.id, first.instance.id);
+        assert_eq!(retried.instance.status, InstanceStatus::Starting);
+        assert_eq!(retried.instance.failure_stage.as_deref(), Some("startup_timeout"));
+        assert!(retried
+            .instance
+            .failure_reason
+            .as_deref()
+            .unwrap()
+            .contains("startup made no progress for at least 300s"));
     }
 
     #[tokio::test]

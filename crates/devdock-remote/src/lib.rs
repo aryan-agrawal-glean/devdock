@@ -7,6 +7,7 @@
 pub mod coder;
 pub mod config_sync;
 pub mod port_forward;
+mod process;
 pub mod ssh;
 pub mod workspace;
 
@@ -17,11 +18,12 @@ pub use port_forward::{
     PortMapping, PortType,
 };
 pub use workspace::{
-    cleanup_existing_devdock, inspect_remote_git_state, inspect_remote_runtime,
-    provision_workspace, start_remote_devdock, RemoteGitState, RemoteRuntimeSnapshot,
+    inspect_remote_git_state, inspect_remote_runtime, provision_workspace,
+    reconcile_remote_checkout, start_remote_devdock, sync_remote_configuration, RemoteGitState,
+    RemoteRuntimeSnapshot,
 };
 
-use std::process::Command;
+use std::process::{Command, Stdio};
 use thiserror::Error;
 use tracing::debug;
 
@@ -35,8 +37,13 @@ pub enum RemoteError {
     )]
     GcloudNotInstalled,
 
-    #[error("gcloud auth is missing or expired. Run `gcloud auth login --update-adc` and retry your DevDock command.")]
-    GcloudAuthFailed,
+    #[error(
+        "local gcloud {check} preflight failed for profile project '{project}'. Run `gcloud auth login --update-adc` and retry your DevDock command."
+    )]
+    GcloudPreflightFailed { check: &'static str, project: String },
+
+    #[error("remote workspace checkout is not safe to reconcile: {0}")]
+    RemoteCheckoutUnsafe(String),
 
     #[error("Workspace not found: {0}")]
     WorkspaceNotFound(String),
@@ -65,46 +72,62 @@ pub enum RemoteError {
 
 pub type Result<T> = std::result::Result<T, RemoteError>;
 
-/// Verify that gcloud CLI is installed and authenticated locally.
+/// Verify local user auth, ADC, and access to the selected profile project.
 ///
-/// This preflight check should be called before any remote DevDock operations
-/// that require GCP authentication (workspace creation, config sync, etc.).
-/// It fails fast with a clear error message if gcloud auth is missing or expired,
-/// avoiding wasted time on workspace provisioning that would fail later.
+/// This is deliberately status-only: stdout and stderr are discarded so an access
+/// token never reaches DevDock logs. Call this before session claim, Coder lifecycle
+/// commands, remote SSH, or credential transfer.
 ///
 /// # Errors
 ///
 /// Returns `RemoteError::GcloudNotInstalled` if the gcloud CLI is not found.
-/// Returns `RemoteError::GcloudAuthFailed` if `gcloud auth print-access-token` fails.
-pub fn check_gcloud_auth() -> Result<()> {
-    debug!("Checking gcloud CLI availability and authentication");
+/// Returns `RemoteError::GcloudPreflightFailed` when one of the probes fails.
+pub fn check_gcloud_preflight(project: &str) -> Result<()> {
+    let project = project.trim();
+    if project.is_empty() {
+        return Err(RemoteError::ConfigSyncError(
+            "selected profile has no usable project".to_string(),
+        ));
+    }
 
-    // Check if gcloud CLI is installed
+    debug!(project, "Checking local gcloud preflight");
     if which::which("gcloud").is_err() {
         return Err(RemoteError::GcloudNotInstalled);
     }
 
-    // Check if gcloud auth is valid by attempting to print an access token
-    let output =
-        Command::new("gcloud").args(["auth", "print-access-token"]).output().map_err(|e| {
-            debug!("Failed to run gcloud auth print-access-token: {}", e);
-            RemoteError::GcloudAuthFailed
-        })?;
+    check_gcloud_preflight_with(project, |args| {
+        Command::new("gcloud")
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success())
+    })
+}
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        debug!("gcloud auth print-access-token failed: {}", stderr);
-        return Err(RemoteError::GcloudAuthFailed);
+fn check_gcloud_preflight_with<F>(project: &str, mut run: F) -> Result<()>
+where
+    F: FnMut(&[&str]) -> bool,
+{
+    let probes: [(&str, Vec<&str>); 3] = [
+        ("user authentication", vec!["auth", "print-access-token"]),
+        (
+            "application-default credentials",
+            vec!["auth", "application-default", "print-access-token"],
+        ),
+        (
+            "profile project access",
+            vec!["projects", "describe", project, "--format=value(projectNumber)"],
+        ),
+    ];
+
+    for (check, args) in probes {
+        if !run(&args) {
+            return Err(RemoteError::GcloudPreflightFailed { check, project: project.to_string() });
+        }
     }
 
-    // Check that we actually got a token (not empty output)
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    if stdout.trim().is_empty() {
-        debug!("gcloud auth print-access-token returned empty output");
-        return Err(RemoteError::GcloudAuthFailed);
-    }
-
-    debug!("gcloud auth check passed");
     Ok(())
 }
 
@@ -113,13 +136,64 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_check_gcloud_auth_returns_error_types() {
+    fn gcloud_preflight_stops_at_the_first_failed_status_probe() {
+        let mut seen = Vec::new();
+        let error = check_gcloud_preflight_with("profile-project", |args| {
+            seen.push(args.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>());
+            seen.len() == 1
+        })
+        .unwrap_err();
+
+        assert_eq!(
+            seen,
+            vec![
+                vec!["auth", "print-access-token"],
+                vec!["auth", "application-default", "print-access-token"],
+            ]
+        );
+        assert!(matches!(
+            error,
+            RemoteError::GcloudPreflightFailed {
+                check: "application-default credentials",
+                project,
+            } if project == "profile-project"
+        ));
+    }
+
+    #[test]
+    fn gcloud_preflight_uses_the_profile_project_without_mutating_config() {
+        let mut seen = Vec::new();
+        check_gcloud_preflight_with("profile-project", |args| {
+            seen.push(args.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>());
+            true
+        })
+        .unwrap();
+
+        assert_eq!(
+            seen.last().unwrap(),
+            &vec!["projects", "describe", "profile-project", "--format=value(projectNumber)",]
+        );
+        assert!(seen.iter().all(|args| args.first().map_or(true, |arg| arg != "config")));
+    }
+
+    #[test]
+    fn gcloud_preflight_errors_for_empty_profile_project() {
+        assert!(matches!(
+            check_gcloud_preflight("   "),
+            Err(RemoteError::ConfigSyncError(message)) if message.contains("no usable project")
+        ));
+    }
+
+    #[test]
+    fn gcloud_preflight_error_mentions_the_local_reauth_command() {
         // This test verifies the error types exist and can be constructed
         let gcloud_not_installed = RemoteError::GcloudNotInstalled;
         assert!(gcloud_not_installed.to_string().contains("gcloud CLI not found"));
 
-        let gcloud_auth_failed = RemoteError::GcloudAuthFailed;
-        assert!(gcloud_auth_failed.to_string().contains("gcloud auth is missing or expired"));
+        let gcloud_auth_failed = RemoteError::GcloudPreflightFailed {
+            check: "user authentication",
+            project: "profile-project".to_string(),
+        };
         assert!(gcloud_auth_failed.to_string().contains("gcloud auth login --update-adc"));
     }
 }

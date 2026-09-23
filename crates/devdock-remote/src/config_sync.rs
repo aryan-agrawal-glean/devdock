@@ -1,17 +1,22 @@
 //! Configuration file synchronization to remote workspaces.
 //!
-//! Optimized for minimal SSH connections:
-//! - Phase 1 (1 SSH): Create directories, write profile, custom.ini, and claude.json
-//! - Phase 2 (1 SCP): Copy gcloud credential files (GCP/unknown platform only)
-//! - Phase 3 (1 SSH): Finalize gcloud - move creds, verify auth, set project (GCP/unknown platform only)
+//! DevDock transfers only ordinary configuration and optional GitHub
+//! credentials. Gcloud credential transport is delegated to Scio's pinned,
+//! gcloud-only helper and then verified separately.
 
-use crate::{RemoteError, Result};
+use crate::{process::output_with_timeout, ssh, RemoteError, Result};
 use devdock_core::profile::Profile;
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::process::Command;
+use std::path::PathBuf;
+use std::process::{Command, Stdio};
 use tracing::{debug, info};
+
+/// Pinned Scio helper contract approved for this engine-only integration.
+const SCIO_CODER_SYNC_CREDS_SHA256: &str =
+    "ee224f2c2391108097f748189066b237f0f3b59b85d4cadb6d282de9f2602bee";
 
 // ─── Profile helpers (local only, no SSH) ──────────────────────────────────────
 
@@ -24,12 +29,6 @@ fn get_profile(profile_path: &Path) -> Result<Profile> {
         .map_err(|e| RemoteError::ConfigSyncError(format!("Failed to parse profile: {e}")))?;
 
     Ok(profile)
-}
-
-/// Get GCP project from profile YAML.
-pub fn get_profile_project(profile_path: &Path) -> Result<String> {
-    let profile = get_profile(profile_path)?;
-    Ok(profile.project)
 }
 
 /// Get platform from profile YAML.
@@ -72,6 +71,19 @@ fn compute_remote_profile_path(profile_path: &Path) -> Result<(String, String)> 
     Ok((remote_path, remote_dir))
 }
 
+/// Return the selected profile's repository-relative path in the Coder Scio checkout.
+///
+/// Remote workspace reuse may reconcile only this DevDock-managed file before
+/// converging the whole checkout to its requested immutable origin OID.
+pub fn remote_profile_repo_path(profile_path: &Path) -> Result<String> {
+    let (remote_path, _) = compute_remote_profile_path(profile_path)?;
+    remote_path.strip_prefix("/home/workspace/scio/").map(str::to_string).ok_or_else(|| {
+        RemoteError::ConfigSyncError(format!(
+            "Selected profile path is outside the remote Scio checkout: {remote_path}"
+        ))
+    })
+}
+
 /// Sync only the selected profile file to a remote workspace.
 pub fn sync_profile_file(workspace: &str, profile_path: &Path, verbose: bool) -> Result<()> {
     if !profile_path.exists() {
@@ -86,17 +98,12 @@ pub fn sync_profile_file(workspace: &str, profile_path: &Path, verbose: bool) ->
         println!("    → Syncing profile file to remote...");
     }
 
-    let script = format!(
-        "set -e\nmkdir -p '{}'\ncat > '{}' << 'DEVDOCK_PROFILE_EOF'\n{}\nDEVDOCK_PROFILE_EOF\n",
-        remote_profile_dir, remote_profile_path, profile_content
-    );
+    let mut script = format!("set -e\nmkdir -p {}\n", shell_quote(&remote_profile_dir));
+    script.push_str(&exact_text_write_command(&remote_profile_path, &profile_content));
 
-    let output = Command::new("coder")
-        .arg("ssh")
-        .arg(workspace)
-        .arg("--")
-        .arg(&script)
-        .output()
+    let mut command = Command::new("coder");
+    command.arg("ssh").arg(workspace).arg("--").arg(&script);
+    let output = output_with_timeout(&mut command, "coder ssh profile sync")
         .map_err(|e| RemoteError::ConfigSyncError(format!("Profile sync SSH failed: {e}")))?;
 
     if !output.status.success() {
@@ -174,137 +181,6 @@ pub fn sync_aws_credentials(_workspace: &str, verbose: bool) -> Result<()> {
     Ok(())
 }
 
-// ─── GCloud credential staging (local + SCP, no coder ssh) ────────────────────
-
-/// Stage gcloud credentials locally into a temp directory for SCP transfer.
-/// Returns None if no gcloud credentials exist locally.
-/// Caller must keep the returned TempDir alive until SCP completes.
-fn stage_gcloud_locally(verbose: bool) -> Result<Option<(tempfile::TempDir, usize)>> {
-    let gcloud_dir = dirs::home_dir()
-        .ok_or_else(|| RemoteError::ConfigSyncError("Cannot determine home directory".to_string()))?
-        .join(".config/gcloud");
-
-    if !gcloud_dir.exists() {
-        debug!("No ~/.config/gcloud found; skipping gcloud sync");
-        if verbose {
-            println!("    → No local gcloud credentials found, skipping");
-        }
-        return Ok(None);
-    }
-
-    let temp_dir = tempfile::tempdir().map_err(|e| {
-        RemoteError::ConfigSyncError(format!("Failed to create temp directory: {e}"))
-    })?;
-    let gcloud_temp = temp_dir.path().join("gcloud");
-
-    std::fs::create_dir_all(&gcloud_temp).map_err(|e| {
-        RemoteError::ConfigSyncError(format!("Failed to create gcloud temp dir: {e}"))
-    })?;
-    std::fs::create_dir_all(gcloud_temp.join("configurations")).map_err(|e| {
-        RemoteError::ConfigSyncError(format!("Failed to create configurations dir: {e}"))
-    })?;
-
-    let gcloud_files = vec![
-        "application_default_credentials.json",
-        "access_tokens.db",
-        "credentials.db",
-        "active_config",
-        "configurations/config_default",
-        "env.yaml",
-    ];
-
-    info!("Staging gcloud credential files...");
-    let mut staged_count = 0usize;
-
-    for file in &gcloud_files {
-        let src = gcloud_dir.join(file);
-        if src.exists() {
-            let dest = gcloud_temp.join(file);
-            if let Some(parent) = dest.parent() {
-                std::fs::create_dir_all(parent).map_err(|e| {
-                    RemoteError::ConfigSyncError(format!("Failed to create parent dir: {e}"))
-                })?;
-            }
-            std::fs::copy(&src, &dest)
-                .map_err(|e| RemoteError::ConfigSyncError(format!("Failed to copy {file}: {e}")))?;
-
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let mut perms = std::fs::metadata(&dest)
-                    .map_err(|e| {
-                        RemoteError::ConfigSyncError(format!("Failed to get metadata: {e}"))
-                    })?
-                    .permissions();
-                perms.set_mode(0o600);
-                std::fs::set_permissions(&dest, perms).map_err(|e| {
-                    RemoteError::ConfigSyncError(format!("Failed to set permissions: {e}"))
-                })?;
-            }
-
-            debug!("Staged file: {}", file);
-            staged_count += 1;
-        }
-    }
-
-    if !gcloud_temp.join("application_default_credentials.json").exists() {
-        return Err(RemoteError::ConfigSyncError(
-            "application_default_credentials.json not found locally - run: gcloud auth application-default login".to_string()
-        ));
-    }
-
-    if verbose {
-        println!("    → Staged {} credential files", staged_files_msg(staged_count));
-    }
-    info!("Staged {} gcloud files", staged_count);
-
-    Ok(Some((temp_dir, staged_count)))
-}
-
-fn staged_files_msg(count: usize) -> String {
-    format!("{count} credential file{}", if count == 1 { "" } else { "s" })
-}
-
-/// SCP staged gcloud credentials to remote workspace.
-fn scp_gcloud_to_remote(workspace: &str, temp_dir: &Path, verbose: bool) -> Result<()> {
-    let gcloud_temp = temp_dir.join("gcloud");
-    let gcloud_temp_str = gcloud_temp.to_string_lossy();
-    let scp_target = format!("{workspace}.coder:~/.secrets-sync/");
-
-    info!("Copying gcloud credentials to remote...");
-    if verbose {
-        println!("      (copying files via scp...)");
-    }
-
-    let output = Command::new("scp")
-        .arg("-O")
-        .arg("-q")
-        .arg("-o")
-        .arg("StrictHostKeyChecking=no")
-        .arg("-o")
-        .arg("UserKnownHostsFile=/dev/null")
-        .arg("-o")
-        .arg("ConnectTimeout=30")
-        .arg("-o")
-        .arg("ServerAliveInterval=10")
-        .arg("-o")
-        .arg("ServerAliveCountMax=3")
-        .arg("-r")
-        .arg(gcloud_temp_str.as_ref())
-        .arg(&scp_target)
-        .output()
-        .map_err(|e| RemoteError::ConfigSyncError(format!("Failed to run scp: {e}")))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(RemoteError::ConfigSyncError(format!(
-            "Failed to copy gcloud credentials: {stderr}"
-        )));
-    }
-
-    Ok(())
-}
-
 // ─── GitHub credential staging and sync ───────────────────────────────────────
 
 #[derive(Serialize)]
@@ -370,7 +246,7 @@ fn read_local_git_credentials() -> Result<(String, String)> {
     Ok((username, token))
 }
 
-/// Fail fast before workspace creation when local GitHub credentials cannot be copied.
+/// Fail fast before any remote workspace mutation when local GitHub credentials cannot be copied.
 pub fn check_local_git_credentials() -> Result<()> {
     let _ = read_local_git_credentials()?;
     Ok(())
@@ -382,14 +258,24 @@ fn stage_git_credentials_locally() -> Result<tempfile::TempDir> {
     let temp_dir = tempfile::tempdir().map_err(|e| {
         RemoteError::ConfigSyncError(format!("Failed to stage GitHub credentials: {e}"))
     })?;
-    let gh_dir = temp_dir.path().join("git-creds/gh");
+    write_staged_git_credentials(temp_dir.path(), &username, &token)?;
+    Ok(temp_dir)
+}
+
+fn write_staged_git_credentials(
+    staging_root: &Path,
+    username: &str,
+    token: &str,
+) -> Result<PathBuf> {
+    let gh_dir = staging_root.join("git-creds/gh");
     std::fs::create_dir_all(&gh_dir).map_err(|e| {
         RemoteError::ConfigSyncError(format!("Failed to stage GitHub credentials: {e}"))
     })?;
 
     let mut users = BTreeMap::new();
-    users.insert(username.clone(), GhUser { oauth_token: token });
-    let hosts = GhHosts { github_com: GhHost { git_protocol: "https", users, user: username } };
+    users.insert(username.to_string(), GhUser { oauth_token: token.to_string() });
+    let hosts =
+        GhHosts { github_com: GhHost { git_protocol: "https", users, user: username.to_string() } };
     let hosts_yaml = serde_yaml::to_string(&hosts).map_err(|e| {
         RemoteError::ConfigSyncError(format!("Failed to serialize GitHub credentials: {e}"))
     })?;
@@ -406,13 +292,29 @@ fn stage_git_credentials_locally() -> Result<tempfile::TempDir> {
         )?;
     }
 
-    Ok(temp_dir)
+    Ok(hosts_path)
 }
 
 fn scp_git_credentials_to_remote(workspace: &str, temp_dir: &Path) -> Result<()> {
     let source = temp_dir.join("git-creds");
+    let mut command = git_credentials_scp_command(workspace, &source);
+    let output = output_with_timeout(&mut command, "scp GitHub credentials").map_err(|e| {
+        RemoteError::ConfigSyncError(format!("Failed to transfer GitHub credentials: {e}"))
+    })?;
+
+    if !output.status.success() {
+        return Err(RemoteError::ConfigSyncError(
+            "Failed to transfer GitHub credentials with scp; credential data was not included in the error output."
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn git_credentials_scp_command(workspace: &str, source: &Path) -> Command {
     let target = format!("{workspace}.coder:~/.secrets-sync/");
-    let output = Command::new("scp")
+    let mut command = Command::new("scp");
+    command
         .arg("-O")
         .arg("-q")
         .arg("-o")
@@ -423,19 +325,8 @@ fn scp_git_credentials_to_remote(workspace: &str, temp_dir: &Path) -> Result<()>
         .arg("ConnectTimeout=30")
         .arg("-r")
         .arg(source)
-        .arg(target)
-        .output()
-        .map_err(|e| {
-            RemoteError::ConfigSyncError(format!("Failed to transfer GitHub credentials: {e}"))
-        })?;
-
-    if !output.status.success() {
-        return Err(RemoteError::ConfigSyncError(format!(
-            "Failed to transfer GitHub credentials: {}",
-            String::from_utf8_lossy(&output.stderr)
-        )));
-    }
-    Ok(())
+        .arg(target);
+    command
 }
 
 fn git_credentials_finalize_script() -> &'static str {
@@ -506,25 +397,46 @@ fn finalize_git_credentials(workspace: &str, log_file: Option<&Path>, verbose: b
     Ok(())
 }
 
-// ─── Main entry point ──────────────────────────────────────────────────────────
-
-/// Status returned from config sync, including credential verification results.
-/// This avoids the need for a separate SSH call to verify auth.
-#[derive(Debug, Default)]
-pub struct ConfigSyncStatus {
-    /// Whether ADC credentials are expired on the remote
-    pub adc_expired: bool,
+fn git_credentials_staging_cleanup_script() -> &'static str {
+    r#"set -e
+rm -rf ~/.secrets-sync/git-creds
+"#
 }
 
-/// Sync all configuration files to remote workspace.
+fn cleanup_remote_git_credential_staging(workspace: &str, log_file: Option<&Path>) -> Result<()> {
+    crate::ssh::ssh_exec_with_log(workspace, git_credentials_staging_cleanup_script(), log_file)?;
+    Ok(())
+}
+
+fn sync_staged_git_credentials(
+    workspace: &str,
+    temp_dir: &Path,
+    log_file: Option<&Path>,
+    verbose: bool,
+) -> Result<()> {
+    let transfer_result = scp_git_credentials_to_remote(workspace, temp_dir)
+        .and_then(|_| finalize_git_credentials(workspace, log_file, verbose));
+
+    if let Err(error) = transfer_result {
+        if cleanup_remote_git_credential_staging(workspace, log_file).is_err() {
+            return Err(RemoteError::ConfigSyncError(
+                "GitHub credential transfer failed and its remote temporary staging directory could not be removed. Inspect the owned workspace before retrying."
+                    .to_string(),
+            ));
+        }
+        return Err(error);
+    }
+
+    Ok(())
+}
+
+// ─── Main entry point ──────────────────────────────────────────────────────────
+
+/// Sync profile/custom.ini and optional GitHub credentials to a remote workspace.
 ///
-/// Uses minimal SSH connections:
-/// - Phase 1 (1 SSH): Create directories, write profile, custom.ini, and claude.json
-/// - Phase 2 (1 SCP): Copy gcloud credentials (GCP/unknown platform only)
-/// - Phase 3 (1 SSH): Finalize gcloud - move creds, verify auth, set project (GCP/unknown platform only)
+/// Gcloud credentials are deliberately excluded: remote startup must use
+/// `sync_gcloud_credentials_via_scio_helper` as its sole credential transport.
 ///
-/// Returns `ConfigSyncStatus` with credential verification results from Phase 3,
-/// allowing the caller to handle ADC expiration without an additional SSH call.
 pub fn sync_all_config(
     workspace: &str,
     profile_path: &Path,
@@ -532,7 +444,7 @@ pub fn sync_all_config(
     copy_git_creds: bool,
     log_file: Option<&Path>,
     verbose: bool,
-) -> Result<ConfigSyncStatus> {
+) -> Result<()> {
     use std::fs::OpenOptions;
     use std::io::Write;
 
@@ -566,32 +478,8 @@ pub fn sync_all_config(
         None
     };
 
-    let platform = get_profile_platform(profile_path).ok();
-    let is_gcp = matches!(platform.as_deref(), Some("google") | Some("gcp"));
-
-    // Stage gcloud credentials locally before any SSH (fail fast for GCP, best-effort for unknown)
-    let gcloud_staging = if is_gcp {
-        if verbose {
-            println!("    → Syncing gcloud credentials (this may take 10-20s)...");
-        }
-        stage_gcloud_locally(verbose)?
-    } else if platform.is_none() {
-        if verbose {
-            println!("    → Could not determine platform, checking gcloud credentials...");
-        }
-        match stage_gcloud_locally(verbose) {
-            Ok(staging) => staging,
-            Err(e) => {
-                debug!("Best-effort gcloud staging failed: {}", e);
-                None
-            }
-        }
-    } else {
-        None
-    };
-
     let git_staging = if copy_git_creds { Some(stage_git_credentials_locally()?) } else { None };
-    let needs_secrets_sync = gcloud_staging.is_some() || git_staging.is_some();
+    let needs_secrets_sync = git_staging.is_some();
 
     // ─── Phase 1: Single SSH for all config file writes ────────────────────
 
@@ -616,18 +504,18 @@ pub fn sync_all_config(
         if needs_secrets_sync { " ~/.secrets-sync" } else { "" }
     ));
 
-    // Write profile via heredoc
-    script.push_str(&format!(
-        "cat > '{}' << 'DEVDOCK_PROFILE_EOF'\n{}\nDEVDOCK_PROFILE_EOF\n\n",
-        remote_profile_path, profile_content
-    ));
+    // Preserve the local file byte-for-byte. A heredoc would add a newline when
+    // the source already ends with one, recreating managed profile residue.
+    script.push_str(&exact_text_write_command(&remote_profile_path, &profile_content));
+    script.push('\n');
 
     // Write custom.ini via heredoc (conditional)
     if let Some(ref ini_content) = custom_ini_content {
-        script.push_str(&format!(
-            "cat > /home/workspace/scio/config/custom.ini << 'DEVDOCK_INI_EOF'\n{}\nDEVDOCK_INI_EOF\n\n",
-            ini_content
+        script.push_str(&exact_text_write_command(
+            "/home/workspace/scio/config/custom.ini",
+            ini_content,
         ));
+        script.push('\n');
     }
 
     // Merge Claude MCP config via Python (non-critical: || true so set -e doesn't abort)
@@ -670,12 +558,9 @@ print(f"✓ Claude MCP configuration updated at {claude_config_path}")
     );
     script.push_str("DEVDOCK_PYTHON_EOF\n");
 
-    let output = Command::new("coder")
-        .arg("ssh")
-        .arg(workspace)
-        .arg("--")
-        .arg(&script)
-        .output()
+    let mut command = Command::new("coder");
+    command.arg("ssh").arg(workspace).arg("--").arg(&script);
+    let output = output_with_timeout(&mut command, "coder ssh configuration sync")
         .map_err(|e| RemoteError::ConfigSyncError(format!("Phase 1 SSH failed: {e}")))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -723,30 +608,15 @@ print(f"✓ Claude MCP configuration updated at {claude_config_path}")
 
     debug!("Phase 1 complete: config files synced");
 
-    // ─── Credential sync (Phase 2 + 3 for GCP, local-only for others) ─────
-
-    let mut status = ConfigSyncStatus::default();
-
+    // ─── Optional GitHub credential sync (gcloud is handled by Scio) ────────
     if let Some(ref temp_dir) = git_staging {
         if verbose {
             println!("    → Copying local GitHub credentials...");
         }
-        scp_git_credentials_to_remote(workspace, temp_dir.path())?;
-        finalize_git_credentials(workspace, log_file, verbose)?;
+        sync_staged_git_credentials(workspace, temp_dir.path(), log_file, verbose)?;
     }
 
-    match platform.as_deref() {
-        Some("google") | Some("gcp") => {
-            if let Some((ref temp_dir, _count)) = gcloud_staging {
-                // Phase 2: SCP gcloud credentials
-                scp_gcloud_to_remote(workspace, temp_dir.path(), verbose)?;
-
-                // Phase 3: Single SSH for gcloud finalization
-                let project = get_profile_project(profile_path).ok();
-                status.adc_expired =
-                    run_gcloud_finalize(workspace, project.as_deref(), log_file, verbose)?;
-            }
-        }
+    match get_profile_platform(profile_path).ok().as_deref() {
         Some("aws") => {
             if let Err(e) = sync_aws_credentials(workspace, verbose) {
                 return Err(RemoteError::ConfigSyncError(format!(
@@ -754,9 +624,9 @@ print(f"✓ Claude MCP configuration updated at {claude_config_path}")
                 )));
             }
         }
-        Some("azure") => {
+        Some("azure") | Some("google") | Some("gcp") => {
             if verbose {
-                println!("    → Azure platform detected (credentials managed via az cli)");
+                println!("    → Platform credentials handled outside DevDock config sync");
             }
         }
         Some(other) => {
@@ -766,18 +636,8 @@ print(f"✓ Claude MCP configuration updated at {claude_config_path}")
         }
         None => {
             if verbose {
-                println!("    → Could not determine platform, syncing available credentials...");
+                println!("    → Could not determine platform, skipping platform credential sync");
             }
-            // Best-effort gcloud: SCP + finalize (swallow errors)
-            if let Some((ref temp_dir, _count)) = gcloud_staging {
-                if let Ok(()) = scp_gcloud_to_remote(workspace, temp_dir.path(), verbose) {
-                    if let Ok(adc_expired) = run_gcloud_finalize(workspace, None, log_file, verbose)
-                    {
-                        status.adc_expired = adc_expired;
-                    }
-                }
-            }
-            let _ = sync_aws_credentials(workspace, verbose);
         }
     }
 
@@ -791,196 +651,162 @@ print(f"✓ Claude MCP configuration updated at {claude_config_path}")
         println!("    ✓ All configuration files synced");
     }
 
-    Ok(status)
+    Ok(())
 }
 
-/// Phase 3: Finalize gcloud setup on remote in a single SSH connection.
+/// Invoke Scio's checked-out credential transport in its gcloud-only mode.
 ///
-/// Moves staged credentials to final locations, verifies auth, and optionally sets project.
-/// Returns whether ADC credentials are expired.
-fn run_gcloud_finalize(
+/// DevDock owns sequencing and verification, while Scio owns credential
+/// selection, filtering, and transport. Helper stdout/stderr are deliberately
+/// not copied into operation logs because they may contain credential-adjacent
+/// information or obsolete remote-login guidance.
+pub fn sync_gcloud_credentials_via_scio_helper(
     workspace: &str,
-    project: Option<&str>,
+    project: &str,
     log_file: Option<&Path>,
     verbose: bool,
-) -> Result<bool> {
-    use std::fs::OpenOptions;
-    use std::io::Write;
-
+) -> Result<()> {
+    let helper = resolve_scio_credential_helper()?;
+    info!(workspace, helper = %helper.display(), "Invoking Scio gcloud credential helper");
     if verbose {
-        println!("    → Finalizing gcloud setup on remote (single connection)...");
-    }
-    info!("Phase 3: Finalizing gcloud setup on {}", workspace);
-
-    if let Some(log_path) = log_file {
-        if let Some(proj) = project {
-            if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(log_path) {
-                let _ = writeln!(file, "Setting gcloud project: {proj}");
-            }
-        }
+        println!("    → Syncing gcloud credentials through the Scio helper...");
     }
 
-    let mut finalize_script = String::from(
-        r#"set -e
-
-# Move credentials from staging to final locations
-ls -la ~/.secrets-sync/gcloud/ 2>&1 || { echo "ERROR: No secrets-sync/gcloud dir!"; exit 1; }
-
-mkdir -p ~/.config/gcloud ~/.config/gcloud/configurations
-rsync -a ~/.secrets-sync/gcloud/ ~/.config/gcloud/ 2>&1
-
-if [ ! -f ~/.config/gcloud/application_default_credentials.json ]; then
-    echo "ERROR: application_default_credentials.json not copied!"
-    exit 1
-fi
-
-mkdir -p /tmp/.config/gcloud/configurations
-rsync -a ~/.secrets-sync/gcloud/ /tmp/.config/gcloud/ 2>&1
-
-# ~/.config/gcloud is volume-mounted into Docker containers (e.g. cloud-sql-proxy)
-# which run as a different UID, so it needs to be world-readable
-chmod 755 ~/.config/gcloud ~/.config/gcloud/configurations 2>/dev/null || true
-chmod 644 ~/.config/gcloud/application_default_credentials.json 2>/dev/null || true
-chmod 755 /tmp/.config/gcloud /tmp/.config/gcloud/configurations 2>/dev/null || true
-chmod 644 /tmp/.config/gcloud/application_default_credentials.json 2>/dev/null || true
-
-if gcloud auth application-default print-access-token >/dev/null 2>&1; then
-    echo "DEVDOCK_ADC:valid"
-else
-    echo "DEVDOCK_ADC:invalid"
-fi
-
-# Authenticate Docker with GCP Artifact Registry using the synced gcloud credentials
-if command -v docker >/dev/null 2>&1; then
-    if gcloud auth print-access-token 2>/dev/null | docker login -u oauth2accesstoken --password-stdin https://us-central1-docker.pkg.dev >/dev/null 2>&1; then
-        echo "DEVDOCK_DOCKER_LOGIN:success"
-    else
-        echo "DEVDOCK_DOCKER_LOGIN:failed"
-    fi
-else
-    echo "DEVDOCK_DOCKER_LOGIN:skipped"
-fi
-
-rm -rf ~/.secrets-sync
-
-# Verify gcloud auth (with timeout to avoid hangs)
-AUTH_ACCOUNT=$(timeout 10 gcloud auth list --filter=status:ACTIVE --format='value(account)' 2>/dev/null || true)
-if [ -n "$AUTH_ACCOUNT" ]; then
-    echo "DEVDOCK_AUTH:$AUTH_ACCOUNT"
-else
-    echo "DEVDOCK_AUTH:none"
-fi
-"#,
-    );
-
-    if let Some(proj) = project {
-        finalize_script.push_str(&format!(
-            "\ngcloud config set project '{}' 2>&1 || echo 'DEVDOCK_WARN:project_set_failed'\n",
-            proj
-        ));
-    }
-
-    let output = Command::new("coder")
-        .arg("ssh")
+    let mut command = Command::new(&helper);
+    command
         .arg(workspace)
-        .arg("--")
-        .arg(&finalize_script)
-        .output()
-        .map_err(|e| RemoteError::ConfigSyncError(format!("Phase 3 SSH failed: {e}")))?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-
-    if verbose {
-        println!();
-        println!("    === Credential Sync Debug ===");
-        for line in stdout.lines() {
-            if !line.starts_with("DEVDOCK_") {
-                println!("    {line}");
-            }
-        }
-        if !stderr.is_empty() {
-            println!("    STDERR: {stderr}");
-        }
-        println!("    === End Debug ===");
-        println!();
-    }
-
-    if !output.status.success() {
+        .args(scio_gcloud_helper_args())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let status = output_with_timeout(&mut command, "Scio gcloud credential helper")
+        .map_err(|error| {
+            RemoteError::ConfigSyncError(format!(
+                "Failed to start Scio gcloud credential helper: {error}"
+            ))
+        })?
+        .status;
+    if !status.success() {
         return Err(RemoteError::ConfigSyncError(format!(
-            "Gcloud finalization failed: {}\nstdout: {}\nstderr: {}",
-            output.status, stdout, stderr
+            "Scio gcloud credential helper failed with exit status {}",
+            status.code().map_or_else(|| "signal".to_string(), |code| code.to_string())
         )));
     }
 
-    // Parse structured output markers
-    let mut adc_expired = false;
+    verify_remote_gcloud_project(workspace, project, log_file)?;
+    if verbose {
+        println!("      ✓ Remote user auth, ADC, and selected project verified");
+    }
+    Ok(())
+}
 
-    for line in stdout.lines() {
-        if let Some(account) = line.strip_prefix("DEVDOCK_AUTH:") {
-            if account != "none" {
-                info!("gcloud credentials synced and verified: {}", account);
-                if verbose {
-                    println!("      (authenticated as: {})", account);
-                }
-            } else if verbose {
-                println!("      (no active account found)");
-            }
+fn resolve_scio_credential_helper() -> Result<PathBuf> {
+    if let Some(path) = std::env::var_os("DEVDOCK_CODER_SYNC_CREDS") {
+        return require_scio_credential_helper(PathBuf::from(path));
+    }
+
+    let mut roots = Vec::new();
+    for variable in ["DEVDOCK_SCIO_ROOT", "DEVDOCK_ROOT"] {
+        if let Some(root) = std::env::var_os(variable) {
+            roots.push(PathBuf::from(root));
         }
+    }
+    if let Ok(current_dir) = std::env::current_dir() {
+        roots.push(current_dir);
+    }
 
-        if line == "DEVDOCK_ADC:invalid" {
-            adc_expired = true;
-            if stderr.contains("invalid_grant")
-                || stderr.contains("refreshing your current auth tokens")
-            {
-                eprintln!("\n⚠️  WARNING: Synced gcloud credentials appear to be expired!");
-                eprintln!("   You will need to authenticate on the remote workspace:");
-                eprintln!("     1. coder ssh {workspace}");
-                eprintln!("     2. gcloud auth login");
-                eprintln!("     3. gcloud auth application-default login");
-                eprintln!();
-            }
-        }
-
-        if let Some(status) = line.strip_prefix("DEVDOCK_DOCKER_LOGIN:") {
-            match status {
-                "success" => {
-                    info!("Docker login to GCP Artifact Registry succeeded");
-                    if verbose {
-                        println!("      (docker login to us-central1-docker.pkg.dev: ok)");
-                    }
-                }
-                "failed" => {
-                    debug!("Docker login to GCP Artifact Registry failed");
-                    if verbose {
-                        println!("      (docker login to us-central1-docker.pkg.dev: failed — images may fail to pull)");
-                    }
-                }
-                "skipped" => {
-                    debug!("Docker not available on remote, skipping docker login");
-                }
-                _ => {}
-            }
-        }
-
-        if line.contains("DEVDOCK_WARN:project_set_failed") {
-            debug!("Failed to set gcloud project");
-            if let Some(log_path) = log_file {
-                if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(log_path) {
-                    let _ = writeln!(file, "WARNING: Failed to set gcloud project");
-                }
-            }
+    for root in roots {
+        let candidate = root.join("coder/coder-sync-creds.sh");
+        if candidate.is_file() {
+            return require_scio_credential_helper(candidate);
         }
     }
 
-    if let Some(log_path) = log_file {
-        if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(log_path) {
-            let _ = writeln!(file, "✓ gcloud setup finalized");
-        }
+    Err(RemoteError::ConfigSyncError(
+        "Scio credential helper not found. Run from the Scio checkout, set DEVDOCK_SCIO_ROOT, or set DEVDOCK_CODER_SYNC_CREDS to coder/coder-sync-creds.sh. The legacy DevDock gcloud-copy path is intentionally unavailable."
+            .to_string(),
+    ))
+}
+
+fn require_scio_credential_helper(path: PathBuf) -> Result<PathBuf> {
+    if !path.is_file() {
+        Err(RemoteError::ConfigSyncError(format!(
+            "DEVDOCK_CODER_SYNC_CREDS does not point to a file: {}",
+            path.display()
+        )))
+    } else if !scio_helper_has_expected_checksum(&path)? {
+        Err(RemoteError::ConfigSyncError(format!(
+            "Scio credential helper checksum does not match the supported contract at {}. Update the helper integration or use the pinned Scio checkout; DevDock will not fall back to its legacy gcloud copy path.",
+            path.display()
+        )))
+    } else {
+        Ok(path)
+    }
+}
+
+fn scio_helper_has_expected_checksum(path: &Path) -> Result<bool> {
+    let bytes = std::fs::read(path).map_err(|error| {
+        RemoteError::ConfigSyncError(format!(
+            "Failed to read Scio credential helper {}: {error}",
+            path.display()
+        ))
+    })?;
+    Ok(format!("{:x}", Sha256::digest(bytes)) == SCIO_CODER_SYNC_CREDS_SHA256)
+}
+
+fn verify_remote_gcloud_project(
+    workspace: &str,
+    project: &str,
+    log_file: Option<&Path>,
+) -> Result<()> {
+    let project = project.trim();
+    if project.is_empty() {
+        return Err(RemoteError::ConfigSyncError(
+            "selected profile has no usable project".to_string(),
+        ));
     }
 
-    debug!("Phase 3 complete: gcloud setup finalized");
-    Ok(adc_expired)
+    let script = remote_gcloud_verification_script(project);
+    let output = ssh::ssh_exec_with_log(workspace, &script, log_file)?;
+    if !output.lines().any(|line| line == "DEVDOCK_REMOTE_GCLOUD_OK") {
+        return Err(RemoteError::ConfigSyncError(
+            "remote gcloud verification did not report success".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn scio_gcloud_helper_args() -> [&'static str; 5] {
+    [
+        "--skip-glean-token",
+        "--skip-glean-mcp",
+        "--skip-gpg",
+        "--skip-codex-install",
+        "--skip-remote-control",
+    ]
+}
+
+fn remote_gcloud_verification_script(project: &str) -> String {
+    let project = shell_quote(project);
+    format!(
+        r#"set -eu
+project={project}
+gcloud config set project "$project" >/dev/null 2>&1
+test "$(gcloud config get-value project 2>/dev/null)" = "$project"
+gcloud auth print-access-token >/dev/null 2>&1
+gcloud auth application-default print-access-token >/dev/null 2>&1
+gcloud projects describe "$project" --format='value(projectNumber)' >/dev/null 2>&1
+printf 'DEVDOCK_REMOTE_GCLOUD_OK\n'
+"#
+    )
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+fn exact_text_write_command(path: &str, content: &str) -> String {
+    format!("printf '%s' {} > {}\n", shell_quote(content), shell_quote(path))
 }
 
 #[cfg(test)]
@@ -1013,6 +839,93 @@ mod tests {
 
         assert!(!script.contains("oauth_token:"));
         assert!(!script.contains("gh auth token"));
+        assert!(!script.contains("auth login"));
         assert!(script.contains("~/.secrets-sync/git-creds/gh/hosts.yml"));
+    }
+
+    #[test]
+    fn staged_git_credentials_are_github_com_only_and_private() {
+        let staging = tempfile::tempdir().expect("create credential staging directory");
+        let hosts_path = write_staged_git_credentials(staging.path(), "octocat", "test-token")
+            .expect("stage minimal GitHub credentials");
+        let hosts: serde_yaml::Value =
+            serde_yaml::from_str(&std::fs::read_to_string(&hosts_path).expect("read staged hosts"))
+                .expect("parse staged hosts");
+        let hosts = hosts.as_mapping().expect("hosts mapping");
+
+        assert_eq!(hosts.len(), 1);
+        assert!(hosts.contains_key("github.com"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(hosts_path).expect("staged metadata").permissions().mode()
+                    & 0o777,
+                0o600
+            );
+        }
+    }
+
+    #[test]
+    fn git_credential_transfer_uses_legacy_scp_and_scoped_failure_cleanup() {
+        let command = git_credentials_scp_command("owner-workspace", Path::new("/run/git-creds"));
+        let args =
+            command.get_args().map(|arg| arg.to_string_lossy().into_owned()).collect::<Vec<_>>();
+
+        assert!(args.contains(&"-O".to_string()));
+        assert!(args.contains(&"StrictHostKeyChecking=no".to_string()));
+        assert_eq!(args.last(), Some(&"owner-workspace.coder:~/.secrets-sync/".to_string()));
+
+        let cleanup = git_credentials_staging_cleanup_script();
+        assert!(cleanup.contains("rm -rf ~/.secrets-sync/git-creds"));
+        assert!(!cleanup.contains("~/.config/gh"));
+        assert!(!cleanup.contains("auth login"));
+    }
+
+    #[test]
+    fn scio_helper_is_invoked_in_gcloud_only_mode() {
+        assert_eq!(
+            scio_gcloud_helper_args(),
+            [
+                "--skip-glean-token",
+                "--skip-glean-mcp",
+                "--skip-gpg",
+                "--skip-codex-install",
+                "--skip-remote-control",
+            ]
+        );
+    }
+
+    #[test]
+    fn remote_gcloud_verification_is_status_only_and_never_interactive() {
+        let script = remote_gcloud_verification_script("profile-project");
+
+        assert!(script.contains("gcloud config set project"));
+        assert!(script.contains("gcloud auth print-access-token >/dev/null 2>&1"));
+        assert!(
+            script.contains("gcloud auth application-default print-access-token >/dev/null 2>&1")
+        );
+        assert!(script.contains("gcloud projects describe"));
+        assert!(!script.contains("gcloud auth login"));
+        assert!(!script.contains("application-default login"));
+    }
+
+    #[test]
+    fn exact_text_write_command_preserves_profile_bytes() {
+        let temp_dir = tempfile::tempdir().expect("create output directory");
+        let output_path = temp_dir.path().join("profile.yaml");
+        let content = "project: qe_smoke_test\n";
+        let script = format!(
+            "set -e\n{}",
+            exact_text_write_command(&output_path.display().to_string(), content)
+        );
+        let output = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(script)
+            .output()
+            .expect("run exact write script");
+
+        assert!(output.status.success());
+        assert_eq!(std::fs::read(output_path).expect("read output"), content.as_bytes());
     }
 }

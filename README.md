@@ -122,6 +122,7 @@ devdock list
 ## 📚 Documentation
 
 - [Getting Started](docs/getting-started.md)
+- [Valkey State in Reused Linux Workspaces](docs/valkey-state.md)
 - [Publishing Releases](docs/publishing.md)
 - [Command Guide](COMMAND_GUIDE.md)
 

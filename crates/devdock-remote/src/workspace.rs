@@ -8,11 +8,13 @@ use std::time::Duration;
 use tracing::info;
 
 const REMOTE_SCIO_PATH: &str = "/home/workspace/scio";
+const DEFAULT_REMOTE_DEVDOCK_BIN: &str = "devdock";
 
 /// Git state for the repository inside an existing remote workspace.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RemoteGitState {
     pub branch: String,
+    pub head_oid: String,
     pub dirty_entries: Vec<String>,
 }
 
@@ -132,7 +134,7 @@ impl RemoteGitState {
     }
 }
 
-/// Inspect the git branch and dirty state of the remote repository.
+/// Inspect the git branch, exact HEAD, and dirty state of the remote repository.
 pub fn inspect_remote_git_state(
     workspace: &str,
     log_file: Option<&Path>,
@@ -152,8 +154,10 @@ where
         r#"
 set -e
 cd {REMOTE_SCIO_PATH}
-branch="$(git symbolic-ref --quiet --short HEAD || git rev-parse --short HEAD)"
+branch="$(git symbolic-ref --quiet --short HEAD || printf '<detached>')"
+head_oid="$(git rev-parse --verify HEAD)"
 printf 'DEVDOCK_GIT_BRANCH\t%s\n' "$branch"
+printf 'DEVDOCK_GIT_HEAD\t%s\n' "$head_oid"
 printf 'DEVDOCK_GIT_STATUS_BEGIN\n'
 git status --porcelain=v1 --untracked-files=all
 printf 'DEVDOCK_GIT_STATUS_END\n'
@@ -166,12 +170,18 @@ printf 'DEVDOCK_GIT_STATUS_END\n'
 
 fn parse_remote_git_state(output: &str) -> Result<RemoteGitState> {
     let mut branch = None;
+    let mut head_oid = None;
     let mut dirty_entries = Vec::new();
     let mut in_status = false;
 
     for line in output.lines() {
         if let Some(value) = line.strip_prefix("DEVDOCK_GIT_BRANCH\t") {
             branch = Some(value.trim().to_string());
+            continue;
+        }
+
+        if let Some(value) = line.strip_prefix("DEVDOCK_GIT_HEAD\t") {
+            head_oid = Some(value.trim().to_string());
             continue;
         }
 
@@ -193,63 +203,174 @@ fn parse_remote_git_state(output: &str) -> Result<RemoteGitState> {
     let branch = branch.filter(|b| !b.is_empty()).ok_or_else(|| {
         RemoteError::CommandFailed("Failed to parse remote git branch".to_string())
     })?;
+    let head_oid = head_oid.filter(|oid| is_full_git_oid(oid)).ok_or_else(|| {
+        RemoteError::CommandFailed("Failed to parse remote git HEAD OID".to_string())
+    })?;
 
-    Ok(RemoteGitState { branch, dirty_entries })
+    Ok(RemoteGitState { branch, head_oid, dirty_entries })
 }
 
-/// Cleanup existing DevDock session on remote workspace.
-pub fn cleanup_existing_devdock(workspace: &str, log_file: Option<&Path>) -> Result<()> {
-    info!("Cleaning up existing DevDock processes on {}", workspace);
-
-    // Optimized cleanup: Single SSH session with parallelized independent operations
-    // This reduces 5 sequential SSH calls (~10 seconds) to 1 batched call (~2 seconds)
-    let cleanup_script = r#"
-# Parallelize independent cleanup operations for speed
-# Each operation runs in background, we wait for all to complete
-
-# 1. Kill tmux session (background)
-(tmux kill-session -t devdock 2>/dev/null || true) &
-pid_tmux=$!
-
-# 2. Kill tilt processes (background)
-(pkill -f 'tilt up' 2>/dev/null || true) &
-pid_tilt=$!
-
-# 3. Clean up Docker containers - optimized bulk operation (background)
-(
-  # Use -q for just IDs, then bulk remove (faster than xargs with names)
-  containers=$(docker ps -a --filter 'name=devdock-' -q 2>/dev/null)
-  if [ -n "$containers" ]; then
-    docker rm -f $containers 2>/dev/null || true
-  fi
-) &
-pid_docker=$!
-
-# 4. Clean up DevDock database and pid files (background)
-(rm -f ~/.devdock/devdock.db ~/.devdock/*.pid 2>/dev/null || true) &
-pid_files=$!
-
-# Wait for all parallel operations to complete
-wait $pid_tmux $pid_tilt $pid_docker $pid_files
-
-# 5. Run comprehensive devdock cleanup (sequential, after others complete)
-# This ensures all resources are cleaned before running the full cleanup
-cd /home/workspace/scio && devdock cleanup 2>/dev/null || true
-
-echo "Cleanup complete"
-"#;
-
-    match ssh::ssh_exec_with_log(workspace, cleanup_script, log_file) {
-        Ok(_) => {
-            info!("Cleanup completed successfully");
-            Ok(())
-        }
-        Err(e) => {
-            // Log error but don't fail - cleanup is best-effort
-            info!("Cleanup encountered errors (non-fatal): {}", e);
-            Ok(())
+/// Converge an owned, clean checkout to one immutable local source OID.
+///
+/// This is intentionally a fetch + checkout/reset sequence, rather than a
+/// merge, rebase, or `git pull`, so a force-pushed branch is safe to reuse.
+/// The remote shell rechecks cleanliness immediately before mutating Git.
+pub fn reconcile_remote_checkout(
+    workspace: &str,
+    branch: &str,
+    expected_oid: &str,
+    managed_residue_path: Option<&str>,
+    log_file: Option<&Path>,
+) -> Result<RemoteGitState> {
+    if !is_valid_branch_name(branch) {
+        return Err(RemoteError::RemoteCheckoutUnsafe(format!(
+            "invalid requested branch '{branch}'"
+        )));
+    }
+    if !is_full_git_oid(expected_oid) {
+        return Err(RemoteError::RemoteCheckoutUnsafe(format!(
+            "requested OID for branch '{branch}' is not a full SHA-1/SHA-256 Git OID"
+        )));
+    }
+    if let Some(path) = managed_residue_path {
+        if !is_valid_repo_relative_path(path) {
+            return Err(RemoteError::RemoteCheckoutUnsafe(format!(
+                "managed residue path is not a safe repository-relative path: '{path}'"
+            )));
         }
     }
+
+    let script = remote_checkout_script(branch, expected_oid, managed_residue_path);
+    let output = ssh::ssh_exec_with_log(workspace, &script, log_file)?;
+    let state = parse_remote_git_state(&output)?;
+    if state.branch != branch || state.head_oid != expected_oid || state.is_dirty() {
+        return Err(RemoteError::RemoteCheckoutUnsafe(format!(
+            "post-checkout state does not match requested branch/OID (branch={}, head={}, dirty={})",
+            state.branch,
+            state.head_oid,
+            state.is_dirty()
+        )));
+    }
+
+    info!(branch, expected_oid, "Reconciled remote checkout to requested local source OID");
+    Ok(state)
+}
+
+fn remote_checkout_script(
+    branch: &str,
+    expected_oid: &str,
+    managed_residue_path: Option<&str>,
+) -> String {
+    let branch_ref = format!("refs/heads/{branch}");
+    let origin_ref = format!("refs/remotes/origin/{branch}");
+    let refspec = format!("+{branch_ref}:{origin_ref}");
+    let branch = shell_quote(branch);
+    let refspec = shell_quote(&refspec);
+    let expected_oid = shell_quote(expected_oid);
+    let pre_fetch_dirty_guard = managed_residue_path.map_or_else(
+        || {
+            r#"if test -n "$(git status --porcelain=v1 --untracked-files=all)"; then
+    echo 'DEVDOCK_CHECKOUT_DIRTY'
+    exit 70
+fi"#
+            .to_string()
+        },
+        |path| {
+            let path = shell_quote(path);
+            format!(
+                r#"managed_path={path}
+dirty_status="$(git status --porcelain=v1 --untracked-files=all)"
+if test -n "$dirty_status"; then
+    if test "$dirty_status" != " M $managed_path"; then
+        echo 'DEVDOCK_CHECKOUT_DIRTY'
+        exit 70
+    fi
+    git checkout -- "$managed_path"
+fi
+if test -n "$(git status --porcelain=v1 --untracked-files=all)"; then
+    echo 'DEVDOCK_CHECKOUT_DIRTY'
+    exit 70
+fi"#
+            )
+        },
+    );
+
+    format!(
+        r#"set -eu
+cd {REMOTE_SCIO_PATH}
+{pre_fetch_dirty_guard}
+git check-ref-format --branch {branch} >/dev/null
+git fetch --no-tags --force origin {refspec}
+if test -n "$(git status --porcelain=v1 --untracked-files=all)"; then
+    echo 'DEVDOCK_CHECKOUT_DIRTY'
+    exit 70
+fi
+if ! git rev-parse --verify {expected_oid}^{{commit}} >/dev/null 2>&1; then
+    echo 'DEVDOCK_CHECKOUT_OID_MISMATCH'
+    exit 71
+fi
+git checkout --force -B {branch} {expected_oid}
+git reset --hard {expected_oid} >/dev/null
+if test -n "$(git status --porcelain=v1 --untracked-files=all)"; then
+    echo 'DEVDOCK_CHECKOUT_POST_DIRTY'
+    exit 72
+fi
+current_branch="$(git symbolic-ref --quiet --short HEAD)"
+current_oid="$(git rev-parse --verify HEAD)"
+if test "$current_branch" != {branch} || test "$current_oid" != {expected_oid}; then
+    echo 'DEVDOCK_CHECKOUT_POST_MISMATCH'
+    exit 73
+fi
+printf 'DEVDOCK_GIT_BRANCH\t%s\n' "$current_branch"
+printf 'DEVDOCK_GIT_HEAD\t%s\n' "$current_oid"
+printf 'DEVDOCK_GIT_STATUS_BEGIN\n'
+git status --porcelain=v1 --untracked-files=all
+printf 'DEVDOCK_GIT_STATUS_END\n'
+"#
+    )
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+/// Select the binary that the Coder workspace's tmux session executes.
+///
+/// `DEVDOCK_REMOTE_BIN` is deliberately distinct from a host-side candidate
+/// selection: it names a run-owned executable that already exists inside the
+/// remote workspace. Leaving it unset retains the production `devdock` lookup.
+fn configured_remote_devdock_bin() -> String {
+    let configured = std::env::var("DEVDOCK_REMOTE_BIN").ok();
+    select_remote_devdock_bin(configured.as_deref())
+}
+
+fn select_remote_devdock_bin(configured: Option<&str>) -> String {
+    configured
+        .filter(|path| !path.trim().is_empty())
+        .unwrap_or(DEFAULT_REMOTE_DEVDOCK_BIN)
+        .to_string()
+}
+
+fn is_valid_branch_name(branch: &str) -> bool {
+    !branch.is_empty()
+        && !branch.starts_with('-')
+        && !branch.starts_with('.')
+        && !branch.ends_with('.')
+        && !branch.contains("..")
+        && !branch.contains("@{")
+        && !branch.ends_with('/')
+        && branch.bytes().all(|byte| !byte.is_ascii_control() && !b" ~^:?*[\\".contains(&byte))
+}
+
+fn is_full_git_oid(oid: &str) -> bool {
+    matches!(oid.len(), 40 | 64) && oid.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn is_valid_repo_relative_path(path: &str) -> bool {
+    !path.is_empty()
+        && !path.starts_with('/')
+        && !path.split('/').any(|segment| segment.is_empty() || matches!(segment, "." | ".."))
+        && path.bytes().all(|byte| !byte.is_ascii_control())
 }
 
 /// Provision a new Coder workspace.
@@ -265,9 +386,44 @@ pub async fn provision_workspace(config: &coder::CoderWorkspaceConfig) -> Result
     Ok(workspace_name)
 }
 
+/// Sync configuration and credentials before the initial source-sync watermark.
+///
+/// The engine keeps ordinary profile/custom.ini transfer, but delegates every
+/// gcloud credential byte to Scio's existing helper. No legacy DevDock gcloud
+/// staging/finalization fallback is available on this path.
+pub fn sync_remote_configuration(
+    workspace: &str,
+    profile_path: &Path,
+    profile_project: &str,
+    copy_git_creds: bool,
+    log_file: Option<&Path>,
+    verbose: bool,
+) -> Result<()> {
+    let custom_ini_path = find_custom_ini_path();
+    config_sync::sync_all_config(
+        workspace,
+        profile_path,
+        custom_ini_path.as_deref(),
+        copy_git_creds,
+        log_file,
+        verbose,
+    )?;
+
+    let platform = config_sync::get_profile_platform(profile_path)?;
+    if matches!(platform.as_str(), "google" | "gcp") {
+        config_sync::sync_gcloud_credentials_via_scio_helper(
+            workspace,
+            profile_project,
+            log_file,
+            verbose,
+        )?;
+    }
+    Ok(())
+}
+
 /// Start DevDock on remote workspace with optional port forwarding.
 #[allow(clippy::too_many_arguments)]
-pub async fn start_remote_devdock<F>(
+pub async fn start_remote_devdock(
     state: &StateManager,
     workspace: &str,
     workspace_id: &str,
@@ -277,14 +433,9 @@ pub async fn start_remote_devdock<F>(
     services: Option<&str>,
     auto_forward: bool,
     offset: u16,
-    copy_git_creds: bool,
     log_file: Option<&Path>,
     verbose: bool,
-    on_config_complete: Option<F>,
-) -> Result<Option<PortForwardManager>>
-where
-    F: FnOnce(),
-{
+) -> Result<Option<PortForwardManager>> {
     info!("Starting DevDock on remote workspace: {}", workspace);
 
     // Log start
@@ -301,158 +452,54 @@ where
         }
     }
 
-    // 1. Sync configuration files
-    info!("Syncing configuration to remote...");
-    if verbose {
-        println!("  Syncing configuration files...");
-    }
+    // Start DevDock in tmux session on remote only after the caller has
+    // established an initial source-sync watermark.
+    // Build only non-secret environment exports. In particular, never interpolate
+    // local credential values into an SSH command because operation logging would
+    // retain that command.
+    let env_exports = format!(
+        "export DEVDOCK_ID={} && export DEVDOCK_PORT_OFFSET={offset}",
+        shell_quote(devdock_id)
+    );
 
-    let custom_ini_path = find_custom_ini_path();
-    let sync_status = config_sync::sync_all_config(
-        workspace,
-        profile_path,
-        custom_ini_path.as_deref(),
-        copy_git_creds,
-        log_file,
-        verbose,
-    )?;
-    if verbose {
-        println!("  ✓ Configuration synced");
-    }
-
-    // Signal that config phase is complete (for progress UI)
-    if let Some(callback) = on_config_complete {
-        callback();
-    }
-
-    // Handle ADC expired (detected during config sync Phase 3, no extra SSH needed)
-    if sync_status.adc_expired {
-        println!();
-        println!("╭─────────────────────────────────────────────────────╮");
-        println!("│  ❌ ERROR: ADC Credentials EXPIRED                  │");
-        println!("╰─────────────────────────────────────────────────────╯");
-        println!();
-        println!("DevDock requires valid Application Default Credentials (ADC).");
-        println!("Your ADC credentials have expired and need to be refreshed.");
-        println!();
-        println!("To fix:");
-        println!("  1. SSH to workspace: coder ssh {workspace}");
-        println!("  2. Run: gcloud auth application-default login");
-        println!("  3. Restart DevDock");
-        println!();
-
-        // Ask user if they want to continue anyway (for debugging)
-        print!("Continue anyway? (DevDock will likely fail) [y/N] ");
-        use std::io::{self, Write};
-        io::stdout().flush().ok();
-
-        let mut response = String::new();
-        io::stdin().read_line(&mut response).ok();
-
-        if !response.trim().eq_ignore_ascii_case("y") {
-            return Err(RemoteError::SshError(
-                "ADC credentials expired - please refresh and try again".to_string(),
+    let runtime = inspect_remote_runtime(workspace, log_file)?;
+    if runtime.tmux_present {
+        if runtime.devdock_id.as_deref() != Some(devdock_id) {
+            return Err(RemoteError::CommandFailed(
+                "refusing to replace a remote DevDock tmux session whose DEVDOCK_ID is not owned by this attempt"
+                    .to_string(),
             ));
         }
-
-        println!("⚠️  Continuing with expired ADC (expect failures)...");
-        println!();
+        ssh::ssh_exec_with_log(workspace, &owned_tmux_stop_script(devdock_id), log_file)?;
+        sleep(Duration::from_secs(1));
+    } else if runtime.tilt_listening {
+        return Err(RemoteError::CommandFailed(
+            "refusing to reuse a Tilt listener without an owned DevDock tmux session".to_string(),
+        ));
     }
 
-    // 2. Start DevDock in tmux session on remote
-    // Export environment variables before tmux, they will be inherited by the session
-
-    // Build environment variable exports (quote values to handle special characters)
-    let mut env_exports =
-        format!("export DEVDOCK_ID='{devdock_id}' && export DEVDOCK_PORT_OFFSET={offset}");
-
-    // Export ALL AWS environment variables if set locally
-    // This allows users to use either:
-    //   1. Environment variables (export AWS_ACCESS_KEY_ID=...) OR
-    //   2. Credential files (~/.aws/credentials + ~/.aws/config)
-    // Both approaches are now fully supported and consistent
-    let aws_env_vars = vec![
-        "AWS_ACCESS_KEY_ID",
-        "AWS_SECRET_ACCESS_KEY",
-        "AWS_SESSION_TOKEN",
-        "AWS_REGION",
-        "AWS_DEFAULT_REGION",
-        "AWS_PROFILE",
-    ];
-
-    let mut exported_aws_vars = Vec::new();
-    for var in aws_env_vars {
-        if let Ok(value) = std::env::var(var) {
-            // Quote the value to handle spaces and special characters
-            env_exports.push_str(&format!(" && export {var}='{value}'"));
-            exported_aws_vars.push(var);
-        }
-    }
-
-    if verbose && !exported_aws_vars.is_empty() {
-        println!("  AWS env vars exported: {}", exported_aws_vars.join(", "));
-    }
-
-    let start_script = if let Some(svc) = services {
-        format!(
-            "{env_exports} && cd /home/workspace/scio && tmux new-session -d -s devdock 'devdock start {profile} -s {svc}'"
-        )
-    } else {
-        format!(
-            "{env_exports} && cd /home/workspace/scio && tmux new-session -d -s devdock 'devdock start {profile}'"
-        )
-    };
+    let remote_devdock_bin = configured_remote_devdock_bin();
+    let start_script = remote_start_script(
+        profile,
+        services,
+        &env_exports,
+        &remote_devdock_bin,
+        devdock_id,
+        offset,
+    );
 
     info!("Starting DevDock in tmux session");
     if verbose {
         println!("  Starting DevDock on remote workspace...");
         println!("  Profile: {profile}");
+        println!("  Remote DevDock binary: {remote_devdock_bin}");
         println!("  DevDock ID: {}", &devdock_id[..8.min(devdock_id.len())]);
         println!("  Port Offset: {offset}");
     }
 
-    match ssh::ssh_exec_with_log(workspace, &start_script, log_file) {
-        Ok(output) => {
-            if verbose {
-                println!("  ✓ DevDock start command executed");
-            }
-            // Don't print environment variable dumps
-            if verbose
-                && !output.trim().is_empty()
-                && !output.trim().contains("tmux")
-                && !output.trim().contains("declare -x")
-            {
-                println!("  Output: {}", output.trim());
-            }
-        }
-        Err(e) => {
-            let err_msg = format!("{e}");
-            // Check for duplicate session error
-            if err_msg.contains("duplicate session") {
-                println!("  ⚠ Duplicate tmux session detected, cleaning up...");
-
-                // Kill existing session
-                let _ = ssh::ssh_exec_with_log(
-                    workspace,
-                    "tmux kill-session -t devdock 2>/dev/null || true",
-                    log_file,
-                );
-                sleep(Duration::from_secs(2));
-
-                // Retry
-                println!("  Retrying DevDock start...");
-                match ssh::ssh_exec_with_log(workspace, &start_script, log_file) {
-                    Ok(_) => println!("  ✓ Retry succeeded"),
-                    Err(e2) => {
-                        eprintln!("  ❌ ERROR: Retry failed: {e2}");
-                        return Err(e2);
-                    }
-                }
-            } else {
-                eprintln!("  ❌ ERROR: DevDock start command failed: {e}");
-                return Err(e);
-            }
-        }
+    ssh::ssh_exec_with_log(workspace, &start_script, log_file)?;
+    if verbose {
+        println!("  ✓ DevDock start command executed");
     }
 
     if verbose {
@@ -520,13 +567,10 @@ exit 0
         }
 
         if start.elapsed() > timeout {
-            eprintln!(
-                "\n  ⚠ Warning: Tilt not detected on port 10350 after {} seconds",
+            return Err(RemoteError::CommandFailed(format!(
+                "Tilt did not listen on port 10350 after {} seconds",
                 timeout.as_secs()
-            );
-            eprintln!("  DevDock may still be starting up. Check logs:");
-            eprintln!("    coder ssh {workspace} -- tmux attach -t devdock");
-            break;
+            )));
         }
 
         sleep(Duration::from_secs(2));
@@ -574,14 +618,55 @@ exit 0
         Some(mgr)
     };
 
-    // 5. Final success message (only in verbose mode, caller shows better summary)
-    if verbose {
-        println!("\n  ✅ DevDock is running!");
-        println!("  Tilt UI: http://localhost:{}", offset + 10350);
-        println!("  Logs: coder ssh {workspace} && tmux attach -t devdock");
-    }
-
     Ok(port_mgr)
+}
+
+/// Quote each DevDock argument, then quote the entire command passed as the
+/// final `tmux new-session` argument. This preserves argument boundaries across
+/// both shells and prevents profile/service text from becoming shell syntax.
+fn remote_start_script(
+    profile: &str,
+    services: Option<&str>,
+    env_exports: &str,
+    remote_devdock_bin: &str,
+    devdock_id: &str,
+    port_offset: u16,
+) -> String {
+    let mut devdock_command =
+        format!("{} start {}", shell_quote(remote_devdock_bin), shell_quote(profile));
+    if let Some(services) = services {
+        devdock_command.push_str(" -s ");
+        devdock_command.push_str(&shell_quote(services));
+    }
+    // The redirect is inside the tmux command, so only remote DevDock output
+    // reaches the deterministic diagnostic log. `>` deliberately truncates a
+    // prior attempt's log rather than mixing evidence from separate attempts.
+    devdock_command.push_str(" > ");
+    devdock_command.push_str(&shell_quote("/tmp/devdock-start.log"));
+    devdock_command.push_str(" 2>&1");
+
+    let tmux_devdock_id = shell_quote(&format!("DEVDOCK_ID={devdock_id}"));
+    let tmux_port_offset = shell_quote(&format!("DEVDOCK_PORT_OFFSET={port_offset}"));
+    format!(
+        "{env_exports} && cd /home/workspace/scio && tmux new-session -d -s devdock -e {tmux_devdock_id} -e {tmux_port_offset} {}",
+        shell_quote(&devdock_command)
+    )
+}
+
+/// Recheck ownership in the same remote command that terminates a prior tmux
+/// session, closing the race between the read-only runtime inspection and kill.
+fn owned_tmux_stop_script(devdock_id: &str) -> String {
+    let expected_environment = shell_quote(&format!("DEVDOCK_ID={devdock_id}"));
+    format!(
+        r#"set -eu
+observed="$(tmux show-environment -t devdock DEVDOCK_ID 2>/dev/null || true)"
+if test "$observed" != {expected_environment}; then
+    echo 'DEVDOCK_OWNERSHIP_MISMATCH'
+    exit 74
+fi
+tmux kill-session -t devdock
+"#
+    )
 }
 
 /// Wait for Tilt UI to become accessible with progress updates.
@@ -649,11 +734,12 @@ mod tests {
     #[test]
     fn parse_remote_git_state_clean() {
         let state = parse_remote_git_state(
-            "DEVDOCK_GIT_BRANCH\tfeature/foo\nDEVDOCK_GIT_STATUS_BEGIN\nDEVDOCK_GIT_STATUS_END\n",
+            "DEVDOCK_GIT_BRANCH\tfeature/foo\nDEVDOCK_GIT_HEAD\t0123456789abcdef0123456789abcdef01234567\nDEVDOCK_GIT_STATUS_BEGIN\nDEVDOCK_GIT_STATUS_END\n",
         )
         .expect("parse clean state");
 
         assert_eq!(state.branch, "feature/foo");
+        assert_eq!(state.head_oid, "0123456789abcdef0123456789abcdef01234567");
         assert!(state.dirty_entries.is_empty());
         assert!(!state.is_dirty());
     }
@@ -661,7 +747,7 @@ mod tests {
     #[test]
     fn parse_remote_git_state_dirty() {
         let state = parse_remote_git_state(
-            "DEVDOCK_GIT_BRANCH\tfeature/foo\nDEVDOCK_GIT_STATUS_BEGIN\n M java/Foo.java\n?? python_scio/new_file.py\nR  old.java -> new.java\nDEVDOCK_GIT_STATUS_END\n",
+            "DEVDOCK_GIT_BRANCH\tfeature/foo\nDEVDOCK_GIT_HEAD\t0123456789abcdef0123456789abcdef01234567\nDEVDOCK_GIT_STATUS_BEGIN\n M java/Foo.java\n?? python_scio/new_file.py\nR  old.java -> new.java\nDEVDOCK_GIT_STATUS_END\n",
         )
         .expect("parse dirty state");
 
@@ -679,8 +765,10 @@ mod tests {
 
     #[test]
     fn parse_remote_git_state_requires_branch() {
-        let err = parse_remote_git_state("DEVDOCK_GIT_STATUS_BEGIN\nDEVDOCK_GIT_STATUS_END\n")
-            .expect_err("missing branch should fail");
+        let err = parse_remote_git_state(
+            "DEVDOCK_GIT_HEAD\t0123456789abcdef0123456789abcdef01234567\nDEVDOCK_GIT_STATUS_BEGIN\nDEVDOCK_GIT_STATUS_END\n",
+        )
+        .expect_err("missing branch should fail");
 
         assert!(matches!(err, RemoteError::CommandFailed(_)));
     }
@@ -693,13 +781,176 @@ mod tests {
                 assert!(command.contains("cd /home/workspace/scio"));
                 assert!(command.contains("git status --porcelain=v1"));
                 assert!(log_file.is_none());
-                Ok("DEVDOCK_GIT_BRANCH\tmain\nDEVDOCK_GIT_STATUS_BEGIN\nDEVDOCK_GIT_STATUS_END\n"
+                Ok("DEVDOCK_GIT_BRANCH\tmain\nDEVDOCK_GIT_HEAD\t0123456789abcdef0123456789abcdef01234567\nDEVDOCK_GIT_STATUS_BEGIN\nDEVDOCK_GIT_STATUS_END\n"
                     .to_string())
             })
             .expect("inspect with injected executor");
 
         assert_eq!(state.branch, "main");
         assert!(state.dirty_entries.is_empty());
+    }
+
+    #[test]
+    fn checkout_script_fetches_the_named_branch_and_resets_to_the_exact_oid() {
+        let oid = "0123456789abcdef0123456789abcdef01234567";
+        let script = remote_checkout_script("feature/reused", oid, None);
+
+        assert!(script.contains("git fetch --no-tags --force origin '+refs/heads/feature/reused:refs/remotes/origin/feature/reused'"));
+        assert!(script.contains(
+            "git checkout --force -B 'feature/reused' '0123456789abcdef0123456789abcdef01234567'"
+        ));
+        assert!(script.contains("git reset --hard '0123456789abcdef0123456789abcdef01234567'"));
+        assert!(!script.contains("git pull"));
+        assert!(script.contains("git status --porcelain=v1 --untracked-files=all"));
+    }
+
+    #[test]
+    fn checkout_script_allows_a_reachable_local_commit_after_origin_advances() {
+        let oid = "0123456789abcdef0123456789abcdef01234567";
+        let script = remote_checkout_script("feature/reused", oid, None);
+
+        assert!(script.contains("git fetch --no-tags --force origin '+refs/heads/feature/reused:refs/remotes/origin/feature/reused'"));
+        assert!(script.contains(
+            "git rev-parse --verify '0123456789abcdef0123456789abcdef01234567'^{commit} >/dev/null 2>&1"
+        ));
+        assert!(!script.contains("observed_oid="));
+        assert!(!script.contains("origin/feature/reused'^{commit}"));
+    }
+
+    #[test]
+    fn checkout_script_rechecks_cleanliness_after_fetch_before_resetting() {
+        let script = remote_checkout_script(
+            "feature/reused",
+            "0123456789abcdef0123456789abcdef01234567",
+            None,
+        );
+        let fetch = script.find("git fetch --no-tags --force origin").expect("fetch command");
+        let post_fetch_guard = script[fetch..]
+            .find("DEVDOCK_CHECKOUT_DIRTY")
+            .map(|offset| fetch + offset)
+            .expect("post-fetch dirty guard");
+        let checkout = script.find("git checkout --force -B").expect("checkout command");
+
+        assert!(post_fetch_guard < checkout, "dirty changes after fetch must stop reset");
+        assert_eq!(script.matches("DEVDOCK_CHECKOUT_DIRTY").count(), 2);
+        assert!(!script.contains("git stash"));
+    }
+
+    #[test]
+    fn checkout_script_quotes_branch_names_without_interpolation() {
+        let script = remote_checkout_script(
+            "feature/o'hare",
+            "0123456789abcdef0123456789abcdef01234567",
+            None,
+        );
+        assert!(script.contains("'feature/o'\"'\"'hare'"));
+    }
+
+    #[test]
+    fn checkout_script_reconciles_only_an_exact_unstaged_managed_profile_residue() {
+        let managed_path = "devdock/profiles/qe_smoke_test.yaml";
+        let script = remote_checkout_script(
+            "feature/reused",
+            "0123456789abcdef0123456789abcdef01234567",
+            Some(managed_path),
+        );
+        let restore = script.find("git checkout -- \"$managed_path\"").expect("path restore");
+        let fetch = script.find("git fetch --no-tags --force origin").expect("fetch command");
+
+        assert!(script.contains("managed_path='devdock/profiles/qe_smoke_test.yaml'"));
+        assert!(script.contains("if test \"$dirty_status\" != \" M $managed_path\"; then"));
+        assert!(restore < fetch, "managed profile residue must be restored before fetch");
+        assert!(!script.contains("git stash"));
+    }
+
+    #[test]
+    fn remote_start_script_quotes_untrusted_profile_and_services_for_tmux() {
+        let profile = "profile'; touch /tmp/escaped; #";
+        let services = "qe; $(touch /tmp/escaped) && #";
+        let env_exports = "export DEVDOCK_ID='owned' && export DEVDOCK_PORT_OFFSET=10350";
+        let remote_devdock_bin = "/run/devdock-candidate";
+        let inner_command = format!(
+            "{} start {} -s {} > {} 2>&1",
+            shell_quote(remote_devdock_bin),
+            shell_quote(profile),
+            shell_quote(services),
+            shell_quote("/tmp/devdock-start.log")
+        );
+        let script = remote_start_script(
+            profile,
+            Some(services),
+            env_exports,
+            remote_devdock_bin,
+            "owned",
+            10350,
+        );
+        let tmux_prefix = format!(
+            "{env_exports} && cd /home/workspace/scio && tmux new-session -d -s devdock -e 'DEVDOCK_ID=owned' -e 'DEVDOCK_PORT_OFFSET=10350' "
+        );
+        let tmux_argument = script.strip_prefix(&tmux_prefix).expect("tmux command argument");
+
+        assert_eq!(tmux_argument, shell_quote(&inner_command));
+        assert_ne!(tmux_argument, inner_command);
+        assert!(inner_command.ends_with(" > '/tmp/devdock-start.log' 2>&1"));
+        assert!(!inner_command.contains(">>"));
+        assert!(!script.contains(&format!("'{remote_devdock_bin} start {profile} -s {services}'")));
+    }
+
+    #[test]
+    fn remote_candidate_bin_defaults_to_production_and_ignores_blank_override() {
+        assert_eq!(select_remote_devdock_bin(None), "devdock");
+        assert_eq!(select_remote_devdock_bin(Some("  \t")), "devdock");
+        assert_eq!(
+            select_remote_devdock_bin(Some("/run/devdock-candidate")),
+            "/run/devdock-candidate"
+        );
+    }
+
+    #[test]
+    fn remote_start_script_quotes_explicit_remote_candidate_path() {
+        let remote_devdock_bin = "/run/candidate'; touch /tmp/escaped; #";
+        let env_exports = "export DEVDOCK_ID='owned' && export DEVDOCK_PORT_OFFSET=10350";
+        let inner_command = format!(
+            "{} start {} > {} 2>&1",
+            shell_quote(remote_devdock_bin),
+            shell_quote("qe"),
+            shell_quote("/tmp/devdock-start.log")
+        );
+        let script =
+            remote_start_script("qe", None, env_exports, remote_devdock_bin, "owned", 10350);
+        let tmux_prefix = format!(
+            "{env_exports} && cd /home/workspace/scio && tmux new-session -d -s devdock -e 'DEVDOCK_ID=owned' -e 'DEVDOCK_PORT_OFFSET=10350' "
+        );
+        let tmux_argument = script.strip_prefix(&tmux_prefix).expect("tmux command argument");
+
+        assert_eq!(tmux_argument, shell_quote(&inner_command));
+        assert!(!script.contains(&format!("tmux new-session -d -s devdock {remote_devdock_bin}")));
+    }
+
+    #[test]
+    fn owned_tmux_stop_rechecks_the_exact_devdock_id() {
+        let script = owned_tmux_stop_script("dev-550e8400-e29b-41d4-a716-446655440000");
+
+        assert!(script.contains("tmux show-environment -t devdock DEVDOCK_ID"));
+        assert!(script.contains("DEVDOCK_ID=dev-550e8400-e29b-41d4-a716-446655440000"));
+        assert!(script.contains("tmux kill-session -t devdock"));
+        assert!(!script.contains("pkill"));
+    }
+
+    #[test]
+    fn validates_branch_names_and_full_oids_before_remote_mutation() {
+        assert!(is_valid_branch_name("feature/reuse-123"));
+        assert!(!is_valid_branch_name("feature/../escape"));
+        assert!(!is_valid_branch_name("-option"));
+        assert!(!is_valid_branch_name("feature name"));
+        assert!(is_valid_repo_relative_path("devdock/profiles/qe_smoke_test.yaml"));
+        assert!(!is_valid_repo_relative_path("../outside"));
+        assert!(!is_valid_repo_relative_path("devdock//profiles/qe.yaml"));
+        assert!(is_full_git_oid("0123456789abcdef0123456789abcdef01234567"));
+        assert!(is_full_git_oid(
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        ));
+        assert!(!is_full_git_oid("01234567"));
     }
 
     #[test]

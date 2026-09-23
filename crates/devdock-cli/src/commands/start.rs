@@ -140,6 +140,11 @@ pub async fn execute(
     generate_configs_rust(&workspace_root, &profile, services, Some(&profile_path_str), dry_run)
         .await?;
 
+    // Prepare service-owned persistent state before Tilt starts infrastructure.
+    if !dry_run {
+        prepare_service_owned_bind_mounts(&profile)?;
+    }
+
     // Step 7: Clean old logs and startup state files
     cleanup_old_logs()?;
     cleanup_startup_state_files()?;
@@ -319,6 +324,129 @@ pub(crate) async fn generate_configs_rust(
     generator.generate(profile, services, profile_path).await?;
 
     Ok(())
+}
+
+#[cfg(any(target_os = "linux", test))]
+const VALKEY_STATE_IMAGE: &str = "valkey/valkey:8-alpine";
+#[cfg(any(target_os = "linux", test))]
+const VALKEY_STATE_OWNER: &str = "999:1000";
+#[cfg(any(target_os = "linux", test))]
+const VALKEY_CONTAINER_DATA_DIR: &str = "/data";
+
+/// Prepare persistent state that is bind-mounted into DevDock infrastructure.
+///
+/// The Scio Valkey container runs as 999:1000. A reused Linux Coder workspace can
+/// retain this directory with the workspace user's ownership, which prevents Valkey
+/// from persisting its RDB. The one-shot helper container is root solely to adjust
+/// the bind mount; Valkey itself continues to run with its image's non-root user.
+#[cfg(target_os = "linux")]
+fn prepare_service_owned_bind_mounts(profile: &devdock_core::profile::Profile) -> Result<()> {
+    if !profile_requires_valkey_state(profile) {
+        return Ok(());
+    }
+
+    let home = std::env::var_os("HOME").context("HOME is required to prepare Valkey state")?;
+    let state_dir = PathBuf::from(home).join(".devdock/data/valkey");
+
+    output::info("Preparing persistent Valkey state...");
+    prepare_bind_mount_ownership(
+        &state_dir,
+        VALKEY_CONTAINER_DATA_DIR,
+        VALKEY_STATE_IMAGE,
+        VALKEY_STATE_OWNER,
+    )?;
+    output::success("Persistent Valkey state is ready");
+
+    Ok(())
+}
+
+/// Linux bind-mount ownership is not meaningful for Docker Desktop hosts.
+#[cfg(not(target_os = "linux"))]
+fn prepare_service_owned_bind_mounts(_profile: &devdock_core::profile::Profile) -> Result<()> {
+    Ok(())
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn profile_requires_valkey_state(profile: &devdock_core::profile::Profile) -> bool {
+    // Config generation adds local Valkey whenever QE is present. An explicitly
+    // remote Valkey component has no DevDock-owned local bind mount to prepare.
+    profile.infra.get("valkey").map_or_else(
+        || profile.services.contains_key("qe"),
+        |config| config.deployment_type == devdock_core::types::DeploymentType::Local,
+    )
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn prepare_bind_mount_ownership(
+    state_dir: &Path,
+    container_dir: &str,
+    image: &str,
+    owner: &str,
+) -> Result<()> {
+    std::fs::create_dir_all(state_dir).with_context(|| {
+        format!("Failed to create DevDock-owned persistent state directory {}", state_dir.display())
+    })?;
+
+    let metadata = std::fs::symlink_metadata(state_dir).with_context(|| {
+        format!(
+            "Failed to inspect DevDock-owned persistent state directory {}",
+            state_dir.display()
+        )
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        anyhow::bail!(
+            "Refusing to prepare Valkey state at {} because it is not a directory",
+            state_dir.display()
+        );
+    }
+
+    let mut command = bind_mount_chown_command(state_dir, container_dir, image, owner)?;
+    let command_output = command.output().context("Failed to start Docker ownership helper")?;
+    if command_output.status.success() {
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(&command_output.stderr);
+    let detail = stderr.trim();
+    anyhow::bail!(
+        "Failed to prepare Valkey state at {} for container user {} (Docker exited {}). \
+         Tilt was not started. Check Docker access and the {} image.{}",
+        state_dir.display(),
+        owner,
+        command_output.status,
+        image,
+        if detail.is_empty() { String::new() } else { format!(" Docker: {detail}") },
+    );
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn bind_mount_chown_command(
+    state_dir: &Path,
+    container_dir: &str,
+    image: &str,
+    owner: &str,
+) -> Result<Command> {
+    let source = state_dir
+        .to_str()
+        .context("Valkey state path must be valid UTF-8 for Docker bind mounting")?;
+    let mount = format!("type=bind,src={source},dst={container_dir}");
+
+    let mut command = Command::new("docker");
+    command.args([
+        "run",
+        "--rm",
+        "--user",
+        "0:0",
+        "--mount",
+        &mount,
+        "--entrypoint",
+        "chown",
+        image,
+        "-R",
+        owner,
+        container_dir,
+    ]);
+    Ok(command)
 }
 
 /// Clean up old logs
@@ -1099,4 +1227,104 @@ fn write_profile_state(profile_name: &str) -> Result<()> {
 
     std::fs::write(&state_file, profile_name)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn profile_from_yaml(yaml: &str) -> devdock_core::profile::Profile {
+        serde_yaml::from_str(yaml).expect("profile fixture should parse")
+    }
+
+    #[test]
+    fn valkey_state_is_prepared_for_qe_or_explicit_valkey() {
+        let qe_profile = profile_from_yaml(
+            r#"
+project: test-project
+services:
+  qe:
+    type: local
+"#,
+        );
+        let valkey_profile = profile_from_yaml(
+            r#"
+project: test-project
+infra:
+  valkey:
+    type: local
+"#,
+        );
+        let remote_valkey_profile = profile_from_yaml(
+            r#"
+project: test-project
+infra:
+  valkey:
+    type: remote
+"#,
+        );
+        let unrelated_profile = profile_from_yaml(
+            r#"
+project: test-project
+services:
+  crawler:
+    type: local
+"#,
+        );
+
+        assert!(profile_requires_valkey_state(&qe_profile));
+        assert!(profile_requires_valkey_state(&valkey_profile));
+        assert!(!profile_requires_valkey_state(&remote_valkey_profile));
+        assert!(!profile_requires_valkey_state(&unrelated_profile));
+    }
+
+    #[test]
+    fn valkey_ownership_helper_is_a_one_shot_non_daemon_command() {
+        let state_dir = Path::new("/home/coder/.devdock/data/valkey");
+        let command = bind_mount_chown_command(
+            state_dir,
+            VALKEY_CONTAINER_DATA_DIR,
+            VALKEY_STATE_IMAGE,
+            VALKEY_STATE_OWNER,
+        )
+        .expect("valid path should build Docker command");
+        let args: Vec<String> =
+            command.get_args().map(|arg| arg.to_string_lossy().into_owned()).collect();
+
+        assert_eq!(command.get_program(), "docker");
+        assert_eq!(
+            args,
+            vec![
+                "run",
+                "--rm",
+                "--user",
+                "0:0",
+                "--mount",
+                "type=bind,src=/home/coder/.devdock/data/valkey,dst=/data",
+                "--entrypoint",
+                "chown",
+                "valkey/valkey:8-alpine",
+                "-R",
+                "999:1000",
+                "/data",
+            ]
+        );
+    }
+
+    #[test]
+    fn ownership_helper_refuses_a_non_directory_before_running_docker() {
+        let temp_dir = tempfile::tempdir().expect("temporary directory should be created");
+        let state_file = temp_dir.path().join("valkey");
+        std::fs::write(&state_file, "not a directory").expect("state file should be created");
+
+        let error = prepare_bind_mount_ownership(
+            &state_file,
+            VALKEY_CONTAINER_DATA_DIR,
+            VALKEY_STATE_IMAGE,
+            VALKEY_STATE_OWNER,
+        )
+        .expect_err("non-directory state must be rejected");
+
+        assert!(format!("{error:#}").contains("persistent state directory"));
+    }
 }

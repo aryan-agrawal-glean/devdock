@@ -256,8 +256,9 @@ devdock start <profile> --remote --vm workspace-name
 # Remote start with auto port forwarding
 devdock start <profile> --remote --auto-forward
 
-# Copy your local GitHub credentials to a newly created remote workspace
+# Copy your local GitHub credentials to a new or explicitly selected existing workspace
 devdock start <profile> --remote --copy-git-creds
+devdock start <profile> --remote --vm workspace-name --copy-git-creds
 
 # Remote start with custom port base
 devdock start <profile> --remote --port-base 8000
@@ -281,10 +282,10 @@ devdock start <profile> --enable-logs
 - `--region <region>`: GCP region for Coder workspace (default: `us-east4-a`)
 - `--port-base <port>`: Custom port base for remote mode
 - `--auto-forward`: Auto-forward all service ports (opt-in for remote)
-- `--copy-git-creds`: For a newly created remote workspace, replace the user-level bot
-  credential helper with local `gh` authentication. This is opt-in; without it, the Coder
-  template's automation credentials remain unchanged. Requires local `git` and authenticated
-  `gh` (`gh auth login --hostname github.com`) and cannot be combined with `--vm`.
+- `--copy-git-creds`: For a newly created workspace or an explicitly selected existing
+  `--vm` workspace, replace the user-level bot credential helper with local `gh` authentication.
+  This opt-in transfer uses legacy `scp -O`; it requires local `git` and authenticated `gh`
+  (`gh auth login --hostname github.com`). It is rejected for an implicitly reused workspace.
 - `--verbose`: Show detailed progress (all substeps)
 
 ---
@@ -914,13 +915,17 @@ devdock start my-profile -m remote --auto-forward
 
 # 3. Check sync status
 devdock sync status
+devdock sync history -n 20
 
-# 4. Forward additional ports if needed
+# 4. Inspect the remote session; do not treat --monitor alone as validation
+devdock status -d
+
+# 5. Forward additional ports if needed
 devdock ports forward --service tilt
 
-# 5. Work on your code (auto-synced)
+# 6. Work on your code (auto-synced)
 
-# 6. Stop when done
+# 7. Stop when done
 devdock stop
 ```
 
@@ -993,6 +998,11 @@ Profiles are typically stored in `~/.devdock/profiles/` or in your workspace's `
 - Use `--vm` to reconnect to an existing workspace
 - Use `--auto-forward` to automatically forward common ports
 - File sync happens automatically in the background
+- Validate a candidate with its explicit binary and a native Linux build inside Coder.
+- Inspect remote logs, `devdock status -d`, and `devdock sync history -n 20`; `--monitor` alone
+  is not sufficient validation.
+- If gcloud/ADC expires, run `gcloud auth login --update-adc` locally, then retry remote start
+  to sync credentials. Never run interactive gcloud auth in the remote VM.
 
 ### Performance Tips
 - Use `--mode fast` for SQL setup to use hourly snapshots (much faster)

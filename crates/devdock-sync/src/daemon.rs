@@ -135,6 +135,17 @@ impl SyncDaemon {
         debug!("About to call initial_sync()");
         self.initial_sync()?;
         debug!("initial_sync() completed successfully");
+        let watermark = crate::stats::record_initial_sync_success(
+            &self.devdock_id,
+            &self.workspace_name,
+            &self.repo_path,
+        )?;
+        info!(
+            workspace = %watermark.workspace_name,
+            repo = %watermark.repo_path,
+            completed_at = %watermark.completed_at,
+            "Recorded initial sync watermark"
+        );
 
         // Start watching for changes - watch specific monitored directories, not entire repo
         debug!("Setting up file watcher for monitored directories...");
@@ -573,6 +584,11 @@ pub fn start_daemon(
     info!("Repo path: {}", repo_path.display());
     info!("Full mode: {}", full_mode);
 
+    // New child, new attempt: no prior attempt's sync history or error may be
+    // used as readiness evidence. The caller first checks for a live owned
+    // daemon before invoking this function, so these are exact-ID files only.
+    crate::stats::clear_initial_sync_evidence(devdock_id)?;
+
     // Get the current executable path
     let exe_path = std::env::current_exe()
         .map_err(|e| SyncError::DaemonError(format!("Failed to get current exe: {e}")))?;
@@ -630,9 +646,7 @@ pub fn start_daemon(
         )
         .stderr(std::process::Stdio::from(log_file));
 
-    let child = cmd
-        .spawn()
-        .map_err(|e| SyncError::DaemonError(format!("Failed to spawn daemon process: {e}")))?;
+    let child = spawn_detached_daemon(&mut cmd)?;
 
     let pid = child.id();
     // Tracing output goes to log file via stderr redirect, not to console
@@ -642,6 +656,40 @@ pub fn start_daemon(
 
     std::thread::sleep(std::time::Duration::from_millis(500));
     Ok(pid)
+}
+
+/// Spawn a hidden sync daemon outside the invoking CLI's process session.
+/// Noninteractive runners may clean up the command's process group at exit;
+/// the daemon's exact PID file and command identity remain its lifecycle and
+/// cleanup authority, so it must survive that parent command returning.
+fn spawn_detached_daemon(command: &mut std::process::Command) -> Result<std::process::Child> {
+    detach_daemon_process(command);
+    command
+        .spawn()
+        .map_err(|error| SyncError::DaemonError(format!("Failed to spawn daemon process: {error}")))
+}
+
+#[cfg(unix)]
+fn detach_daemon_process(command: &mut std::process::Command) {
+    use std::os::unix::process::CommandExt;
+
+    // SAFETY: `pre_exec` runs in the child after fork and before exec. `setsid`
+    // is an async-signal-safe libc call and is the only operation in the hook.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setsid() == -1 {
+                Err(std::io::Error::last_os_error())
+            } else {
+                Ok(())
+            }
+        });
+    }
+}
+
+#[cfg(not(unix))]
+fn detach_daemon_process(_command: &mut std::process::Command) {
+    // Windows does not use Unix session/process-group teardown. The daemon's
+    // PID file and command identity still govern liveness and cleanup.
 }
 
 pub fn read_daemon_pid(devdock_id: &str) -> Result<Option<u32>> {
@@ -656,6 +704,52 @@ pub fn read_daemon_pid(devdock_id: &str) -> Result<Option<u32>> {
 
 pub fn is_daemon_running(devdock_id: &str, pid: u32) -> bool {
     is_process_alive(pid) && process_command_matches_daemon(devdock_id, pid)
+}
+
+/// Wait for the daemon's initial scan to complete and prove it with a fresh
+/// watermark plus a matching successful history entry. Callers must gate remote
+/// runtime launch on this rather than treating a spawned PID as a successful
+/// source transfer.
+pub fn wait_for_initial_sync_watermark(
+    devdock_id: &str,
+    workspace_name: &str,
+    repo_path: &Path,
+    pid: u32,
+    timeout: Duration,
+) -> Result<crate::stats::InitialSyncWatermark> {
+    let started = Instant::now();
+    loop {
+        if !is_daemon_running(devdock_id, pid) {
+            return Err(SyncError::DaemonError(
+                "sync daemon stopped before its initial sync watermark".to_string(),
+            ));
+        }
+
+        if let Some(watermark) = crate::stats::read_initial_sync_watermark(devdock_id)? {
+            let expected_repo = repo_path.display().to_string();
+            let history = crate::stats::read_history_entries(devdock_id, None)?;
+            if watermark.devdock_id == devdock_id
+                && watermark.workspace_name == workspace_name
+                && watermark.repo_path == expected_repo
+                && crate::stats::initial_sync_evidence_matches(&watermark, &history)
+                && !crate::stats::has_sync_errors(devdock_id)?
+            {
+                return Ok(watermark);
+            }
+
+            return Err(SyncError::DaemonError(
+                "initial sync evidence does not match this workspace attempt".to_string(),
+            ));
+        }
+
+        if started.elapsed() >= timeout {
+            return Err(SyncError::DaemonError(format!(
+                "timed out waiting {} seconds for initial sync watermark",
+                timeout.as_secs()
+            )));
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
 }
 
 fn parse_pid(contents: &str) -> Option<u32> {
@@ -798,6 +892,43 @@ fn matcher_from_process_env() -> Result<SyncMatcher> {
 
 /// Stop sync daemon and clean up all related files.
 pub fn stop_daemon(devdock_id: &str) -> Result<()> {
+    if let Some(pid) = read_daemon_pid(devdock_id)? {
+        if is_daemon_running(devdock_id, pid) {
+            // A PID file alone is never kill authority. The command/ID check
+            // above proves this is our daemon before it receives a signal.
+            #[cfg(unix)]
+            {
+                use std::process::Command;
+                Command::new("kill").arg(pid.to_string()).status().map_err(|error| {
+                    SyncError::DaemonError(format!(
+                        "failed to signal owned sync daemon {pid}: {error}"
+                    ))
+                })?;
+            }
+
+            #[cfg(windows)]
+            {
+                use std::process::Command;
+                Command::new("taskkill").args(["/PID", &pid.to_string(), "/F"]).status().map_err(
+                    |error| {
+                        SyncError::DaemonError(format!(
+                            "failed to signal owned sync daemon {pid}: {error}"
+                        ))
+                    },
+                )?;
+            }
+
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while is_process_alive(pid) && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            if is_process_alive(pid) {
+                return Err(SyncError::DaemonError(format!(
+                    "owned sync daemon {pid} did not exit within 5 seconds"
+                )));
+            }
+        }
+    }
     cleanup_sync_files(devdock_id)
 }
 
@@ -809,18 +940,15 @@ pub fn cleanup_sync_files(devdock_id: &str) -> Result<()> {
     if pid_file.exists() {
         let pid_str = fs::read_to_string(&pid_file)?;
         if let Ok(pid) = pid_str.trim().parse::<u32>() {
-            // Kill process
-            #[cfg(unix)]
-            {
-                use std::process::Command;
-                let _ = Command::new("kill").arg(pid.to_string()).output();
+            if is_process_alive(pid) && !is_daemon_running(devdock_id, pid) {
+                return Err(SyncError::DaemonError(format!(
+                    "refusing to remove sync evidence for live unproven PID {pid}"
+                )));
             }
-
-            #[cfg(windows)]
-            {
-                use std::process::Command;
-                let _ =
-                    Command::new("taskkill").arg("/PID").arg(pid.to_string()).arg("/F").output();
+            if is_daemon_running(devdock_id, pid) {
+                return Err(SyncError::DaemonError(format!(
+                    "refusing to remove sync evidence while owned daemon {pid} is still running"
+                )));
             }
         }
     }
@@ -831,6 +959,11 @@ pub fn cleanup_sync_files(devdock_id: &str) -> Result<()> {
         format!("{}.excludes", devdock_id),
         format!("{}.hb", devdock_id),
         format!("{}.stats", devdock_id),
+        format!("{}.stats.json", devdock_id),
+        format!("{}.history.jsonl", devdock_id),
+        format!("{}.errors.jsonl", devdock_id),
+        format!("{}.initial-sync.json", devdock_id),
+        format!("{}.queue.json", devdock_id),
         format!("{}.log", devdock_id),
         format!("{}_portforward.pid", devdock_id),
     ];
@@ -913,5 +1046,43 @@ mod tests {
         let error = matcher_from_snapshot(Some(r#"{"schema_version":999}"#)).unwrap_err();
 
         assert!(error.to_string().contains("Invalid sync policy snapshot from parent"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn detached_daemon_survives_a_launch_wrapper_exit_in_its_own_session() {
+        let caller_session = unsafe { libc::getsid(0) };
+        assert_ne!(caller_session, -1);
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let child_pid_path = temp_dir.path().join("daemon-child.pid");
+        let mut command = std::process::Command::new("sh");
+        // The shell models a noninteractive launcher. It exits immediately
+        // after starting a daemon-like child, which must remain alive in the
+        // independent session established by `spawn_detached_daemon`.
+        command
+            .arg("-c")
+            .arg("sleep 5 & printf '%s' \"$!\" > \"$1\"")
+            .arg("daemon-launcher")
+            .arg(&child_pid_path);
+        let mut launcher = spawn_detached_daemon(&mut command).unwrap();
+        let launcher_pid = launcher.id() as libc::pid_t;
+        assert!(launcher.wait().unwrap().success());
+
+        let daemon_pid = std::fs::read_to_string(&child_pid_path)
+            .unwrap()
+            .trim()
+            .parse::<libc::pid_t>()
+            .unwrap();
+        let daemon_session = unsafe { libc::getsid(daemon_pid) };
+        assert_eq!(daemon_session, launcher_pid);
+        assert_ne!(daemon_session, caller_session);
+        assert_eq!(
+            unsafe { libc::kill(daemon_pid, 0) },
+            0,
+            "daemon remains alive after its launch wrapper exits"
+        );
+
+        let _ = unsafe { libc::kill(daemon_pid, libc::SIGTERM) };
     }
 }

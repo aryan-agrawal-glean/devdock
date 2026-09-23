@@ -20,6 +20,7 @@ serde_json = { workspace = true }
 dirs = { workspace = true }
 chrono = "0.4"
 glob = { workspace = true }
+libc.workspace = true
 
 # File watching
 notify = "6.1"
@@ -30,3 +31,6 @@ git2 = "0.21"
 
 # Internal dependencies
 devdock-core = { path = "../devdock-core" }
+
+[dev-dependencies]
+tempfile.workspace = true

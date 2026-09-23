@@ -104,7 +104,7 @@ enum Commands {
         #[arg(long)]
         auto_forward: bool,
 
-        /// Copy local GitHub credentials to a newly created remote workspace
+        /// Copy local GitHub credentials to a new remote workspace or an explicitly selected existing --vm workspace
         #[arg(long)]
         copy_git_creds: bool,
 

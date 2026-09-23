@@ -18,6 +18,10 @@ fn start_help_exposes_remote_alias_and_legacy_mode() {
         "start help should expose opt-in GitHub credential copy:\n{stdout}"
     );
     assert!(
+        stdout.contains("explicitly selected existing --vm workspace"),
+        "start help should allow explicit --vm reuse for opt-in credentials:\n{stdout}"
+    );
+    assert!(
         stdout.contains("--mode <MODE>"),
         "start help should keep legacy --mode option:\n{stdout}"
     );
@@ -145,6 +149,10 @@ fn remote_start_guide_documents_git_credential_opt_in() {
     assert!(
         stdout.contains("default automation credentials"),
         "remote start guide should document unchanged default behavior:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("explicitly selected --vm workspace"),
+        "remote start guide should document explicit --vm credential reuse:\n{stdout}"
     );
 }
 
